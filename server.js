@@ -1,10 +1,20 @@
 /**
- * AOTRAVEL SERVER PRO - VERSÃO FINAL (FULL MERGED 2026)
- * Localização: backend/server.js
- * Descrição: Backend Completo com API REST, WebSocket Inteligente (Raio 3km),
- * Suporte a Upload de BI/Fotos (100MB), DB Migrations Robustas, Chat e CORS Total.
+ * =========================================================================
+ * AOTRAVEL SERVER PRO - VERSÃO FINAL ABSOLUTA (FULL 2026)
+ * =========================================================================
+ * Descrição: Backend Profissional para Transporte e Entregas (Angola).
+ * Funcionalidades:
+ *   - WebSocket Real-time com salas e Chat de Negociação
+ *   - API RESTful (Express) com suporte a JSON 100MB
+ *   - Migração Automática de DB (Neon PostgreSQL)
+ *   - Filtro Geográfico Haversine (Raio de 3.0 KM)
+ *   - Gestão de BI (Frente/Verso) e Fotos Base64
+ *   - Sistema de Fidelidade (Bónus Real de 5% na Carteira)
+ *   - Status Route (Root) para Health Check do Render
+ * =========================================================================
  */
 
+require('dotenv').config();
 const express = require('express');
 const { Pool } = require('pg');
 const cors = require('cors');
@@ -12,68 +22,84 @@ const bodyParser = require('body-parser');
 const http = require('http');
 const { Server } = require("socket.io");
 
-// --- INICIALIZAÇÃO DO APP ---
+// Inicialização da Aplicação
 const app = express();
-const port = 3000;
 
-// --- CONFIGURAÇÕES DE MIDDLEWARE (ATUALIZADO & REDUNDANTE PARA SEGURANÇA) ---
-// Configuração de Limites: Definido em 100mb para garantir upload de fotos HD e BI em Base64
-// Aplica-se tanto ao bodyParser quanto ao express.json nativo para garantir compatibilidade total.
+/**
+ * CONFIGURAÇÃO DE PORTA DINÂMICA
+ */
+const port = process.env.PORT || 3000;
+
+/**
+ * CONFIGURAÇÃO DE LIMITES DE DADOS (EXTREMO ROBUSTO)
+ * Definido em 100MB para suportar strings Base64 de fotos HD e BIs.
+ */
 app.use(bodyParser.json({ limit: '100mb' }));
 app.use(bodyParser.urlencoded({ limit: '100mb', extended: true }));
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
-// CORS TOTAL: Configuração aplicada para evitar bloqueios no Android/Web e permitir acesso global
-app.use(cors({ origin: '*', methods: '*' }));
+/**
+ * CONFIGURAÇÃO DE CORS (PERMISSÃO TOTAL)
+ * Garante que Android, iOS e Web comuniquem sem bloqueios.
+ */
+app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
-// Servidor HTTP e Socket.IO
+// Servidor HTTP com Socket.IO
 const server = http.createServer(app);
 const io = new Server(server, {
     cors: {
         origin: "*",
-        methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+        methods: ["GET", "POST", "PUT", "DELETE"]
     }
 });
 
-// Conexão PostgreSQL (NeonDB) - String de conexão segura
+/**
+ * CONEXÃO COM BANCO DE DADOS (NEON POSTGRESQL)
+ * Configuração com SSL obrigatório para ambiente de produção.
+ */
 const pool = new Pool({
-    connectionString: "postgresql://neondb_owner:npg_B62pAUiGbJrF@ep-jolly-art-ahef2z0t-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require",
+    connectionString: process.env.DATABASE_URL || "postgresql://neondb_owner:npg_B62pAUiGbJrF@ep-jolly-art-ahef2z0t-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require",
+    ssl: {
+        rejectUnauthorized: false
+    }
 });
 
 /**
  * =========================================================================
- * HELPERS (UTILITÁRIOS)
+ * LÓGICA GEOGRÁFICA (HAVERSINE)
+ * Calcula a distância real em KM.
  * =========================================================================
  */
-
-// Fórmula de Haversine: Calcula distância exata em KM entre duas coordenadas (Latitude/Longitude)
-// Essencial para o filtro de raio de 3km na busca de motoristas.
 function getDistance(lat1, lon1, lat2, lon2) {
-    const R = 6371; // Raio da Terra em km
+    const R = 6371; // Raio da Terra em KM
     const dLat = (lat2 - lat1) * Math.PI / 180;
     const dLon = (lon2 - lon1) * Math.PI / 180;
-    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-              Math.sin(dLon/2) * Math.sin(dLon/2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    const a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return R * c;
 }
 
 /**
  * =========================================================================
- * DATABASE BOOTSTRAP (MIGRAÇÃO AUTOMÁTICA COMPLETA)
- * Garante que todas as tabelas (Users, Rides, Chat, Wallet, DriverPositions) existam.
- * Executa verificações de colunas (BI, Fotos) para evitar erros de migração.
+ * DATABASE BOOTSTRAP & AUTO-MIGRATION (FULL ROBUST)
+ * Cria tabelas e colunas dinamicamente sem apagar dados existentes.
  * =========================================================================
  */
 async function bootstrapDatabase() {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        console.log("--- 🚀 INICIANDO SETUP DO BANCO DE DADOS AOTRAVEL (FULL) ---");
+        console.log("--- 🚀 INICIANDO SINCRONIZAÇÃO TOTAL DE BANCO DE DADOS ---");
 
-        // 1. TABELA DE USUÁRIOS (Com suporte a BI, Fotos e Role)
+        // 1. Tabela de Usuários (Completa)
         await client.query(`
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
@@ -82,27 +108,27 @@ async function bootstrapDatabase() {
                 phone TEXT,
                 password TEXT NOT NULL,
                 photo TEXT,
+                bi_front TEXT,
+                bi_back TEXT,
                 role TEXT CHECK (role IN ('passenger', 'driver', 'admin')),
                 balance NUMERIC(15,2) DEFAULT 0.00,
                 bonus_points INTEGER DEFAULT 0,
                 vehicle_details JSONB,
                 is_online BOOLEAN DEFAULT false,
-                bi_front TEXT,
-                bi_back TEXT,
                 rating NUMERIC(3,2) DEFAULT 5.00,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         `);
 
-        // Garante colunas de BI e Foto (Mesmo se a tabela já existir de versões anteriores)
+        // Sincronização de Colunas (Alter Table Safety)
         await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS bi_front TEXT;`);
         await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS bi_back TEXT;`);
         await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS photo TEXT;`);
+        await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS balance NUMERIC(15,2) DEFAULT 0.00;`);
+        await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS vehicle_details JSONB;`);
 
-        // 2. TABELA DE VIAGENS (RIDES)
+        // 2. Tabela de Corridas (Com Negociação)
         await client.query(`CREATE TABLE IF NOT EXISTS rides (id SERIAL PRIMARY KEY);`);
-
-        // Lista de colunas essenciais para viagens, histórico e negociação
         const rideColumns = [
             "passenger_id INTEGER REFERENCES users(id)",
             "driver_id INTEGER REFERENCES users(id)",
@@ -116,31 +142,25 @@ async function bootstrapDatabase() {
             "final_price NUMERIC(15,2)",
             "status TEXT DEFAULT 'searching'",
             "ride_type TEXT DEFAULT 'ride'",
-            "distance_km NUMERIC(10,2)",
             "negotiation_chat JSONB DEFAULT '[]'",
             "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
         ];
-
         for (let colDef of rideColumns) {
-            // Extrai apenas o nome da coluna para verificação
-            const colName = colDef.split(' ')[0];
-            // Adiciona a coluna se não existir
             await client.query(`ALTER TABLE rides ADD COLUMN IF NOT EXISTS ${colDef}`);
         }
 
-        // 3. TABELA DE CHAT (Necessária para o Socket funcionar sem erros e persistir mensagens)
+        // 3. Tabela de Chat
         await client.query(`
             CREATE TABLE IF NOT EXISTS chat_messages (
                 id SERIAL PRIMARY KEY,
                 ride_id INTEGER REFERENCES rides(id) ON DELETE CASCADE,
                 sender_id INTEGER REFERENCES users(id),
                 text TEXT NOT NULL,
-                is_read BOOLEAN DEFAULT false,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         `);
 
-        // 4. TABELA DE TRANSAÇÕES (CARTEIRA) (Necessária para o login retornar histórico financeiro)
+        // 4. Tabela de Carteira
         await client.query(`
             CREATE TABLE IF NOT EXISTS wallet_transactions (
                 id SERIAL PRIMARY KEY,
@@ -153,7 +173,7 @@ async function bootstrapDatabase() {
             );
         `);
 
-        // 5. TABELA DE POSIÇÃO DOS MOTORISTAS (Real-time GPS)
+        // 5. Tabela de Localização
         await client.query(`
             CREATE TABLE IF NOT EXISTS driver_positions (
                 driver_id INTEGER PRIMARY KEY REFERENCES users(id),
@@ -165,16 +185,14 @@ async function bootstrapDatabase() {
         `);
 
         await client.query('COMMIT');
-        console.log("✅ BANCO DE DADOS SINCRONIZADO COM SUCESSO (FULL MERGED).");
+        console.log("✅ BANCO DE DADOS SINCRONIZADO (FULL VERSION).");
     } catch (err) {
         await client.query('ROLLBACK');
-        console.error("❌ ERRO CRÍTICO NO SETUP DO DB:", err);
+        console.error("❌ ERRO NO SETUP DO DB:", err);
     } finally {
         client.release();
     }
 }
-
-// Executa a migração ao iniciar o servidor
 bootstrapDatabase();
 
 /**
@@ -183,241 +201,171 @@ bootstrapDatabase();
  * =========================================================================
  */
 io.on('connection', (socket) => {
-    console.log(`🔌 Novo Cliente Conectado via Socket: ${socket.id}`);
+    console.log(`🔌 Conectado: ${socket.id}`);
 
-    // --- AUTENTICAÇÃO E SALAS ---
-    socket.on('join_user', (userId) => {
-        socket.join(`user_${userId}`);
-        console.log(`👤 Usuário ID ${userId} entrou na sala user_${userId}`);
-    });
+    // Salas
+    socket.on('join_user', (userId) => socket.join(`user_${userId}`));
+    socket.on('join_ride', (rideId) => socket.join(`ride_${rideId}`));
 
-    socket.on('join_ride', (rideId) => {
-        socket.join(`ride_${rideId}`);
-        console.log(`🚗 Cliente entrou na sala da corrida: ride_${rideId}`);
-    });
-
-    // --- 1. SOLICITAÇÃO DE CORRIDA (Com Filtro de Raio 3km) ---
+    /**
+     * 1. SOLICITAR CORRIDA (FILTRO 3KM)
+     */
     socket.on('request_ride', async (data) => {
-        console.log("📝 Pedido de Corrida Recebido:", data);
+        const { passenger_id, origin_lat, origin_lng, dest_lat, dest_lng, origin_name, dest_name, initial_price, ride_type } = data;
 
         try {
-            // Extração de dados (Compatível com formato padrão e simplificado)
-            const { passenger_id, origin_lat, origin_lng, dest_lat, dest_lng, origin_name, dest_name, initial_price, ride_type } = data;
-
-            // Tratamento caso venha simplificado como 'lat/lng' ou 'origin_lat'
-            const pLat = origin_lat || data.lat;
-            const pLng = origin_lng || data.lng;
-
-            // A) Salva a solicitação no Banco de Dados (Status: searching)
-            const res = await pool.query(
-                `INSERT INTO rides (
-                    passenger_id, origin_lat, origin_lng, dest_lat, dest_lng,
-                    origin_name, dest_name, initial_price, ride_type, status
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'searching') RETURNING *`,
-                [passenger_id, pLat, pLng, dest_lat, dest_lng, origin_name, dest_name, initial_price, ride_type || 'standard']
-            );
-            const ride = res.rows[0];
-
-            // B) Busca todos os motoristas ativos
-            const driversResult = await pool.query(`SELECT * FROM driver_positions`);
-            const allDrivers = driversResult.rows;
-
-            // C) Filtro de Proximidade: Raio de 3.0 KM usando Haversine
-            const nearbyDrivers = allDrivers.filter(driver => {
-                const dist = getDistance(pLat, pLng, driver.lat, driver.lng);
-                return dist <= 3.0;
+            // Buscar motoristas e filtrar
+            const driversInDB = await pool.query(`SELECT * FROM driver_positions`);
+            const nearbyDrivers = driversInDB.rows.filter(d => {
+                const dist = getDistance(origin_lat, origin_lng, d.lat, d.lng);
+                return dist <= 3.0; // Raio Taxativo de 3km
             });
 
-            // D) Notificações e Gestão de Sala
-            socket.join(`ride_${ride.id}`);
-
-            // Confirmação para o passageiro que a corrida foi criada
-            io.to(`user_${passenger_id}`).emit('ride_created', ride);
-
-            if (nearbyDrivers.length > 0) {
-                console.log(`✅ ${nearbyDrivers.length} motoristas encontrados no raio de 3km.`);
-
-                // Notifica o passageiro
-                io.to(`user_${passenger_id}`).emit('drivers_found', {
-                    count: nearbyDrivers.length,
-                    message: "Motoristas notificados próximos a você!"
-                });
-
-                // Envia a oferta APENAS para os motoristas dentro do raio
-                nearbyDrivers.forEach(driver => {
-                    io.to(`user_${driver.driver_id}`).emit('ride_opportunity', ride);
-                });
-            } else {
-                console.log("⚠️ Nenhum motorista encontrado no raio de 3km.");
-                // Notifica o passageiro sobre a ausência de motoristas
-                io.to(`user_${passenger_id}`).emit('no_drivers', {
-                    message: "Sem motoristas num raio de 3km. Tente novamente mais tarde."
+            if (nearbyDrivers.length === 0) {
+                return io.to(`user_${passenger_id}`).emit('no_drivers', {
+                    message: "Nenhum motorista disponível no raio de 3km."
                 });
             }
 
-        } catch (e) {
-            console.error("Erro critico em request_ride:", e.message);
-            socket.emit('error', { msg: "Falha ao processar solicitação de corrida." });
-        }
+            // Criar Corrida
+            const res = await pool.query(
+                `INSERT INTO rides (passenger_id, origin_lat, origin_lng, dest_lat, dest_lng, origin_name, dest_name, initial_price, ride_type, status)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'searching') RETURNING *`,
+                [passenger_id, origin_lat, origin_lng, dest_lat, dest_lng, origin_name, dest_name, initial_price, ride_type]
+            );
+            const ride = res.rows[0];
+
+            socket.join(`ride_${ride.id}`);
+            io.to(`user_${passenger_id}`).emit('ride_created', ride);
+
+            // Notificar Motoristas Próximos
+            nearbyDrivers.forEach(d => {
+                io.to(`user_${d.driver_id}`).emit('ride_opportunity', ride);
+            });
+
+        } catch (e) { console.error("Erro request_ride:", e); }
     });
 
-    // --- 2. NEGOCIAÇÃO DE PREÇO (DRIVER) ---
+    /**
+     * 2. NEGOCIAÇÃO E CHAT
+     */
     socket.on('driver_proposal', async (data) => {
         const { ride_id, driver_id, price } = data;
-
-        // Notifica a sala da corrida (Passageiro vê a contraproposta)
         io.to(`ride_${ride_id}`).emit('price_proposal', { driver_id, price });
 
-        // Salva histórico da negociação no banco (JSONB)
-        try {
-            await pool.query(
-                `UPDATE rides SET negotiation_chat = negotiation_chat || $1::jsonb WHERE id = $2`,
-                [JSON.stringify({ driver_id, price, timestamp: new Date() }), ride_id]
-            );
-        } catch (dbErr) {
-            console.error("Erro ao salvar negociação:", dbErr);
-        }
+        // Persistir no JSON de negociação
+        await pool.query(
+            `UPDATE rides SET negotiation_chat = negotiation_chat || $1::jsonb WHERE id = $2`,
+            [JSON.stringify({ driver_id, price, timestamp: new Date() }), ride_id]
+        );
     });
 
-    // --- 3. ACEITAR CORRIDA (PASSAGEIRO OU DRIVER) ---
     socket.on('accept_ride', async (data) => {
         const { ride_id, driver_id, final_price } = data;
         try {
-            // Atualiza a corrida com o motorista vencedor e preço final
-            await pool.query(
-                `UPDATE rides SET driver_id = $1, final_price = $2, status = 'accepted' WHERE id = $3`,
+            const res = await pool.query(
+                `UPDATE rides SET driver_id = $1, final_price = $2, status = 'accepted' WHERE id = $3 RETURNING *`,
                 [driver_id, final_price, ride_id]
             );
+            const driverData = await pool.query(`SELECT name, photo, rating FROM users WHERE id = $1`, [driver_id]);
 
-            // Busca nome do motorista para feedback visual
-            const driverRes = await pool.query('SELECT name FROM users WHERE id = $1', [driver_id]);
-            const driverName = driverRes.rows[0]?.name || "Motorista";
-
-            // Notifica todos na sala que a corrida foi aceita
             io.to(`ride_${ride_id}`).emit('ride_accepted_by_driver', {
-                ride_id,
-                driver_id,
-                driver_name: driverName,
-                final_price
+                ...res.rows[0],
+                driver_name: driverData.rows[0].name,
+                driver_photo: driverData.rows[0].photo,
+                driver_rating: driverData.rows[0].rating
             });
-
-        } catch (e) {
-            console.error("Erro accept_ride:", e);
-        }
+        } catch (e) { console.error(e); }
     });
 
-    // --- 4. CHAT EM TEMPO REAL ---
     socket.on('send_message', async (data) => {
         const { ride_id, sender_id, text } = data;
         try {
-            // Salva mensagem no banco
             const res = await pool.query(
                 'INSERT INTO chat_messages (ride_id, sender_id, text) VALUES ($1, $2, $3) RETURNING *',
                 [ride_id, sender_id, text]
             );
-            // Emite para a sala da corrida específica (Privacidade)
             io.to(`ride_${ride_id}`).emit('receive_message', res.rows[0]);
-        } catch (e) {
-            console.error("Erro chat:", e);
-        }
+        } catch (e) { console.error(e); }
     });
 
-    // --- 5. RASTREAMENTO GPS (DRIVER) ---
+    /**
+     * 3. GPS TRACKING
+     */
     socket.on('update_location', async (data) => {
         const { user_id, lat, lng, heading } = data;
         try {
-            // Upsert: Atualiza se existe, Insere se não existe
             await pool.query(
                 `INSERT INTO driver_positions (driver_id, lat, lng, heading, last_update)
                  VALUES ($1, $2, $3, $4, NOW())
                  ON CONFLICT (driver_id) DO UPDATE SET lat=$2, lng=$3, heading=$4, last_update=NOW()`,
                 [user_id, lat, lng, heading || 0]
             );
-
-            // Broadcast global para mapas ao vivo (Para quem estiver ouvindo 'driver_moved')
             io.emit('driver_moved', { driver_id: user_id, lat, lng, heading });
-        } catch (e) {
-            console.error("Erro GPS:", e);
-        }
-    });
-
-    socket.on('disconnect', () => {
-        console.log(`🔌 Cliente Desconectado: ${socket.id}`);
+        } catch (e) { console.error(e); }
     });
 });
 
 /**
  * =========================================================================
- * API RESTFUL (ROTAS HTTP)
+ * API RESTFUL - ENDPOINTS DE SISTEMA
  * =========================================================================
  */
 
-// 0. ROTA DE PING (Health Check)
+// ✅ ROTA ROOT (HEALTH CHECK CRÍTICO PARA RENDER)
+app.get('/', (req, res) => {
+    res.status(200).json({
+        app: "AOtravel API",
+        status: "Online 🚀",
+        version: "4.5.0 Full",
+        db_connection: "Secure (SSL)",
+        limits: "100MB Body Size"
+    });
+});
+
 app.get('/api/ping', (req, res) => res.send('pong'));
 
-// 1. ROTA DE LOGIN
+// ✅ LOGIN (COM TRANSAÇÕES)
 app.post('/api/auth/login', async (req, res) => {
     const { email, password } = req.body;
     try {
-        const result = await pool.query('SELECT * FROM users WHERE email = $1 AND password = $2', [email, password]);
-
-        if (result.rows.length === 0) {
-            return res.status(401).json({ error: "E-mail ou senha incorretos." });
-        }
+        const result = await pool.query('SELECT * FROM users WHERE email = $1 AND password = $2', [email.toLowerCase().trim(), password]);
+        if (result.rows.length === 0) return res.status(401).json({ error: "Credenciais incorretas." });
 
         const user = result.rows[0];
-
-        // Busca últimas transações para exibir saldo corretamente no app
-        const tx = await pool.query(
-            'SELECT * FROM wallet_transactions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 10',
-            [user.id]
-        );
+        // Busca últimas 15 transações
+        const tx = await pool.query('SELECT * FROM wallet_transactions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 15', [user.id]);
         user.transactions = tx.rows;
 
         res.json(user);
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
+    } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// 2. ROTA DE REGISTO (SIGNUP) - Suporte Completo a BI e Fotos
+// ✅ SIGNUP (FULL: FOTOS, BI, VEÍCULO)
 app.post('/api/auth/signup', async (req, res) => {
-    // Campos completos + BI + Foto (Recebidos como string Base64 ou URL)
-    const { name, email, phone, password, role, vehicle_type, photo, bi_front, bi_back } = req.body;
+    const { name, email, phone, password, role, photo, bi_front, bi_back, vehicle_type } = req.body;
     try {
-        // Verifica duplicidade de email
-        const check = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
-        if (check.rows.length > 0) return res.status(400).json({ error: "E-mail já cadastrado." });
+        const check = await pool.query('SELECT id FROM users WHERE email = $1', [email.toLowerCase().trim()]);
+        if (check.rows.length > 0) return res.status(400).json({ error: "Este E-mail já existe." });
 
-        // Insere novo usuário com suporte a todos os campos (incluindo JSON para veículo)
+        const vehicle_details = vehicle_type ? JSON.stringify({ type: vehicle_type }) : null;
+
         const resUser = await pool.query(
-            `INSERT INTO users (name, email, phone, password, role, balance, vehicle_details, photo, bi_front, bi_back)
-             VALUES ($1, $2, $3, $4, $5, 0, $6, $7, $8, $9) RETURNING *`,
-            [
-                name,
-                email,
-                phone,
-                password,
-                role,
-                vehicle_type ? JSON.stringify({ type: vehicle_type }) : null,
-                photo || null,
-                bi_front || null,
-                bi_back || null
-            ]
+            `INSERT INTO users (name, email, phone, password, role, photo, bi_front, bi_back, vehicle_details, balance, bonus_points)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0.00, 0) RETURNING *`,
+            [name, email.toLowerCase().trim(), phone, password, role, photo, bi_front, bi_back, vehicle_details]
         );
-
         res.status(201).json(resUser.rows[0]);
     } catch (e) {
-        console.error("Erro no cadastro:", e);
-        res.status(500).json({ error: e.message });
+        console.error("Erro Signup:", e);
+        res.status(500).json({ error: "Erro ao criar conta." });
     }
 });
 
-// 3. ROTA DE ATUALIZAÇÃO DE PERFIL
+// ✅ UPDATE PROFILE
 app.put('/api/users/profile', async (req, res) => {
     const { id, name, photo, bi_front, bi_back } = req.body;
     try {
-        // Atualização dinâmica segura (COALESCE mantém o valor antigo se o novo for null)
         const result = await pool.query(
             `UPDATE users SET
                 name = COALESCE($1, name),
@@ -428,12 +376,10 @@ app.put('/api/users/profile', async (req, res) => {
             [name, photo, bi_front, bi_back, id]
         );
         res.json(result.rows[0]);
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
+    } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// 4. ROTA DE HISTÓRICO DE VIAGENS
+// ✅ HISTORY
 app.get('/api/history/:userId', async (req, res) => {
     try {
         const result = await pool.query(
@@ -441,59 +387,59 @@ app.get('/api/history/:userId', async (req, res) => {
             [req.params.userId]
         );
         res.json(result.rows);
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
+    } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// 5. ROTA DE CONCLUSÃO E RECOMPENSAS (WALLET)
+// ✅ COMPLETAR CORRIDA + BÓNUS (TRANSAÇÃO ATÔMICA)
 app.post('/api/rides/complete', async (req, res) => {
     const { ride_id, user_id, amount } = req.body;
-    const bonus = (parseFloat(amount) * 0.05).toFixed(2); // 5% de Cashback Calculado
 
+    // Bónus de 5%
+    const bonusValue = (parseFloat(amount) * 0.05).toFixed(2);
+
+    const client = await pool.connect(); // Cliente dedicado para transação
     try {
-        await pool.query('BEGIN');
+        await client.query('BEGIN');
 
-        // Atualiza status da corrida
-        await pool.query("UPDATE rides SET status = 'completed' WHERE id = $1", [ride_id]);
+        // 1. Finalizar Status
+        await client.query("UPDATE rides SET status = 'completed' WHERE id = $1", [ride_id]);
 
-        // Atualiza saldo e pontos do usuário (Driver ou Passageiro conforme lógica de app)
-        await pool.query(
-            'UPDATE users SET balance = balance + $1, bonus_points = bonus_points + 10 WHERE id = $2',
-            [bonus, user_id]
+        // 2. Creditar Saldo e Pontos
+        await client.query(
+            "UPDATE users SET balance = balance + $1, bonus_points = bonus_points + 10 WHERE id = $2",
+            [bonusValue, user_id]
         );
 
-        // Registra a transação no histórico da carteira
-        await pool.query(
-            `INSERT INTO wallet_transactions (user_id, amount, type, description, reference_id)
-             VALUES ($1, $2, 'bonus_reward', 'Cashback de Corrida AOtravel', $3)`,
-            [user_id, bonus, ride_id]
+        // 3. Registar no Extrato
+        await client.query(
+            "INSERT INTO wallet_transactions (user_id, amount, type, description, reference_id) VALUES ($1, $2, 'bonus_reward', 'Prémio Cashback AOtravel', $3)",
+            [user_id, bonusValue, ride_id]
         );
 
-        await pool.query('COMMIT');
-        res.json({ success: true, bonus_earned: bonus });
+        await client.query('COMMIT');
+        res.json({ success: true, bonus_earned: bonusValue });
     } catch (e) {
-        await pool.query('ROLLBACK');
+        await client.query('ROLLBACK');
+        console.error("Erro Transaction:", e);
         res.status(500).json({ error: e.message });
+    } finally {
+        client.release();
     }
 });
 
 /**
- * =========================================================================
- * STARTUP DO SERVIDOR
- * =========================================================================
+ * START SERVER
  */
 server.listen(port, '0.0.0.0', () => {
     console.log(`
     ===================================================
-       🚀 AOTRAVEL SERVER PRO ONLINE (FULL MERGED 2026)
+       🚀 AOTRAVEL SERVER PRO ESTÁ ONLINE (FULL 2026)
        -----------------------------------
        📡 PORTA: ${port}
-       📍 RAIO DE BUSCA: 3.0 KM (Haversine Ativo)
-       🗄️ DB: NEON POSTGRESQL (SSL Conectado)
-       🆔 UPLOAD: ATÉ 100MB (Suporte a BI Frente/Verso)
-       ⚡ REAL-TIME: ATIVO (Socket.io c/ Salas)
-       🌐 CORS: TOTAL (*)
+       📍 RAIO: 3.0 KM
+       🗄️ DB: NEON POSTGRESQL (SSL)
+       ⚡ SOCKET: ATIVO
+       📝 LIMIT: 100MB
     ===================================================
     `);
 });
