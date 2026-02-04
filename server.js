@@ -211,39 +211,63 @@ io.on('connection', (socket) => {
      * 1. SOLICITAR CORRIDA (FILTRO 3KM)
      */
     socket.on('request_ride', async (data) => {
-        const { passenger_id, origin_lat, origin_lng, dest_lat, dest_lng, origin_name, dest_name, initial_price, ride_type } = data;
+        const {
+            passenger_id,
+            origin_lat,
+            origin_lng,
+            dest_lat,
+            dest_lng,
+            origin_name,
+            dest_name,
+            initial_price,
+            ride_type
+        } = data;
 
         try {
-            // Buscar motoristas e filtrar
+            // 1. Buscar posições dos motoristas no banco
             const driversInDB = await pool.query(`SELECT * FROM driver_positions`);
+
+            // 2. Filtrar motoristas num raio taxativo de 3km
             const nearbyDrivers = driversInDB.rows.filter(d => {
                 const dist = getDistance(origin_lat, origin_lng, d.lat, d.lng);
-                return dist <= 3.0; // Raio Taxativo de 3km
+                return dist <= 3.0;
             });
 
+            // 3. Caso não haja motoristas próximos, encerra aqui
             if (nearbyDrivers.length === 0) {
                 return io.to(`user_${passenger_id}`).emit('no_drivers', {
                     message: "Nenhum motorista disponível no raio de 3km."
                 });
             }
 
-            // Criar Corrida
+            // 4. Criar o registro da Corrida no Banco de Dados
             const res = await pool.query(
-                `INSERT INTO rides (passenger_id, origin_lat, origin_lng, dest_lat, dest_lng, origin_name, dest_name, initial_price, ride_type, status)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'searching') RETURNING *`,
+                `INSERT INTO rides (
+                    passenger_id, origin_lat, origin_lng, dest_lat, dest_lng,
+                    origin_name, dest_name, initial_price, ride_type, status
+                )
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'searching')
+                 RETURNING *`,
                 [passenger_id, origin_lat, origin_lng, dest_lat, dest_lng, origin_name, dest_name, initial_price, ride_type]
             );
+
             const ride = res.rows[0];
 
+            // 5. Coloca o passageiro na sala específica desta corrida e confirma a criação
             socket.join(`ride_${ride.id}`);
             io.to(`user_${passenger_id}`).emit('ride_created', ride);
 
-            // Notificar Motoristas Próximos
-            nearbyDrivers.forEach(d => {
-                io.to(`user_${d.driver_id}`).emit('ride_opportunity', ride);
+            // 6. ATUALIZAÇÃO: Notificar apenas os motoristas qualificados dentro do raio
+            nearbyDrivers.forEach(driver => {
+                // Envia a oportunidade individualmente para cada motorista filtrado
+                io.to(`user_${driver.driver_id}`).emit('ride_opportunity', ride);
             });
 
-        } catch (e) { console.error("Erro request_ride:", e); }
+        } catch (e) {
+            console.error("Erro fatal no evento request_ride:", e);
+            // Opcional: Notificar o passageiro que houve um erro interno
+            io.to(`user_${passenger_id}`).emit('error_response', { message: "Erro ao processar sua solicitação." });
+        }
     });
 
     /**
