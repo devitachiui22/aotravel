@@ -3,7 +3,7 @@
  * AOTRAVEL SERVER PRO 2026 - FINAL PRODUCTION BUILD (FULL MERGED)
  * Localização: backend/server.js
  * Descrição: Backend Profissional para Transporte e Entregas (Angola).
- * Status: FIXED & ROBUST (Broadcasts corrigidos, Dados Full Join, 100MB Limit)
+ * Status: FIXED & ROBUST (ACID Transactions, Full Joins, 100MB Limit)
  * =========================================================================
  */
 
@@ -86,25 +86,25 @@ function getDistance(lat1, lon1, lat2, lon2) {
 
 /**
  * =========================================================================
- * AUXILIAR: PEGAR DETALHES COMPLETOS DA CORRIDA (CRÍTICO PARA O FRONTEND)
+ * AUXILIAR: PEGAR DETALHES COMPLETOS DA CORRIDA (CRÍTICO)
  * Junta dados da corrida, passageiro e motorista (LEFT JOIN GARANTIDO).
  * =========================================================================
  */
 async function getFullRideDetails(rideId) {
     const query = `
-        SELECT 
+        SELECT
             r.*,
             -- DADOS DO MOTORISTA
-            d.name as driver_name, 
-            d.photo as driver_photo, 
-            d.phone as driver_phone, 
-            d.vehicle_details, 
+            d.name as driver_name,
+            d.photo as driver_photo,
+            d.phone as driver_phone,
+            d.vehicle_details,
             d.rating as driver_rating,
             d.email as driver_email,
             -- DADOS DO PASSAGEIRO
-            p.name as passenger_name, 
-            p.photo as passenger_photo, 
-            p.phone as passenger_phone, 
+            p.name as passenger_name,
+            p.photo as passenger_photo,
+            p.phone as passenger_phone,
             p.rating as passenger_rating,
             p.email as passenger_email
         FROM rides r
@@ -258,7 +258,7 @@ io.on('connection', (socket) => {
     });
 
     /**
-     * --- BUSCA DE MOTORISTAS (RAIO 8KM) ---
+     * --- BUSCA DE MOTORISTAS (RAIO 20KM - EXPANDIDO) ---
      */
     socket.on('request_ride', async (data) => {
         console.log("📡 Nova solicitação de corrida recebida:", data);
@@ -269,33 +269,32 @@ io.on('connection', (socket) => {
         } = data;
 
         try {
-            // Busca motoristas ativos (últimos 15 min)
+            // Busca motoristas ativos (últimos 20 min)
             const driversInDB = await pool.query(`
-                SELECT * FROM driver_positions WHERE last_update > NOW() - INTERVAL '15 minutes'
+                SELECT * FROM driver_positions WHERE last_update > NOW() - INTERVAL '20 minutes'
             `);
 
-            // Filtra raio de 8.0 KM
+            // Filtra raio de 20.0 KM para garantir cobertura em Luanda/Benguela
             const nearbyDrivers = driversInDB.rows.filter(d => {
                 const dist = getDistance(origin_lat, origin_lng, d.lat, d.lng);
-                return dist <= 8.0;
+                return dist <= 20.0;
             });
 
             if (nearbyDrivers.length === 0) {
-                console.log(`⚠️ Sem motoristas no raio de 8km para User ${passenger_id}`);
-                // Emite 'no_drivers' apenas se realmente não houver ninguém
+                console.log(`⚠️ Sem motoristas no raio de 20km para User ${passenger_id}`);
                 io.to(`user_${passenger_id}`).emit('no_drivers', {
-                    message: "Nenhum motorista AOtravel no raio de 8km. Tente novamente."
+                    message: "Nenhum motorista AOtravel próximo. Tente novamente."
                 });
             } else {
                  io.to(`user_${passenger_id}`).emit('drivers_found', { count: nearbyDrivers.length });
             }
 
-            // Cria a corrida
+            // CRIA A CORRIDA (PERSISTÊNCIA DE PREÇO INICIAL)
             const res = await pool.query(
                 `INSERT INTO rides (
                     passenger_id, origin_lat, origin_lng, dest_lat, dest_lng,
-                    origin_name, dest_name, initial_price, ride_type, distance_km, status, created_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'searching', NOW())
+                    origin_name, dest_name, initial_price, final_price, ride_type, distance_km, status, created_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9, $10, 'searching', NOW())
                  RETURNING *`,
                 [passenger_id, origin_lat, origin_lng, dest_lat, dest_lng, origin_name, dest_name, initial_price, ride_type, distance_km]
             );
@@ -317,7 +316,7 @@ io.on('connection', (socket) => {
     });
 
     /**
-     * --- NEGOCIAÇÃO DE PREÇO (PROPOSTA E ACEITE NA LISTA) ---
+     * --- NEGOCIAÇÃO DE PREÇO (PROPOSTA E ACEITE) ---
      */
     socket.on('driver_proposal', async (data) => {
         const { ride_id, driver_id, price } = data;
@@ -334,22 +333,19 @@ io.on('connection', (socket) => {
     socket.on('driver_accept_price', async (data) => {
         // Alias para aceitar vindo da lista de corridas
         const { ride_id, driver_id, final_price } = data;
-        
         try {
             await pool.query(
                 `UPDATE rides SET driver_id = $1, final_price = $2, status = 'accepted' WHERE id = $3`,
                 [driver_id, final_price, ride_id]
             );
             const fullData = await getFullRideDetails(ride_id);
-            
-            // EMISSÃO ROBUSTA PARA AMBOS
             io.to(`ride_${ride_id}`).emit('ride_accepted_by_driver', fullData);
             io.to(`user_${fullData.passenger_id}`).emit('ride_accepted_by_driver', fullData);
         } catch (e) { console.error(e); }
     });
 
     /**
-     * --- ATUALIZAR PREÇO NO CHAT (DEPOIS DE ACEITO) ---
+     * --- ATUALIZAR PREÇO NO CHAT ---
      */
     socket.on('update_price_negotiation', async (data) => {
         const { ride_id, new_price } = data;
@@ -394,12 +390,12 @@ io.on('connection', (socket) => {
         try {
             const res = await pool.query(
                 "INSERT INTO chat_messages (ride_id, sender_id, text, created_at) VALUES ($1,$2,$3, NOW()) RETURNING *",
-                [ride_id, sender_id, text || (file_data ? "📎 Imagem/Arquivo" : ".")]
+                [ride_id, sender_id, text || (file_data ? "📎 Foto" : ".")]
             );
             
             const msgPayload = { ...res.rows[0], file_data };
 
-            // Broadcast para a sala TODA (incluindo o remetente, para consistência de UI)
+            // Broadcast para a sala TODA (incluindo o remetente)
             io.to(`ride_${ride_id}`).emit('receive_message', msgPayload);
         } catch (e) { console.error(e); }
     });
@@ -421,7 +417,6 @@ io.on('connection', (socket) => {
             console.log(`🚀 Viagem ${ride_id} INICIADA. Mudando telas.`);
 
             // CRÍTICO: io.to envia para TODOS os sockets na sala, incluindo o Motorista que clicou.
-            // Isso previne que o app do motorista fique "travado" no chat.
             io.to(`ride_${ride_id}`).emit('trip_started_now', {
                 ride_id,
                 status: 'ongoing',
@@ -581,6 +576,7 @@ app.put('/api/users/profile', async (req, res) => {
 app.get('/api/rides/details/:id', async (req, res) => {
     try {
         const data = await getFullRideDetails(req.params.id);
+        if (!data) return res.status(404).json({error: "Corrida não encontrada"});
         res.json(data);
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -598,38 +594,42 @@ app.get('/api/history/:userId', async (req, res) => {
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// COMPLETAR CORRIDA + BÓNUS
+// COMPLETAR CORRIDA + BÓNUS (TRANSACTION SAFE)
 app.post('/api/rides/complete', async (req, res) => {
     const { ride_id, user_id, amount } = req.body;
-    // Lógica de Bónus (Ex: 5% de cashback)
-    const bonusValue = (parseFloat(amount) * 0.05).toFixed(2);
-
+    
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
 
-        // Atualiza Status
+        // 1. Atualiza Status
         await client.query("UPDATE rides SET status = 'completed' WHERE id = $1", [ride_id]);
 
-        // Atualiza Saldo do Motorista/Passageiro e dá Bónus
+        // 2. Calcula Bônus/Earnings (5% de Bônus neste modelo, ou ajuste para comissão)
+        // Se 'amount' for o valor total da corrida, vamos dar um pequeno cashback ou registrar o lucro do motorista.
+        // Assumindo lógica de bônus por gamificação:
+        const bonus = (parseFloat(amount) * 0.05).toFixed(2);
+
+        // 3. Atualiza Saldo
         await client.query(
-            "UPDATE users SET balance = balance + $1, bonus_points = bonus_points + 10 WHERE id = $2",
-            [bonusValue, user_id]
+            "UPDATE users SET balance = balance + $1 WHERE id = $2",
+            [bonus, user_id]
         );
 
-        // Registra Transação
+        // 4. Registra Transação
         await client.query(
-            "INSERT INTO wallet_transactions (user_id, amount, type, description, reference_id) VALUES ($1, $2, 'bonus_reward', 'Prémio Cashback AOtravel', $3)",
-            [user_id, bonusValue, ride_id]
+            "INSERT INTO wallet_transactions (user_id, amount, type, description, reference_id) VALUES ($1, $2, 'earnings', 'Corrida Finalizada', $3)",
+            [bonus, user_id, ride_id]
         );
 
         await client.query('COMMIT');
-        console.log(`💰 Corrida ${ride_id} finalizada. Cashback: ${bonusValue}`);
-        res.json({ success: true, bonus_earned: bonusValue });
+        console.log(`✅ Corrida ${ride_id} finalizada com sucesso.`);
+        res.json({ success: true, bonus_earned: bonus });
+
     } catch (e) {
         await client.query('ROLLBACK');
-        console.error("Transaction Error:", e);
-        res.status(500).json({ error: e.message });
+        console.error("❌ Erro ao finalizar:", e);
+        res.status(500).json({ error: "Falha interna ao processar pagamento." });
     } finally {
         client.release();
     }
@@ -647,7 +647,7 @@ server.listen(port, '0.0.0.0', () => {
        🚀 AOTRAVEL SERVER PRO ESTÁ ONLINE (FULL 2026)
        -----------------------------------
        📡 PORTA: ${port}
-       📍 RAIO FILTRO: 8.0 KM
+       📍 RAIO FILTRO: 20.0 KM (Expandido)
        🗄️ DB: NEON POSTGRESQL (SSL MODE)
        ⚡ SOCKET: ATIVO E PRONTO (Broadcast Fix)
     ===================================================
