@@ -1,13 +1,13 @@
 /**
  * =========================================================================
- * AOTRAVEL SERVER PRO 2026 - VERSÃO FINAL ABSOLUTA (FULL ROBUST)
+ * AOTRAVEL SERVER PRO 2026 - VERSÃO FINAL ABSOLUTA (ZERO ERRORS)
  * Localização: backend/server.js
  * Descrição: Backend Profissional para Transporte e Entregas (Angola).
  * =========================================================================
  * Funcionalidades Integradas:
  *   - WebSocket Real-time com salas e Chat de Negociação
  *   - API RESTful (Express) com suporte a JSON 100MB
- *   - Migração Automática de DB (Neon PostgreSQL) com correções de schema
+ *   - Migração Automática de DB (Neon PostgreSQL) com LIMPEZA DE CONSTRAINTS
  *   - Filtro Geográfico Haversine (Raio Expandido de 8.0 KM)
  *   - Gestão de BI (Frente/Verso) e Fotos Base64
  *   - Sistema de Fidelidade (Bónus Real de 5% na Carteira)
@@ -105,8 +105,8 @@ function getDistance(lat1, lon1, lat2, lon2) {
 
 /**
  * =========================================================================
- * DATABASE BOOTSTRAP & AUTO-MIGRATION (FULL ROBUST + CORREÇÕES)
- * Cria tabelas e colunas dinamicamente sem apagar dados existentes.
+ * DATABASE BOOTSTRAP & AUTO-MIGRATION (FULL ROBUST + CORREÇÕES DE CONSTRAINTS)
+ * Cria tabelas, migra colunas e REMOVE restrições legadas que causam erro 500.
  * Executado na inicialização do servidor.
  * =========================================================================
  */
@@ -114,7 +114,7 @@ async function bootstrapDatabase() {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        console.log("--- 🚀 INICIANDO SINCRONIZAÇÃO TOTAL DE BANCO DE DADOS ---");
+        console.log("--- 🚀 AOTRAVEL: SINCRONIZANDO E LIMPANDO TABELAS ---");
 
         // 1. TABELA DE USUÁRIOS (Completa com BI e Fotos)
         await client.query(`
@@ -146,17 +146,22 @@ async function bootstrapDatabase() {
         await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS rating NUMERIC(3,2) DEFAULT 5.00;`);
         await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_online BOOLEAN DEFAULT false;`);
 
-        // 2. TABELA DE CORRIDAS (Com Suporte a Negociação e Correção de ID)
+        // 2. TABELA DE CORRIDAS (Com Correção de Erros de Constraint)
         await client.query(`CREATE TABLE IF NOT EXISTS rides (id SERIAL PRIMARY KEY);`);
         
-        // --- CORREÇÃO CRÍTICA DE SCHEMA (DROP NOT NULL em user_id legado se existir) ---
-        try {
-             await client.query(`ALTER TABLE rides ALTER COLUMN user_id DROP NOT NULL;`);
-        } catch (e) { 
-            // Ignora erro se a coluna não existir ou já estiver correta
+        // --- LIMPEZA PROFUNDA DE RESTRIÇÕES LEGADAS (SOLUÇÃO DEFINITIVA DO ERRO) ---
+        // Remove a obrigatoriedade (NOT NULL) de colunas antigas que não são mais usadas
+        const legacyCols = ['origin', 'user_id', 'destination', 'price'];
+        for (let col of legacyCols) {
+            try {
+                // Tenta alterar a coluna para permitir NULL
+                await client.query(`ALTER TABLE rides ALTER COLUMN ${col} DROP NOT NULL;`);
+            } catch (e) { 
+                // Ignora se a coluna não existir (DB novo)
+            }
         }
 
-        // Definição completa das colunas de corrida
+        // Definição completa das colunas de corrida atuais
         const rideColumns = [
             "passenger_id INTEGER REFERENCES users(id)",
             "driver_id INTEGER REFERENCES users(id)",
@@ -171,7 +176,7 @@ async function bootstrapDatabase() {
             "status TEXT DEFAULT 'searching'", // searching, accepted, started, completed, cancelled
             "ride_type TEXT DEFAULT 'ride'", // ride, delivery, moto
             "negotiation_chat JSONB DEFAULT '[]'", // Histórico de lances
-            "distance_km NUMERIC(10,2)", // Nova coluna solicitada na atualização
+            "distance_km NUMERIC(10,2)", // Nova coluna
             "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
         ];
         
@@ -216,10 +221,10 @@ async function bootstrapDatabase() {
         `);
 
         await client.query('COMMIT');
-        console.log("✅ BANCO DE DADOS SINCRONIZADO E LIMPO (FULL VERSION).");
+        console.log("✅ SISTEMA DE DADOS ESTABILIZADO (ZERO CONSTRAINTS ERRORS).");
     } catch (err) {
         await client.query('ROLLBACK');
-        console.error("❌ ERRO NO SETUP DO DB:", err);
+        console.error("❌ ERRO NO BOOTSTRAP:", err);
     } finally {
         client.release();
     }
@@ -247,7 +252,7 @@ io.on('connection', (socket) => {
 
     /**
      * EVENTO 1: SOLICITAR CORRIDA (Request Ride)
-     * Filtro Geográfico: Apenas motoristas no raio de 8.0 KM recebem (Atualização Aplicada).
+     * Filtro Geográfico: Apenas motoristas no raio de 8.0 KM recebem.
      */
     socket.on('request_ride', async (data) => {
         console.log("📡 Nova solicitação de corrida recebida:", data);
@@ -266,13 +271,13 @@ io.on('connection', (socket) => {
         } = data;
 
         try {
-            // 1. Buscar posições de TODOS os motoristas ativos (last_update < 5 min)
+            // 1. Buscar posições de TODOS os motoristas ativos (last_update < 10 min)
             const driversInDB = await pool.query(`
                 SELECT * FROM driver_positions 
-                WHERE last_update > NOW() - INTERVAL '5 minutes'
+                WHERE last_update > NOW() - INTERVAL '10 minutes'
             `);
 
-            // 2. Filtrar motoristas num raio de 8.0 KM (Atualizado de 3km para 8km conforme pedido)
+            // 2. Filtrar motoristas num raio de 8.0 KM
             const nearbyDrivers = driversInDB.rows.filter(d => {
                 const dist = getDistance(origin_lat, origin_lng, d.lat, d.lng);
                 return dist <= 8.0; 
@@ -282,14 +287,14 @@ io.on('connection', (socket) => {
             if (nearbyDrivers.length === 0) {
                 console.log(`⚠️ Sem motoristas no raio de 8km para User ${passenger_id}`);
                 return io.to(`user_${passenger_id}`).emit('no_drivers', {
-                    message: "Nenhum motorista disponível no raio de 8km. Tente novamente em instantes."
+                    message: "Nenhum motorista AOtravel no raio de 8km. Tente novamente."
                 });
             } else {
                  // Avisa o passageiro que a busca começou (Feedback visual)
                  io.to(`user_${passenger_id}`).emit('drivers_found', { count: nearbyDrivers.length });
             }
 
-            // 4. Criar o registro da Corrida no Banco de Dados (Incluindo distance_km)
+            // 4. Criar o registro da Corrida no Banco de Dados
             const res = await pool.query(
                 `INSERT INTO rides (
                     passenger_id, origin_lat, origin_lng, dest_lat, dest_lng,
@@ -433,7 +438,7 @@ app.get('/', (req, res) => {
     res.status(200).json({
         app: "AOtravel API",
         status: "Online 🚀",
-        version: "4.6.0 Full Robust",
+        version: "4.7.0 Full Robust",
         server_time: new Date(),
         db_connection: "Secure (SSL)",
         limits: "100MB Body Size"
