@@ -96,7 +96,7 @@ function getDistance(lat1, lon1, lat2, lon2) {
     const dLat = (lat2 - lat1) * Math.PI / 180;
     const dLon = (lon2 - lon1) * Math.PI / 180;
     const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
               Math.sin(dLon/2) * Math.sin(dLon/2);
     // Uso de atan2 para maior precisão em distâncias curtas
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
@@ -148,7 +148,7 @@ async function bootstrapDatabase() {
 
         // 2. TABELA DE CORRIDAS (Com Correção de Erros de Constraint)
         await client.query(`CREATE TABLE IF NOT EXISTS rides (id SERIAL PRIMARY KEY);`);
-        
+
         // --- LIMPEZA PROFUNDA DE RESTRIÇÕES LEGADAS (SOLUÇÃO DEFINITIVA DO ERRO) ---
         // Remove a obrigatoriedade (NOT NULL) de colunas antigas que não são mais usadas
         const legacyCols = ['origin', 'user_id', 'destination', 'price'];
@@ -156,7 +156,7 @@ async function bootstrapDatabase() {
             try {
                 // Tenta alterar a coluna para permitir NULL
                 await client.query(`ALTER TABLE rides ALTER COLUMN ${col} DROP NOT NULL;`);
-            } catch (e) { 
+            } catch (e) {
                 // Ignora se a coluna não existir (DB novo)
             }
         }
@@ -179,7 +179,7 @@ async function bootstrapDatabase() {
             "distance_km NUMERIC(10,2)", // Nova coluna
             "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
         ];
-        
+
         // Aplica alterações de schema
         for (let colDef of rideColumns) {
             await client.query(`ALTER TABLE rides ADD COLUMN IF NOT EXISTS ${colDef}`);
@@ -246,7 +246,7 @@ io.on('connection', (socket) => {
         socket.join(`user_${userId}`);
         console.log(`👤 Usuário ${userId} entrou na sala user_${userId}`);
     });
-    
+
     // JOIN ROOMS: Usuário entra na sala de uma corrida específica (Chat/Tracking)
     socket.on('join_ride', (rideId) => socket.join(`ride_${rideId}`));
 
@@ -256,7 +256,7 @@ io.on('connection', (socket) => {
      */
     socket.on('request_ride', async (data) => {
         console.log("📡 Nova solicitação de corrida recebida:", data);
-        
+
         const {
             passenger_id,
             origin_lat,
@@ -273,14 +273,14 @@ io.on('connection', (socket) => {
         try {
             // 1. Buscar posições de TODOS os motoristas ativos (last_update < 10 min)
             const driversInDB = await pool.query(`
-                SELECT * FROM driver_positions 
+                SELECT * FROM driver_positions
                 WHERE last_update > NOW() - INTERVAL '10 minutes'
             `);
 
             // 2. Filtrar motoristas num raio de 8.0 KM
             const nearbyDrivers = driversInDB.rows.filter(d => {
                 const dist = getDistance(origin_lat, origin_lng, d.lat, d.lng);
-                return dist <= 8.0; 
+                return dist <= 8.0;
             });
 
             // 3. Caso não haja motoristas próximos, encerra fluxo e avisa passageiro
@@ -309,7 +309,7 @@ io.on('connection', (socket) => {
 
             // 5. Coloca o passageiro na sala específica desta corrida
             socket.join(`ride_${ride.id}`);
-            
+
             // Confirma criação para o passageiro
             io.to(`user_${passenger_id}`).emit('ride_created', ride);
 
@@ -333,7 +333,7 @@ io.on('connection', (socket) => {
      */
     socket.on('driver_proposal', async (data) => {
         const { ride_id, driver_id, price } = data;
-        
+
         // Notifica todos na sala da corrida (incluindo o passageiro)
         io.to(`ride_${ride_id}`).emit('price_proposal', { driver_id, price });
 
@@ -353,14 +353,14 @@ io.on('connection', (socket) => {
     socket.on('accept_ride', async (data) => {
         const { ride_id, driver_id, final_price } = data;
         console.log(`✅ Corrida ${ride_id} Aceita pelo Motorista ${driver_id}`);
-        
+
         try {
             // Atualiza status e vincula motorista
             const res = await pool.query(
                 `UPDATE rides SET driver_id = $1, final_price = $2, status = 'accepted' WHERE id = $3 RETURNING *`,
                 [driver_id, final_price, ride_id]
             );
-            
+
             // Busca dados do motorista para mostrar ao passageiro
             const driverData = await pool.query(`SELECT name, photo, rating, vehicle_details FROM users WHERE id = $1`, [driver_id]);
 
@@ -376,7 +376,7 @@ io.on('connection', (socket) => {
             // Notifica passageiro (que está na sala ride_ID ou user_ID)
             io.to(`ride_${ride_id}`).emit('ride_accepted_by_driver', acceptPayload);
             io.to(`user_${res.rows[0].passenger_id}`).emit('ride_accepted_by_driver', acceptPayload);
-            
+
         } catch (e) { console.error("Erro ao aceitar corrida:", e); }
     });
 
@@ -409,13 +409,13 @@ io.on('connection', (socket) => {
                  ON CONFLICT (driver_id) DO UPDATE SET lat=$2, lng=$3, heading=$4, last_update=NOW()`,
                 [user_id, lat, lng, heading || 0]
             );
-            
+
             // Emite para todos (para mostrar carrinhos no mapa geral)
             io.emit('driver_moved', { driver_id: user_id, lat, lng, heading });
-            
+
         } catch (e) { /* Erros de GPS são ignorados para não poluir log */ }
     });
-    
+
     /**
      * EVENTO 6: INICIAR VIAGEM (Start Ride)
      */
@@ -424,6 +424,35 @@ io.on('connection', (socket) => {
         await pool.query("UPDATE rides SET status = 'started' WHERE id = $1", [ride_id]);
         io.to(`ride_${ride_id}`).emit('ride_started', { ride_id, status: 'started', time: new Date() });
     });
+
+    // No socket.on('connection', (socket) => { ...
+
+        // EVENTO: CANCELAR CORRIDA (BLOQUEIO DE TELA)
+        socket.on('cancel_ride', async (data) => {
+            const { ride_id, user_id, role } = data;
+            try {
+                await pool.query("UPDATE rides SET status = 'cancelled' WHERE id = $1", [ride_id]);
+                // Notifica a outra parte imediatamente
+                io.to(`ride_${ride_id}`).emit('ride_cancelled_by_other', {
+                    ride_id,
+                    message: role === 'driver' ? "O motorista cancelou a negociação." : "O passageiro cancelou o pedido."
+                });
+            } catch (e) { console.error(e); }
+        });
+
+        // EVENTO: ENVIAR MENSAGEM (SUPORTE A IMAGEM/FILE)
+        socket.on('send_message', async (data) => {
+            const { ride_id, sender_id, text, file_data } = data;
+            try {
+                // Se file_data existir, ele vem em Base64
+                const res = await pool.query(
+                    "INSERT INTO chat_messages (ride_id, sender_id, text, created_at) VALUES ($1,$2,$3, NOW()) RETURNING *",
+                    [ride_id, sender_id, text || "Arquivo enviado"]
+                );
+                io.to(`ride_${ride_id}`).emit('receive_message', { ...res.rows[0], file_data });
+            } catch (e) { console.error(e); }
+        });
+
 });
 
 /**
@@ -454,13 +483,13 @@ app.post('/api/auth/login', async (req, res) => {
     try {
         // Validação simples (em produção usar bcrypt)
         const result = await pool.query('SELECT * FROM users WHERE email = $1 AND password = $2', [email.toLowerCase().trim(), password]);
-        
+
         if (result.rows.length === 0) {
             return res.status(401).json({ error: "Credenciais incorretas ou conta inexistente." });
         }
 
         const user = result.rows[0];
-        
+
         // Busca últimas 15 transações da carteira
         const tx = await pool.query('SELECT * FROM wallet_transactions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 15', [user.id]);
         user.transactions = tx.rows;
@@ -469,16 +498,16 @@ app.post('/api/auth/login', async (req, res) => {
         await pool.query('UPDATE users SET is_online = true WHERE id = $1', [user.id]);
 
         res.json(user);
-    } catch (e) { 
+    } catch (e) {
         console.error("Login Error:", e);
-        res.status(500).json({ error: e.message }); 
+        res.status(500).json({ error: e.message });
     }
 });
 
 // ✅ SIGNUP (FULL: FOTOS, BI, VEÍCULO)
 app.post('/api/auth/signup', async (req, res) => {
     const { name, email, phone, password, role, photo, bi_front, bi_back, vehicle_type, vehicleModel, vehiclePlate, vehicleColor } = req.body;
-    
+
     try {
         // Verificação de unicidade
         const check = await pool.query('SELECT id FROM users WHERE email = $1', [email.toLowerCase().trim()]);
@@ -500,10 +529,10 @@ app.post('/api/auth/signup', async (req, res) => {
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0.00, 0) RETURNING *`,
             [name, email.toLowerCase().trim(), phone, password, role, photo, bi_front, bi_back, vehicle_details]
         );
-        
+
         console.log(`👤 Novo Usuário Criado: ${name} (${role})`);
         res.status(201).json(resUser.rows[0]);
-        
+
     } catch (e) {
         console.error("Erro Signup:", e);
         res.status(500).json({ error: "Erro interno ao criar conta. Verifique os dados." });
@@ -531,8 +560,8 @@ app.put('/api/users/profile', async (req, res) => {
 app.get('/api/history/:userId', async (req, res) => {
     try {
         const result = await pool.query(
-            `SELECT * FROM rides 
-             WHERE passenger_id = $1 OR driver_id = $1 
+            `SELECT * FROM rides
+             WHERE passenger_id = $1 OR driver_id = $1
              ORDER BY created_at DESC LIMIT 50`,
             [req.params.userId]
         );
@@ -568,10 +597,10 @@ app.post('/api/rides/complete', async (req, res) => {
         );
 
         await client.query('COMMIT'); // Confirma Transação
-        
+
         console.log(`💰 Corrida ${ride_id} finalizada. Bónus de ${bonusValue} para User ${user_id}`);
         res.json({ success: true, bonus_earned: bonusValue });
-        
+
     } catch (e) {
         await client.query('ROLLBACK'); // Reverte tudo em caso de erro
         console.error("Erro Transaction:", e);
