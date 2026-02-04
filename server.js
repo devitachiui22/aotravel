@@ -153,6 +153,7 @@ async function bootstrapDatabase() {
         await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS balance NUMERIC(15,2) DEFAULT 0.00;`);
         await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS vehicle_details JSONB;`);
         await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS rating NUMERIC(3,2) DEFAULT 5.00;`);
+        await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_online BOOLEAN DEFAULT false;`); // <-- ADICIONE ESTA LINHA
 
         // 2. TABELA DE CORRIDAS (Com Suporte a Negociação)
         await client.query(`CREATE TABLE IF NOT EXISTS rides (id SERIAL PRIMARY KEY);`);
@@ -597,3 +598,4 @@ server.listen(port, '0.0.0.0', () => {
     ===================================================
     `);
 });
+
