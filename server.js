@@ -60,7 +60,6 @@ const io = new Server(server, {
 
 /**
  * CONEXÃO COM BANCO DE DADOS (NEON POSTGRESQL)
- * String de conexão hardcoded conforme solicitado, com fallback para ENV.
  */
 const connectionString = process.env.DATABASE_URL || "postgresql://neondb_owner:npg_B62pAUiGbJrF@ep-jolly-art-ahef2z0t-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require";
 
@@ -126,7 +125,7 @@ async function bootstrapDatabase() {
             );
         `);
 
-        // Migração Segura de Colunas (Evita erros se já existirem)
+        // Migração Segura de Colunas
         await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS bi_front TEXT;`);
         await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS bi_back TEXT;`);
         await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS photo TEXT;`);
@@ -138,7 +137,7 @@ async function bootstrapDatabase() {
         // 2. TABELA DE CORRIDAS
         await client.query(`CREATE TABLE IF NOT EXISTS rides (id SERIAL PRIMARY KEY);`);
 
-        // LIMPEZA DE RESTRIÇÕES LEGADAS (Fix erro 500)
+        // LIMPEZA DE RESTRIÇÕES LEGADAS
         const legacyCols = ['origin', 'user_id', 'destination', 'price'];
         for (let col of legacyCols) {
             try {
@@ -231,7 +230,7 @@ io.on('connection', (socket) => {
 
     socket.on('join_ride', (rideId) => {
         socket.join(`ride_${rideId}`);
-        console.log(`🚕 User entrou na Viagem: ${rideId}`);
+        console.log(`🚕 Socket ${socket.id} entrou na Viagem: ${rideId}`);
     });
 
     /**
@@ -298,7 +297,7 @@ io.on('connection', (socket) => {
     socket.on('driver_proposal', async (data) => {
         const { ride_id, driver_id, price } = data;
         io.to(`ride_${ride_id}`).emit('price_proposal', { driver_id, price });
-        
+
         try {
             await pool.query(
                 `UPDATE rides SET negotiation_chat = negotiation_chat || $1::jsonb WHERE id = $2`,
@@ -307,12 +306,9 @@ io.on('connection', (socket) => {
         } catch (e) { console.error("Erro ao salvar proposta:", e); }
     });
 
-    // Alias para compatibilidade com versões antigas do app
     socket.on('driver_accept_price', async (data) => {
-        // Redireciona para lógica de aceitação
+        // Alias para aceitar
         const { ride_id, driver_id, final_price } = data;
-        // Chama a função interna ou emite evento de accept
-        // Aqui simulamos o evento accept_ride
         socket.emit('accept_ride', { ride_id, driver_id, final_price });
     });
 
@@ -330,7 +326,7 @@ io.on('connection', (socket) => {
             );
 
             const driverData = await pool.query(`SELECT name, photo, rating, vehicle_details, phone FROM users WHERE id = $1`, [driver_id]);
-            
+
             const acceptPayload = {
                 ...res.rows[0],
                 driver_name: driverData.rows[0].name,
@@ -342,16 +338,15 @@ io.on('connection', (socket) => {
                 final_price
             };
 
-            // Emite para a sala da corrida e para o usuário específico
+            // Notifica todos na sala da corrida
             io.to(`ride_${ride_id}`).emit('ride_accepted_by_driver', acceptPayload);
-            io.to(`ride_${ride_id}`).emit('price_finalized', { final_price }); // Compatibilidade Snippet 1
             io.to(`user_${res.rows[0].passenger_id}`).emit('ride_accepted_by_driver', acceptPayload);
 
         } catch (e) { console.error("Erro ao aceitar corrida:", e); }
     });
 
     /**
-     * --- MENSAGENS (CHAT + ARQUIVOS) ---
+     * --- MENSAGENS (CHAT) ---
      */
     socket.on('send_message', async (data) => {
         const { ride_id, sender_id, text, file_data } = data;
@@ -360,41 +355,54 @@ io.on('connection', (socket) => {
                 "INSERT INTO chat_messages (ride_id, sender_id, text, created_at) VALUES ($1,$2,$3, NOW()) RETURNING *",
                 [ride_id, sender_id, text || (file_data ? "📎 Imagem/Arquivo" : ".")]
             );
-            // Envia para TODOS na sala, incluindo o file_data em Base64 para exibição imediata
+            // Broadcast para a sala da corrida (Motorista e Passageiro)
             socket.to(`ride_${ride_id}`).emit('receive_message', { ...res.rows[0], file_data });
-            // Se o sender também estiver ouvindo, confirma recebimento (opcional)
         } catch (e) { console.error(e); }
     });
 
     /**
-     * --- INÍCIO E TRACKING DA VIAGEM ---
+     * --- INÍCIO DA VIAGEM (MUDANÇA DE TELA) ---
      */
-    
-    // Motorista inicia a viagem
     socket.on('start_trip', async (data) => {
         const { ride_id } = data;
-        await pool.query("UPDATE rides SET status = 'ongoing' WHERE id = $1", [ride_id]);
-        // Emite ambos os eventos para garantir compatibilidade
-        io.to(`ride_${ride_id}`).emit('trip_started_now', { status: 'ongoing' });
-        io.to(`ride_${ride_id}`).emit('ride_started', { ride_id, status: 'ongoing', time: new Date() });
+
+        try {
+            // Atualiza status no banco
+            const res = await pool.query("UPDATE rides SET status = 'ongoing' WHERE id = $1 RETURNING *", [ride_id]);
+            const ride = res.rows[0];
+
+            console.log(`🚀 Viagem ${ride_id} INICIADA. Mudando telas.`);
+
+            // Payload completo para a próxima tela
+            const startPayload = {
+                status: 'ongoing',
+                ride_id: ride.id,
+                dest_lat: ride.dest_lat,
+                dest_lng: ride.dest_lng,
+                origin_lat: ride.origin_lat,
+                origin_lng: ride.origin_lng,
+                start_time: new Date()
+            };
+
+            // Emite para a sala: IMPORTANTE - Ambos os apps (Driver/User) devem ouvir isso e mudar de tela
+            io.to(`ride_${ride_id}`).emit('trip_started_now', startPayload);
+
+        } catch (e) {
+            console.error("Erro start_trip:", e);
+        }
     });
 
-    // Alias para compatibilidade
-    socket.on('start_ride', async (data) => {
-        const { ride_id } = data;
-        await pool.query("UPDATE rides SET status = 'ongoing' WHERE id = $1", [ride_id]);
-        io.to(`ride_${ride_id}`).emit('trip_started_now', { status: 'ongoing' });
-        io.to(`ride_${ride_id}`).emit('ride_started', { ride_id, status: 'ongoing', time: new Date() });
-    });
-
-    // GPS EM VIAGEM (Atualização rápida para o passageiro ver o carro no mapa)
+    /**
+     * --- TRACKING EM TEMPO REAL (VIAGEM) ---
+     */
     socket.on('update_trip_gps', (data) => {
+        // O motorista envia { ride_id, lat, lng, rotation }
+        // O servidor repassa imediatamente para o passageiro na sala
         const { ride_id, lat, lng, rotation } = data;
-        // Passageiro ouve isso para mover o carro no mapa
         socket.to(`ride_${ride_id}`).emit('driver_location_update', { lat, lng, rotation });
     });
 
-    // ATUALIZAÇÃO GERAL DE POSIÇÃO (Para o mapa inicial de busca)
+    // ATUALIZAÇÃO GERAL DE POSIÇÃO (Para o mapa inicial - motoristas idle)
     socket.on('update_location', async (data) => {
         const { user_id, lat, lng, heading } = data;
         try {
@@ -404,25 +412,23 @@ io.on('connection', (socket) => {
                  ON CONFLICT (driver_id) DO UPDATE SET lat=$2, lng=$3, heading=$4, last_update=NOW()`,
                 [user_id, lat, lng, heading || 0]
             );
-            // Emite para todos (carrinhos no mapa home)
             io.emit('driver_moved', { driver_id: user_id, lat, lng, heading });
         } catch (e) { /* Erro silencioso GPS */ }
     });
 
     /**
-     * --- CANCELAMENTO ---
+     * --- CANCELAMENTO / TÉRMINO ---
      */
     socket.on('cancel_ride', async (data) => {
         const { ride_id, role, user_id } = data;
         try {
             await pool.query("UPDATE rides SET status = 'cancelled' WHERE id = $1", [ride_id]);
-            
-            // Notificações Variadas para cobrir todos os casos
-            io.to(`ride_${ride_id}`).emit('ride_terminated', { 
+
+            io.to(`ride_${ride_id}`).emit('ride_terminated', {
                 reason: role === 'driver' ? 'O motorista cancelou.' : 'O passageiro cancelou.',
                 canReSearch: role === 'driver'
             });
-            
+
             io.to(`ride_${ride_id}`).emit('ride_cancelled_by_other', {
                 ride_id,
                 message: role === 'driver' ? "O motorista cancelou a negociação." : "O passageiro cancelou o pedido."
@@ -527,14 +533,14 @@ app.put('/api/users/profile', async (req, res) => {
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// GET RIDE DETAILS (Dados reais do motorista e carro)
+// GET RIDE DETAILS
 app.get('/api/rides/details/:id', async (req, res) => {
     try {
         const ride = await pool.query(
-            `SELECT r.*, u.name as driver_name, u.photo as driver_photo, u.vehicle_details, u.phone as driver_phone 
-             FROM rides r 
-             JOIN users u ON u.id = r.driver_id 
-             WHERE r.id = $1`, 
+            `SELECT r.*, u.name as driver_name, u.photo as driver_photo, u.vehicle_details, u.phone as driver_phone
+             FROM rides r
+             JOIN users u ON u.id = r.driver_id
+             WHERE r.id = $1`,
              [req.params.id]
         );
         res.json(ride.rows[0]);
@@ -598,8 +604,6 @@ server.listen(port, '0.0.0.0', () => {
        📍 RAIO FILTRO: 8.0 KM
        🗄️ DB: NEON POSTGRESQL (SSL MODE)
        ⚡ SOCKET: ATIVO E PRONTO
-       📝 BODY LIMIT: 100MB
-       📦 CORS: PERMISSIVO (*)
     ===================================================
     `);
 });
