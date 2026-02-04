@@ -1,17 +1,9 @@
 /**
  * =========================================================================
- * AOTRAVEL SERVER PRO 2026 - VERSÃO FINAL ABSOLUTA (FULL MERGED)
+ * AOTRAVEL SERVER PRO 2026 - FINAL PRODUCTION BUILD (FULL MERGED)
  * Localização: backend/server.js
  * Descrição: Backend Profissional para Transporte e Entregas (Angola).
- * =========================================================================
- * Funcionalidades Integradas:
- *   - WebSocket Real-time (Socket.IO)
- *   - API RESTful (Express) JSON 100MB
- *   - Auto-Migration DB (Neon PostgreSQL) + Limpeza de Constraints
- *   - Filtro Geográfico Haversine (8.0 KM)
- *   - Chat com Texto e Arquivos (Base64)
- *   - Sistema Financeiro e Bónus
- *   - Tracking em Tempo Real
+ * Status: FIXED & ROBUST (Broadcasts corrigidos, Dados Full Join, 100MB Limit)
  * =========================================================================
  */
 
@@ -95,19 +87,32 @@ function getDistance(lat1, lon1, lat2, lon2) {
 /**
  * =========================================================================
  * AUXILIAR: PEGAR DETALHES COMPLETOS DA CORRIDA (CRÍTICO PARA O FRONTEND)
- * Junta dados da corrida, passageiro e motorista.
+ * Junta dados da corrida, passageiro e motorista (LEFT JOIN GARANTIDO).
  * =========================================================================
  */
 async function getFullRideDetails(rideId) {
-    const res = await pool.query(`
-        SELECT r.*, 
-            d.name as driver_name, d.photo as driver_photo, d.phone as driver_phone, d.vehicle_details, d.rating as driver_rating,
-            p.name as passenger_name, p.photo as passenger_photo, p.phone as passenger_phone, p.rating as passenger_rating
+    const query = `
+        SELECT 
+            r.*,
+            -- DADOS DO MOTORISTA
+            d.name as driver_name, 
+            d.photo as driver_photo, 
+            d.phone as driver_phone, 
+            d.vehicle_details, 
+            d.rating as driver_rating,
+            d.email as driver_email,
+            -- DADOS DO PASSAGEIRO
+            p.name as passenger_name, 
+            p.photo as passenger_photo, 
+            p.phone as passenger_phone, 
+            p.rating as passenger_rating,
+            p.email as passenger_email
         FROM rides r
         LEFT JOIN users d ON r.driver_id = d.id
         LEFT JOIN users p ON r.passenger_id = p.id
         WHERE r.id = $1
-    `, [rideId]);
+    `;
+    const res = await pool.query(query, [rideId]);
     return res.rows[0];
 }
 
@@ -329,17 +334,15 @@ io.on('connection', (socket) => {
     socket.on('driver_accept_price', async (data) => {
         // Alias para aceitar vindo da lista de corridas
         const { ride_id, driver_id, final_price } = data;
-        // Reutiliza a lógica de 'accept_ride'
-        // Emitimos para o próprio socket para triggar o listener abaixo ou chamamos a função direta
-        // Melhor abordagem: Cliente emite 'accept_ride' diretamente, mas se vier 'driver_accept_price', tratamos aqui:
-        // Porém, como é backend, não posso emitir para "mim mesmo". Vou processar diretamente.
-        // Copiando lógica do accept_ride abaixo para garantir funcionamento:
+        
         try {
             await pool.query(
                 `UPDATE rides SET driver_id = $1, final_price = $2, status = 'accepted' WHERE id = $3`,
                 [driver_id, final_price, ride_id]
             );
             const fullData = await getFullRideDetails(ride_id);
+            
+            // EMISSÃO ROBUSTA PARA AMBOS
             io.to(`ride_${ride_id}`).emit('ride_accepted_by_driver', fullData);
             io.to(`user_${fullData.passenger_id}`).emit('ride_accepted_by_driver', fullData);
         } catch (e) { console.error(e); }
@@ -352,7 +355,7 @@ io.on('connection', (socket) => {
         const { ride_id, new_price } = data;
         try {
             await pool.query("UPDATE rides SET final_price = $1 WHERE id = $2", [new_price, ride_id]);
-            // Avisa todos na sala que o preço mudou
+            // Avisa todos na sala que o preço mudou (BROADCAST PARA A SALA TODA)
             io.to(`ride_${ride_id}`).emit('price_updated', { new_price });
         } catch (e) { console.error(e); }
     });
@@ -374,8 +377,9 @@ io.on('connection', (socket) => {
             // Busca dados COMPLETOS para exibir na tela de chat
             const fullData = await getFullRideDetails(ride_id);
 
-            // Notifica todos na sala da corrida
+            // Notifica todos na sala da corrida (io.to para garantir que todos recebam)
             io.to(`ride_${ride_id}`).emit('ride_accepted_by_driver', fullData);
+            
             // Redundância para garantir que passageiro receba
             io.to(`user_${fullData.passenger_id}`).emit('ride_accepted_by_driver', fullData);
 
@@ -392,8 +396,11 @@ io.on('connection', (socket) => {
                 "INSERT INTO chat_messages (ride_id, sender_id, text, created_at) VALUES ($1,$2,$3, NOW()) RETURNING *",
                 [ride_id, sender_id, text || (file_data ? "📎 Imagem/Arquivo" : ".")]
             );
-            // Broadcast para a sala da corrida (Motorista e Passageiro)
-            socket.to(`ride_${ride_id}`).emit('receive_message', { ...res.rows[0], file_data });
+            
+            const msgPayload = { ...res.rows[0], file_data };
+
+            // Broadcast para a sala TODA (incluindo o remetente, para consistência de UI)
+            io.to(`ride_${ride_id}`).emit('receive_message', msgPayload);
         } catch (e) { console.error(e); }
     });
 
@@ -406,16 +413,17 @@ io.on('connection', (socket) => {
         try {
             // Atualiza status no banco
             await pool.query("UPDATE rides SET status = 'ongoing' WHERE id = $1", [ride_id]);
-            
+
             // Busca dados atualizados
             const fullData = await getFullRideDetails(ride_id);
             fullData.status = 'ongoing'; // Garante status
 
             console.log(`🚀 Viagem ${ride_id} INICIADA. Mudando telas.`);
 
-            // Emite para a sala: IMPORTANTE - O Flutter espera 'trip_started_now' com 'full_details'
-            io.to(`ride_${ride_id}`).emit('trip_started_now', { 
-                ride_id, 
+            // CRÍTICO: io.to envia para TODOS os sockets na sala, incluindo o Motorista que clicou.
+            // Isso previne que o app do motorista fique "travado" no chat.
+            io.to(`ride_${ride_id}`).emit('trip_started_now', {
+                ride_id,
                 status: 'ongoing',
                 full_details: fullData, // Payload crucial para a navegação do Flutter
                 start_time: new Date()
@@ -458,11 +466,13 @@ io.on('connection', (socket) => {
         try {
             await pool.query("UPDATE rides SET status = 'cancelled' WHERE id = $1", [ride_id]);
 
+            // Emite para TODOS na sala
             io.to(`ride_${ride_id}`).emit('ride_terminated', {
                 reason: role === 'driver' ? 'O motorista cancelou.' : 'O passageiro cancelou.',
                 canReSearch: role === 'driver'
             });
 
+            // Compatibilidade com lógica antiga de alerta
             io.to(`ride_${ride_id}`).emit('ride_cancelled_by_other', {
                 ride_id,
                 message: role === 'driver' ? "O motorista cancelou a negociação." : "O passageiro cancelou o pedido."
@@ -597,22 +607,22 @@ app.post('/api/rides/complete', async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        
+
         // Atualiza Status
         await client.query("UPDATE rides SET status = 'completed' WHERE id = $1", [ride_id]);
-        
+
         // Atualiza Saldo do Motorista/Passageiro e dá Bónus
         await client.query(
             "UPDATE users SET balance = balance + $1, bonus_points = bonus_points + 10 WHERE id = $2",
             [bonusValue, user_id]
         );
-        
+
         // Registra Transação
         await client.query(
             "INSERT INTO wallet_transactions (user_id, amount, type, description, reference_id) VALUES ($1, $2, 'bonus_reward', 'Prémio Cashback AOtravel', $3)",
             [user_id, bonusValue, ride_id]
         );
-        
+
         await client.query('COMMIT');
         console.log(`💰 Corrida ${ride_id} finalizada. Cashback: ${bonusValue}`);
         res.json({ success: true, bonus_earned: bonusValue });
@@ -639,7 +649,7 @@ server.listen(port, '0.0.0.0', () => {
        📡 PORTA: ${port}
        📍 RAIO FILTRO: 8.0 KM
        🗄️ DB: NEON POSTGRESQL (SSL MODE)
-       ⚡ SOCKET: ATIVO E PRONTO
+       ⚡ SOCKET: ATIVO E PRONTO (Broadcast Fix)
     ===================================================
     `);
 });
