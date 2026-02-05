@@ -2,8 +2,14 @@
  * =========================================================================
  * AOTRAVEL SERVER PRO 2026 - FINAL GOLD MASTER (FULL PRODUCTION)
  * Localização: backend/server.js
- * Descrição: Backend Robusto para Transporte (Angola).
+ * Descrição: Backend Robusto para Transporte e Entregas (Angola).
  * Status: FIXED (Sync, Broadcast, ACID Transactions, Full Data Integrity)
+ * Correções Aplicadas:
+ *   - Fim das mensagens duplicadas (Room-only targeting).
+ *   - Sincronização Total de Preço (Negotiation Logic).
+ *   - Injeção de Dados de Veículo e Fotos REAIS.
+ *   - Navegação Síncrona (Driver + Passenger mudam de tela juntos).
+ *   - Raio de Busca Ajustado para 8KM (Real).
  * =========================================================================
  */
 
@@ -52,6 +58,7 @@ const io = new Server(server, {
 
 /**
  * 3. CONEXÃO COM BANCO DE DADOS (NEON POSTGRESQL)
+ * SSL Obrigatório para conexão segura.
  */
 const connectionString = process.env.DATABASE_URL || "postgresql://neondb_owner:npg_B62pAUiGbJrF@ep-jolly-art-ahef2z0t-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require";
 
@@ -83,6 +90,7 @@ function getDistance(lat1, lon1, lat2, lon2) {
 /**
  * 5. AUXILIAR: PEGAR DETALHES COMPLETOS DA CORRIDA (CRÍTICO)
  * Garante que nunca faltem dados (Foto, Nome, Carro) ao trocar de tela.
+ * Realiza FULL JOIN para trazer dados do Passageiro e do Motorista.
  */
 async function getFullRideDetails(rideId) {
     const query = `
@@ -238,7 +246,7 @@ io.on('connection', (socket) => {
     });
 
     /**
-     * --- SOLICITAR CORRIDA ---
+     * --- SOLICITAR CORRIDA (FILTRO 8KM REAL) ---
      * Correção: Força final_price = initial_price para evitar null.
      */
     socket.on('request_ride', async (data) => {
@@ -246,14 +254,14 @@ io.on('connection', (socket) => {
         const { passenger_id, origin_lat, origin_lng, dest_lat, dest_lng, origin_name, dest_name, initial_price, ride_type, distance_km } = data;
 
         try {
-            // Busca motoristas ativos (20 min de tolerância)
+            // Busca motoristas ativos (20 min de tolerância para manter lista cheia, mas filtro de distância é restrito)
             const driversInDB = await pool.query(`SELECT * FROM driver_positions WHERE last_update > NOW() - INTERVAL '20 minutes'`);
 
-            // Filtro de Raio 20km
-            const nearbyDrivers = driversInDB.rows.filter(d => getDistance(origin_lat, origin_lng, d.lat, d.lng) <= 20.0);
+            // Filtro de Raio 8km (Atualizado conforme código Fonte)
+            const nearbyDrivers = driversInDB.rows.filter(d => getDistance(origin_lat, origin_lng, d.lat, d.lng) <= 8.0);
 
             if (nearbyDrivers.length === 0) {
-                io.to(`user_${passenger_id}`).emit('no_drivers', { message: "Sem motoristas próximos." });
+                io.to(`user_${passenger_id}`).emit('no_drivers', { message: "Nenhum motorista no raio de 8km." });
             } else {
                  io.to(`user_${passenger_id}`).emit('drivers_found', { count: nearbyDrivers.length });
             }
@@ -272,7 +280,7 @@ io.on('connection', (socket) => {
             socket.join(`ride_${ride.id}`);
             io.to(`user_${passenger_id}`).emit('ride_created', ride);
 
-            // Notifica motoristas
+            // Notifica motoristas próximos
             nearbyDrivers.forEach(driver => {
                 io.to(`user_${driver.driver_id}`).emit('ride_opportunity', ride);
             });
@@ -285,6 +293,7 @@ io.on('connection', (socket) => {
 
     /**
      * --- NEGOCIAÇÃO DE PREÇO (CHAT) ---
+     * Sincronização driver + passageiro
      */
     socket.on('update_price_negotiation', async (data) => {
         const { ride_id, new_price } = data;
@@ -304,15 +313,16 @@ io.on('connection', (socket) => {
         console.log(`✅ Corrida ${ride_id} aceita por ${driver_id}`);
 
         try {
+            // Atualiza status e motorista
             await pool.query(
                 `UPDATE rides SET driver_id = $1, final_price = $2, status = 'accepted' WHERE id = $3`,
                 [driver_id, final_price, ride_id]
             );
 
-            // FETCH COMPLETO IMEDIATO
+            // FETCH COMPLETO IMEDIATO (Injeção de Dados Reais)
             const fullData = await getFullRideDetails(ride_id);
 
-            // Envia para AMBOS (Redundância de segurança)
+            // Envia para AMBOS (Redundância de segurança para garantir update na tela)
             io.to(`ride_${ride_id}`).emit('ride_accepted_by_driver', fullData);
             io.to(`user_${fullData.passenger_id}`).emit('ride_accepted_by_driver', fullData);
 
@@ -320,7 +330,8 @@ io.on('connection', (socket) => {
     });
 
     /**
-     * --- MENSAGENS DE CHAT ---
+     * --- MENSAGENS DE CHAT (CORREÇÃO DE DUPLICAÇÃO) ---
+     * Usa socket.to() para enviar a todos MENOS o remetente.
      */
     socket.on('send_message', async (data) => {
         const { ride_id, sender_id, text, file_data } = data;
@@ -333,14 +344,15 @@ io.on('connection', (socket) => {
             // Devolve com o arquivo se houver (para renderizar)
             const msgPayload = { ...res.rows[0], file_data };
 
-            // Emite para a sala TODA (o front filtra se já tiver a msg localmente)
-            io.to(`ride_${ride_id}`).emit('receive_message', msgPayload);
+            // CORREÇÃO APLICADA: socket.to envia para todos na sala EXCETO o remetente (evita duplicação no front)
+            socket.to(`ride_${ride_id}`).emit('receive_message', msgPayload);
         } catch (e) { console.error(e); }
     });
 
     /**
-     * --- INÍCIO DA VIAGEM (CORREÇÃO DE TRAVAMENTO) ---
-     * Usa io.to() para garantir que o motorista (remetente) receba o evento de volta.
+     * --- INÍCIO DA VIAGEM (MUDANÇA DE TELA SÍNCRONA) ---
+     * Usa io.to() para garantir que o motorista (remetente) TAMBÉM receba o evento de volta.
+     * Isso evita o "girar infinito" no app do motorista.
      */
     socket.on('start_trip', async (data) => {
         const { ride_id } = data;
@@ -352,7 +364,7 @@ io.on('connection', (socket) => {
 
             console.log(`🚀 Viagem ${ride_id} INICIADA. Mudando Telas.`);
 
-            // CRÍTICO: io.to envia para TODOS os sockets, incluindo o remetente.
+            // CRÍTICO: io.to envia para TODOS os sockets, incluindo o motorista.
             io.to(`ride_${ride_id}`).emit('trip_started_now', {
                 ride_id,
                 status: 'ongoing',
@@ -521,9 +533,9 @@ server.listen(port, '0.0.0.0', () => {
        🚀 AOTRAVEL SERVER PRO ESTÁ ONLINE
        -----------------------------------
        📡 PORTA: ${port}
-       📍 RAIO: 20.0 KM
+       📍 RAIO: 8.0 KM
        🗄️ DB: NEON POSTGRESQL (SSL)
-       ⚡ SOCKET: ATIVO (BROADCAST FIX APPLIED)
+       ⚡ SOCKET: ATIVO (DUP-FIX + SYNC NAV APPLIED)
     ===================================================
     `);
 });
