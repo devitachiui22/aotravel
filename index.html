@@ -2,70 +2,86 @@
 <html lang="pt-AO" class="scroll-smooth">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>AOTRAVEL | Viaje. Entregue. Lucre.</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
+    <meta name="description" content="AOTRAVEL - O App de mobilidade que conecta Angola. Viaje com segurança, entregue com rapidez.">
+    <meta name="theme-color" content="#F59E0B">
     
-    <!-- Tipografia Premium: Plus Jakarta Sans (Padrão Tech Moderno) -->
+    <!-- Favicon -->
+    <link rel="icon" type="image/png" href="logo.png">
+
+    <title>AOTRAVEL | Premium Mobility</title>
+    
+    <!-- Tipografia: Plus Jakarta Sans (Padrão Tech Global) -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@200;300;400;500;600;700;800&display=swap" rel="stylesheet">
     
-    <!-- Phosphor Icons (Ícones Vetoriais Ultra Nítidos) -->
+    <!-- Phosphor Icons -->
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
 
-    <!-- Tailwind CSS v3.4 -->
+    <!-- Tailwind CSS (CDN Moderna) -->
     <script src="https://cdn.tailwindcss.com"></script>
 
-    <!-- Configuração do Design System -->
+    <!-- Configuração Avançada do Tailwind & Design System -->
     <script>
         tailwind.config = {
-            darkMode: 'class',
+            darkMode: 'class', // Controlado manualmente
             theme: {
                 extend: {
                     fontFamily: {
                         sans: ['"Plus Jakarta Sans"', 'sans-serif'],
                     },
                     colors: {
-                        // Paleta Personalizada: Amarelo/Laranja Escuro Profundo
                         brand: {
                             50: '#fffbeb',
                             100: '#fef3c7',
+                            200: '#fde68a',
+                            300: '#fcd34d',
                             400: '#fbbf24',
-                            500: '#f59e0b', // Primary Yellow
+                            500: '#f59e0b', // Brand Primary
                             600: '#d97706',
-                            700: '#b45309', // Dark Orange/Brownish
+                            700: '#b45309',
                             800: '#92400e',
                             900: '#78350f',
+                            950: '#451a03',
                         },
-                        // Fundo Dark Mode "Rico" (Não é preto puro, é azul noturno profundo)
-                        night: {
-                            900: '#020617', // Slate 950
-                            800: '#0f172a', // Slate 900
-                            card: '#1e293b',
+                        dark: {
+                            bg: '#030712',      // Cinza Quase Preto
+                            surface: '#0f172a', // Azul Noturno
+                            border: '#1e293b',
                         }
                     },
                     backgroundImage: {
                         'gradient-radial': 'radial-gradient(var(--tw-gradient-stops))',
-                        'hero-glow': 'conic-gradient(from 180deg at 50% 50%, #F59E0B 0deg, #EA580C 180deg, #F59E0B 360deg)',
-                    },
-                    boxShadow: {
-                        'neon': '0 0 40px -10px rgba(245, 158, 11, 0.4)',
-                        'glass': '0 8px 32px 0 rgba(0, 0, 0, 0.05)',
+                        'hero-mesh': 'radial-gradient(at 0% 0%, hsla(37,91%,65%,1) 0, transparent 50%), radial-gradient(at 50% 0%, hsla(24,100%,60%,1) 0, transparent 50%), radial-gradient(at 100% 0%, hsla(340,100%,76%,0.5) 0, transparent 50%)',
                     },
                     animation: {
-                        'float': 'float 6s ease-in-out infinite',
-                        'marquee': 'marquee 25s linear infinite',
-                        'pulse-slow': 'pulse 4s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                        'float-slow': 'float 8s ease-in-out infinite',
+                        'float-medium': 'float 6s ease-in-out infinite',
+                        'float-fast': 'float 4s ease-in-out infinite',
+                        'blob': 'blob 7s infinite',
+                        'fade-in-up': 'fadeInUp 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards',
                     },
                     keyframes: {
                         float: {
                             '0%, 100%': { transform: 'translateY(0)' },
                             '50%': { transform: 'translateY(-20px)' },
                         },
-                        marquee: {
-                            '0%': { transform: 'translateX(0%)' },
-                            '100%': { transform: 'translateX(-50%)' },
+                        blob: {
+                            '0%': { transform: 'translate(0px, 0px) scale(1)' },
+                            '33%': { transform: 'translate(30px, -50px) scale(1.1)' },
+                            '66%': { transform: 'translate(-20px, 20px) scale(0.9)' },
+                            '100%': { transform: 'translate(0px, 0px) scale(1)' },
+                        },
+                        fadeInUp: {
+                            '0%': { opacity: 0, transform: 'translateY(40px)' },
+                            '100%': { opacity: 1, transform: 'translateY(0)' },
                         }
+                    },
+                    boxShadow: {
+                        'glass': '0 8px 32px 0 rgba(0, 0, 0, 0.07)',
+                        'glass-dark': '0 8px 32px 0 rgba(0, 0, 0, 0.3)',
+                        'glow': '0 0 50px -10px rgba(245, 158, 11, 0.5)',
                     }
                 }
             }
@@ -73,346 +89,543 @@
     </script>
 
     <style>
-        /* CSS RESET E REFINAMENTOS */
+        /* CSS Customizado para Efeitos Premium (Glassmorphism & Utils) */
+        
         body {
-            -webkit-font-smoothing: antialiased;
-            -moz-osx-font-smoothing: grayscale;
+            -webkit-tap-highlight-color: transparent;
+            overflow-x: hidden;
         }
 
-        /* Glassmorphism Realista */
-        .glass-nav {
-            background: rgba(255, 255, 255, 0.85);
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
-            border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+        /* Scrollbar Moderna */
+        ::-webkit-scrollbar {
+            width: 8px;
         }
-        .dark .glass-nav {
-            background: rgba(2, 6, 23, 0.8); /* night-900 com opacidade */
-            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 4px;
+        }
+        .dark ::-webkit-scrollbar-thumb {
+            background: #334155;
         }
 
-        /* Gradiente de Texto Premium */
-        .text-gradient {
-            background: linear-gradient(135deg, #F59E0B 0%, #EA580C 100%);
+        /* Efeito Vidro Fosco (Glassmorphism) */
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.7);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.5);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+        }
+        .dark .glass-panel {
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+        }
+
+        /* Texto Gradiente Premium */
+        .text-gradient-gold {
+            background: linear-gradient(135deg, #d97706 0%, #f59e0b 50%, #fbbf24 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .dark .text-gradient-gold {
+            background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 50%, #d97706 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
         }
 
-        /* MÁSCARA DO CARROSSEL (Fades laterais) */
-        .marquee-mask {
-            mask-image: linear-gradient(to right, transparent, black 20%, black 80%, transparent);
-            -webkit-mask-image: linear-gradient(to right, transparent, black 20%, black 80%, transparent);
+        /* Máscara para o Carrossel Infinito */
+        .mask-linear-fade {
+            mask-image: linear-gradient(to right, transparent, black 15%, black 85%, transparent);
+            -webkit-mask-image: linear-gradient(to right, transparent, black 15%, black 85%, transparent);
         }
 
-        /* CORREÇÃO DOS BOTÕES (Tamanho Igual) */
-        .app-btn-container {
-            height: 56px; /* Altura fixa para ambos os botões */
-            min-width: 160px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background: #000;
-            border-radius: 12px;
-            padding: 0 16px;
-            transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
-            border: 1px solid rgba(255,255,255,0.1);
-            overflow: hidden;
+        /* Botão Mobile Hamburger Animado */
+        .hamburger line {
+            transition: transform 0.3s ease, opacity 0.3s ease;
+            transform-origin: center;
         }
+        .hamburger.active .top { transform: translateY(6px) rotate(45deg); }
+        .hamburger.active .middle { opacity: 0; }
+        .hamburger.active .bottom { transform: translateY(-6px) rotate(-45deg); }
+
+        /* Loader de Imagens */
+        img { transition: opacity 0.5s ease-in-out; }
         
-        .app-btn-container.light-mode-btn {
-            background: #fff;
-            border: 1px solid #e2e8f0;
+        /* Utilitários de Animação de Entrada */
+        .reveal-on-scroll {
+            opacity: 0;
+            transform: translateY(30px);
+            transition: all 0.8s cubic-bezier(0.16, 1, 0.3, 1);
         }
-
-        .app-btn-container:hover {
-            transform: translateY(-3px);
-            box-shadow: 0 10px 25px -5px rgba(0,0,0,0.15);
-        }
-
-        .app-btn-container img {
-            height: 100%; /* Força a imagem a ocupar a altura do container */
-            width: auto;
-            object-fit: contain; /* Garante que a imagem não estique */
-            pointer-events: none;
+        .reveal-on-scroll.visible {
+            opacity: 1;
+            transform: translateY(0);
         }
     </style>
 </head>
-<body class="bg-gray-50 dark:bg-night-900 text-slate-900 dark:text-slate-100 transition-colors duration-500 overflow-x-hidden selection:bg-brand-500 selection:text-white">
+<body class="bg-slate-50 dark:bg-dark-bg text-slate-900 dark:text-slate-100 transition-colors duration-500 antialiased selection:bg-brand-500 selection:text-white">
 
-    <!-- EFEITOS DE FUNDO (Ambient Light) -->
-    <div class="fixed inset-0 pointer-events-none -z-10 overflow-hidden">
-        <div class="absolute top-[-10%] left-[-10%] w-[600px] h-[600px] bg-brand-500/10 rounded-full blur-[120px] mix-blend-multiply dark:mix-blend-screen animate-pulse-slow"></div>
-        <div class="absolute bottom-[10%] right-[-5%] w-[500px] h-[500px] bg-orange-600/10 rounded-full blur-[100px] mix-blend-multiply dark:mix-blend-screen"></div>
+    <!-- BACKGROUND AMBIENTE ANIMADO -->
+    <div class="fixed inset-0 overflow-hidden pointer-events-none -z-10">
+        <!-- Blobs de cor -->
+        <div class="absolute top-[-10%] left-[-10%] w-[50vw] h-[50vw] bg-brand-400/20 rounded-full blur-[100px] animate-blob mix-blend-multiply dark:mix-blend-screen dark:opacity-20"></div>
+        <div class="absolute top-[20%] right-[-10%] w-[40vw] h-[40vw] bg-orange-500/20 rounded-full blur-[100px] animate-blob animation-delay-2000 mix-blend-multiply dark:mix-blend-screen dark:opacity-20"></div>
+        <div class="absolute bottom-[-10%] left-[20%] w-[45vw] h-[45vw] bg-yellow-300/20 rounded-full blur-[100px] animate-blob animation-delay-4000 mix-blend-multiply dark:mix-blend-screen dark:opacity-10"></div>
+        <!-- Grid Pattern Overlay -->
+        <div class="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20 brightness-100 contrast-150"></div>
     </div>
 
-    <!-- NAVBAR (Estilo App Nativo) -->
-    <nav class="fixed w-full z-50 glass-nav transition-all duration-300" id="navbar">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+    <!-- NAVBAR PREMIUM -->
+    <nav class="fixed w-full z-50 transition-all duration-300 top-0" id="navbar">
+        <div class="absolute inset-0 bg-white/70 dark:bg-dark-bg/70 backdrop-blur-xl border-b border-white/20 dark:border-white/5 transition-all"></div>
+        
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative">
             <div class="flex justify-between items-center h-20">
                 
-                <!-- Logo -->
-                <div class="flex items-center gap-3">
-                    <div class="w-10 h-10 bg-gradient-to-br from-brand-500 to-brand-700 rounded-xl flex items-center justify-center text-white shadow-lg shadow-brand-500/30">
+                <!-- LOGO -->
+                <a href="#" class="flex items-center gap-3 group">
+                    <div class="relative w-10 h-10 flex items-center justify-center rounded-xl bg-gradient-to-br from-brand-400 to-brand-600 text-white shadow-lg shadow-brand-500/40 group-hover:scale-105 transition-transform duration-300">
                         <i class="ph-fill ph-paper-plane-tilt text-xl"></i>
+                        <!-- Brilho no ícone -->
+                        <div class="absolute inset-0 rounded-xl bg-white/20 blur opacity-0 group-hover:opacity-100 transition-opacity"></div>
                     </div>
                     <div class="flex flex-col">
-                        <span class="font-extrabold text-xl tracking-tight leading-none dark:text-white">AO<span class="text-brand-600">TRAVEL</span></span>
-                        <span class="text-[0.65rem] font-bold text-slate-400 uppercase tracking-[0.2em]">Angola</span>
+                        <span class="font-bold text-xl tracking-tight leading-none text-slate-900 dark:text-white">
+                            AO<span class="text-brand-600 dark:text-brand-500">TRAVEL</span>
+                        </span>
                     </div>
+                </a>
+
+                <!-- DESKTOP MENU -->
+                <div class="hidden lg:flex items-center gap-8">
+                    <a href="#features" data-i18n="nav_features" class="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-brand-600 dark:hover:text-brand-400 transition-colors">Funcionalidades</a>
+                    <a href="#safety" data-i18n="nav_safety" class="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-brand-600 dark:hover:text-brand-400 transition-colors">Segurança</a>
+                    <a href="#partners" data-i18n="nav_partners" class="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-brand-600 dark:hover:text-brand-400 transition-colors">Parceiros</a>
                 </div>
 
-                <!-- Right Actions -->
-                <div class="flex items-center gap-4">
+                <!-- RIGHT ACTIONS -->
+                <div class="hidden lg:flex items-center gap-3">
+                    
+                    <!-- Language Switcher -->
+                    <div class="relative group">
+                        <button class="w-9 h-9 rounded-full bg-slate-100 dark:bg-white/10 flex items-center justify-center hover:bg-slate-200 dark:hover:bg-white/20 transition-colors text-slate-700 dark:text-slate-200">
+                            <i class="ph ph-translate text-lg"></i>
+                        </button>
+                        <!-- Dropdown -->
+                        <div class="absolute right-0 top-full mt-2 w-32 py-2 bg-white dark:bg-dark-surface rounded-xl shadow-xl border border-slate-100 dark:border-white/10 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 transform origin-top-right scale-95 group-hover:scale-100">
+                            <button onclick="changeLanguage('pt')" class="w-full text-left px-4 py-2 text-sm hover:bg-slate-50 dark:hover:bg-white/5 flex items-center gap-2">🇦🇴 Português</button>
+                            <button onclick="changeLanguage('en')" class="w-full text-left px-4 py-2 text-sm hover:bg-slate-50 dark:hover:bg-white/5 flex items-center gap-2">🇺🇸 English</button>
+                            <button onclick="changeLanguage('fr')" class="w-full text-left px-4 py-2 text-sm hover:bg-slate-50 dark:hover:bg-white/5 flex items-center gap-2">🇫🇷 Français</button>
+                        </div>
+                    </div>
+
                     <!-- Theme Toggle -->
-                    <button id="theme-toggle" class="w-10 h-10 rounded-full bg-white dark:bg-night-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center text-slate-600 dark:text-brand-500 hover:scale-105 transition-transform">
-                        <i class="ph-fill ph-sun hidden dark:block text-xl"></i>
-                        <i class="ph-fill ph-moon dark:hidden text-xl"></i>
+                    <button id="theme-toggle" class="w-9 h-9 rounded-full bg-slate-100 dark:bg-white/10 flex items-center justify-center text-brand-600 dark:text-brand-400 transition-all hover:scale-110">
+                        <i class="ph-fill ph-sun hidden dark:block text-lg"></i>
+                        <i class="ph-fill ph-moon dark:hidden text-lg"></i>
                     </button>
-                    <!-- CTA Button (Desktop) -->
-                    <a href="#download" class="hidden sm:inline-flex items-center justify-center px-6 py-2.5 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-full font-bold text-sm shadow-lg hover:shadow-xl transition-all hover:-translate-y-0.5">
-                        Baixar App
+
+                    <div class="h-6 w-px bg-slate-200 dark:bg-white/10 mx-1"></div>
+
+                    <!-- CTA -->
+                    <a href="#download" data-i18n="nav_download" class="relative overflow-hidden group px-6 py-2.5 rounded-full font-bold text-sm text-white bg-slate-900 dark:bg-white dark:text-slate-900 transition-all shadow-lg hover:shadow-xl hover:-translate-y-0.5">
+                        <span class="relative z-10">Baixar Agora</span>
+                        <div class="absolute inset-0 h-full w-full bg-gradient-to-r from-brand-500 to-brand-600 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
                     </a>
                 </div>
+
+                <!-- MOBILE MENU BUTTON -->
+                <button id="mobile-menu-btn" class="lg:hidden relative z-50 w-10 h-10 flex items-center justify-center rounded-full bg-slate-100 dark:bg-white/10">
+                    <svg class="hamburger w-5 h-5 stroke-slate-900 dark:stroke-white" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="4" y1="8" x2="20" y2="8" class="top"></line>
+                        <line x1="4" y1="16" x2="20" y2="16" class="bottom"></line>
+                        <line x1="4" y1="12" x2="20" y2="12" class="middle opacity-0"></line> <!-- Escondido para estilo 2 linhas -->
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- MOBILE MENU OVERLAY -->
+        <div id="mobile-menu" class="fixed inset-0 z-40 bg-white/95 dark:bg-dark-bg/95 backdrop-blur-2xl transition-transform duration-500 translate-x-full flex flex-col pt-24 px-6">
+            <div class="flex flex-col gap-6 text-center">
+                <a href="#features" onclick="toggleMobileMenu()" class="text-2xl font-bold text-slate-900 dark:text-white">Funcionalidades</a>
+                <a href="#safety" onclick="toggleMobileMenu()" class="text-2xl font-bold text-slate-900 dark:text-white">Segurança</a>
+                <a href="#partners" onclick="toggleMobileMenu()" class="text-2xl font-bold text-slate-900 dark:text-white">Parceiros</a>
+                
+                <div class="h-px w-full bg-slate-200 dark:bg-white/10 my-4"></div>
+                
+                <div class="flex justify-center gap-6">
+                    <button onclick="changeLanguage('pt')" class="flex flex-col items-center gap-1 text-xs font-medium uppercase tracking-wider text-slate-500">
+                        <span class="text-2xl">🇦🇴</span> PT
+                    </button>
+                    <button onclick="changeLanguage('en')" class="flex flex-col items-center gap-1 text-xs font-medium uppercase tracking-wider text-slate-500">
+                        <span class="text-2xl">🇺🇸</span> EN
+                    </button>
+                    <button onclick="changeLanguage('fr')" class="flex flex-col items-center gap-1 text-xs font-medium uppercase tracking-wider text-slate-500">
+                        <span class="text-2xl">🇫🇷</span> FR
+                    </button>
+                </div>
+                
+                <a href="#download" onclick="toggleMobileMenu()" class="mt-8 w-full py-4 bg-brand-600 text-white rounded-2xl font-bold text-lg shadow-xl shadow-brand-500/20">
+                    Baixar App
+                </a>
             </div>
         </div>
     </nav>
 
-    <!-- HERO SECTION (Imersiva) -->
-    <main class="pt-32 pb-16 lg:pt-40 lg:pb-24 overflow-hidden">
+    <!-- HERO SECTION -->
+    <main class="relative pt-32 pb-20 lg:pt-48 lg:pb-32 overflow-hidden">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 lg:gap-20 items-center">
                 
-                <!-- COLUNA 1: TEXTO & VALOR -->
-                <div class="flex flex-col items-center lg:items-start text-center lg:text-left z-10">
+                <!-- Conteúdo de Texto -->
+                <div class="flex flex-col items-center lg:items-start text-center lg:text-left z-10 animate-fade-in-up">
                     
-                    <!-- Badge de Novidade -->
-                    <div class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-brand-50 dark:bg-brand-900/30 border border-brand-200 dark:border-brand-700/50 text-brand-700 dark:text-brand-400 text-xs font-bold uppercase tracking-wider mb-8">
+                    <!-- Tagline Badge -->
+                    <div class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-brand-50 dark:bg-brand-900/20 border border-brand-200 dark:border-brand-500/30 text-brand-700 dark:text-brand-400 text-xs font-bold uppercase tracking-widest mb-8 hover:scale-105 transition-transform cursor-default shadow-sm">
                         <span class="relative flex h-2 w-2">
                           <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand-400 opacity-75"></span>
                           <span class="relative inline-flex rounded-full h-2 w-2 bg-brand-500"></span>
                         </span>
-                        Disponível em toda Angola
+                        <span data-i18n="hero_badge">Disponível em toda Angola</span>
                     </div>
 
-                    <!-- SLIDER DE TEXTO (Título) -->
-                    <div class="relative w-full h-[140px] sm:h-[180px] lg:h-[200px] mb-6">
-                        <!-- Texto 1 -->
-                        <div class="text-slide absolute top-0 w-full transition-all duration-700 opacity-100 translate-y-0" data-index="0">
-                            <h1 class="text-5xl sm:text-6xl lg:text-7xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-[1.1]">
-                                Lucre com seu <br>
-                                <span class="text-gradient">Automóvel</span>
-                            </h1>
-                        </div>
-                        <!-- Texto 2 -->
-                        <div class="text-slide absolute top-0 w-full transition-all duration-700 opacity-0 translate-y-8 pointer-events-none" data-index="1">
-                            <h1 class="text-5xl sm:text-6xl lg:text-7xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-[1.1]">
-                                Entregas de <br>
-                                <span class="text-gradient">Motorizada</span>
-                            </h1>
-                        </div>
-                        <!-- Texto 3 -->
-                        <div class="text-slide absolute top-0 w-full transition-all duration-700 opacity-0 translate-y-8 pointer-events-none" data-index="2">
-                            <h1 class="text-5xl sm:text-6xl lg:text-7xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-[1.1]">
-                                Viaje para onde <br>
-                                <span class="text-gradient">Quiser</span>
-                            </h1>
-                        </div>
-                    </div>
+                    <!-- Título Dinâmico -->
+                    <h1 class="text-5xl sm:text-6xl lg:text-7xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-[1.1] mb-6">
+                        <span data-i18n="hero_title_1">O Futuro da</span> <br>
+                        <span class="text-gradient-gold" id="dynamic-text">Mobilidade</span>
+                    </h1>
 
-                    <p class="text-lg sm:text-xl text-slate-600 dark:text-slate-400 mb-10 max-w-lg leading-relaxed">
-                        O app que conecta Angola. Transforme seu veículo numa fonte de renda ou peça uma viagem em segundos.
+                    <p class="text-lg sm:text-xl text-slate-600 dark:text-slate-400 mb-10 max-w-lg leading-relaxed" data-i18n="hero_desc">
+                        O Super App que move Angola. Transforme seu veículo em renda ou viaje com conforto e segurança inigualável.
                     </p>
 
-                    <!-- Benefícios (Grid Mini) -->
-                    <div class="grid grid-cols-2 gap-4 w-full max-w-md">
-                        <div class="flex items-center gap-3 p-3 rounded-xl bg-white dark:bg-night-800 border border-slate-100 dark:border-slate-800 shadow-sm">
-                            <div class="w-10 h-10 rounded-lg bg-green-100 dark:bg-green-900/30 flex items-center justify-center text-green-600 dark:text-green-400">
-                                <i class="ph-fill ph-money text-2xl"></i>
-                            </div>
-                            <div class="text-left">
-                                <p class="text-[10px] uppercase font-bold text-slate-400">Ganhos</p>
-                                <p class="text-sm font-bold text-slate-800 dark:text-white">Diários</p>
-                            </div>
+                    <!-- Botões de Ação -->
+                    <div class="flex flex-col sm:flex-row gap-4 w-full sm:w-auto">
+                        <a href="#download" class="flex items-center justify-center gap-3 px-8 py-4 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-full font-bold text-base shadow-lg shadow-slate-900/20 dark:shadow-white/10 hover:shadow-xl hover:-translate-y-1 transition-all">
+                            <i class="ph-fill ph-download-simple text-xl"></i>
+                            <span data-i18n="btn_start">Começar Agora</span>
+                        </a>
+                        <a href="#features" class="flex items-center justify-center gap-3 px-8 py-4 bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 text-slate-700 dark:text-white rounded-full font-bold text-base hover:bg-slate-50 dark:hover:bg-white/10 transition-all backdrop-blur-sm">
+                            <i class="ph-fill ph-play-circle text-xl text-brand-500"></i>
+                            <span data-i18n="btn_video">Ver Como Funciona</span>
+                        </a>
+                    </div>
+
+                    <!-- Stats Rápidos -->
+                    <div class="mt-12 flex items-center gap-8 border-t border-slate-200 dark:border-white/10 pt-8 w-full lg:w-auto justify-center lg:justify-start">
+                        <div>
+                            <p class="text-3xl font-bold text-slate-900 dark:text-white">50k+</p>
+                            <p class="text-xs uppercase font-semibold text-slate-500 tracking-wider" data-i18n="stat_users">Usuários</p>
                         </div>
-                        <div class="flex items-center gap-3 p-3 rounded-xl bg-white dark:bg-night-800 border border-slate-100 dark:border-slate-800 shadow-sm">
-                            <div class="w-10 h-10 rounded-lg bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center text-blue-600 dark:text-blue-400">
-                                <i class="ph-fill ph-shield-check text-2xl"></i>
-                            </div>
-                            <div class="text-left">
-                                <p class="text-[10px] uppercase font-bold text-slate-400">Viagem</p>
-                                <p class="text-sm font-bold text-slate-800 dark:text-white">Segura</p>
-                            </div>
+                        <div class="w-px h-10 bg-slate-200 dark:bg-white/10"></div>
+                        <div>
+                            <p class="text-3xl font-bold text-slate-900 dark:text-white">4.9</p>
+                            <p class="text-xs uppercase font-semibold text-slate-500 tracking-wider" data-i18n="stat_rating">Avaliação</p>
                         </div>
                     </div>
                 </div>
 
-                <!-- COLUNA 2: VISUAL 3D (Avatar) -->
-                <div class="relative flex items-center justify-center mt-10 lg:mt-0 h-[400px] lg:h-[500px]">
-                    <!-- Elemento Gráfico de Fundo (Orbit) -->
-                    <div class="absolute w-[300px] h-[300px] sm:w-[450px] sm:h-[450px] rounded-full border border-slate-200 dark:border-slate-800 animate-[spin_30s_linear_infinite]"></div>
-                    <div class="absolute w-[250px] h-[250px] sm:w-[380px] sm:h-[380px] rounded-full border border-dashed border-brand-500/20 animate-[spin_20s_linear_infinite_reverse]"></div>
+                <!-- Visual 3D Composition -->
+                <div class="relative h-[500px] lg:h-[600px] flex items-center justify-center perspective-1000">
                     
-                    <!-- Glow Central -->
-                    <div class="absolute w-40 h-40 bg-brand-500/30 blur-[60px] rounded-full"></div>
+                    <!-- Círculos de Fundo -->
+                    <div class="absolute inset-0 flex items-center justify-center">
+                        <div class="w-[350px] h-[350px] lg:w-[500px] lg:h-[500px] rounded-full border border-slate-200/50 dark:border-white/5 animate-[spin_60s_linear_infinite]"></div>
+                        <div class="absolute w-[250px] h-[250px] lg:w-[350px] lg:h-[350px] rounded-full border border-dashed border-brand-500/20 animate-[spin_40s_linear_infinite_reverse]"></div>
+                    </div>
 
-                    <!-- Container Imagens -->
-                    <div class="relative w-full h-full flex items-center justify-center animate-float">
-                        <!-- Avatar 1 (Carro) -->
-                        <img src="assets/images/avatar1.png" 
-                             onerror="this.src='https://cdn3d.iconscout.com/3d/premium/thumb/taxi-driver-5683955-4743770.png'"
-                             class="mascot-img absolute max-w-[80%] max-h-[80%] object-contain drop-shadow-2xl transition-all duration-700 opacity-100 scale-100 z-20"
-                             alt="Motorista AOTRAVEL">
-                        
-                        <!-- Avatar 2 (Moto) -->
-                        <img src="assets/images/avatar1.png" 
-                             onerror="this.src='https://cdn3d.iconscout.com/3d/premium/thumb/delivery-boy-riding-scooter-5481358-4569562.png'"
-                             class="mascot-img absolute max-w-[80%] max-h-[80%] object-contain drop-shadow-2xl transition-all duration-700 opacity-0 scale-90 translate-y-8 z-10"
-                             alt="Entregador AOTRAVEL">
+                    <!-- Imagens Flutuantes 3D -->
+                    <div class="relative z-10 w-full h-full">
+                        <!-- Card Flutuante 1 (Ganhos) -->
+                        <div class="absolute top-[10%] right-[5%] lg:right-[0%] p-4 glass-panel rounded-2xl animate-float-medium z-30 flex items-center gap-3 max-w-[200px]">
+                            <div class="w-10 h-10 rounded-full bg-green-500 flex items-center justify-center text-white shadow-lg shadow-green-500/30">
+                                <i class="ph-bold ph-currency-dollar"></i>
+                            </div>
+                            <div>
+                                <p class="text-[10px] text-slate-500 font-bold uppercase">Ganhos Hoje</p>
+                                <p class="text-sm font-bold text-slate-900 dark:text-white">Kz 24.500</p>
+                            </div>
+                        </div>
 
-                         <!-- Avatar 3 (App/Passageiro) -->
-                         <img src="assets/images/avatar1.png" 
-                         onerror="this.src='https://cdn3d.iconscout.com/3d/premium/thumb/woman-traveler-using-mobile-phone-navigation-4952044-4131551.png'"
-                         class="mascot-img absolute max-w-[80%] max-h-[80%] object-contain drop-shadow-2xl transition-all duration-700 opacity-0 scale-90 translate-y-8 z-10"
-                         alt="Passageiro AOTRAVEL">
+                        <!-- Card Flutuante 2 (Motorista) -->
+                        <div class="absolute bottom-[15%] left-[0%] lg:left-[-5%] p-4 glass-panel rounded-2xl animate-float-slow animation-delay-2000 z-30 flex items-center gap-3">
+                            <div class="w-10 h-10 rounded-full bg-blue-500 flex items-center justify-center text-white shadow-lg shadow-blue-500/30">
+                                <i class="ph-bold ph-shield-check"></i>
+                            </div>
+                            <div>
+                                <p class="text-[10px] text-slate-500 font-bold uppercase">Status</p>
+                                <p class="text-sm font-bold text-slate-900 dark:text-white">Verificado</p>
+                            </div>
+                        </div>
+
+                        <!-- Imagem Central (Carro/App) -->
+                        <div class="absolute inset-0 flex items-center justify-center animate-float-fast">
+                            <img src="assets/images/avatar1.png" 
+                                 onerror="this.src='https://cdn3d.iconscout.com/3d/premium/thumb/taxi-4963363-4158999.png?f=webp'" 
+                                 alt="3D Car" 
+                                 class="max-w-[120%] lg:max-w-[140%] object-contain drop-shadow-2xl transition-transform hover:scale-105 duration-500">
+                        </div>
                     </div>
                 </div>
             </div>
         </div>
     </main>
 
-    <!-- CARROSSEL DE PARCEIROS (High-End Infinite Scroll) -->
-    <section class="py-10 border-y border-slate-100 dark:border-white/5 bg-white/50 dark:bg-white/[0.02]">
-        <div class="max-w-7xl mx-auto overflow-hidden relative marquee-mask">
-            <div class="flex gap-16 w-max animate-marquee items-center">
-                <!-- Logos (Duplicar para loop) -->
+    <!-- LOGOS DOS PARCEIROS (Infinite Scroll) -->
+    <section id="partners" class="py-10 border-y border-slate-100 dark:border-white/5 bg-white/50 dark:bg-white/[0.02]">
+        <p class="text-center text-xs font-bold uppercase text-slate-400 tracking-widest mb-8" data-i18n="partners_title">Confiam na AOTRAVEL</p>
+        <div class="max-w-7xl mx-auto overflow-hidden relative mask-linear-fade">
+            <div class="flex gap-12 sm:gap-20 w-max animate-[marquee_30s_linear_infinite] items-center">
+                <!-- Logos (Repetidos para loop perfeito) -->
                 <!-- Set 1 -->
-                <img src="assets/images/parceiro.png" class="h-6 sm:h-8 opacity-40 grayscale hover:grayscale-0 hover:opacity-100 transition-all dark:invert" alt="Google">
-                <img src="assets/images/parceiro1.png" class="h-8 sm:h-10 opacity-40 grayscale hover:grayscale-0 hover:opacity-100 transition-all" alt="BMW">
-                <img src="assets/images/parceiro2.png" class="h-8 sm:h-10 opacity-40 grayscale hover:grayscale-0 hover:opacity-100 transition-all dark:invert" alt="Airbnb">
-                <img src="assets/images/parceiro3.png" class="h-6 sm:h-8 opacity-40 grayscale hover:grayscale-0 hover:opacity-100 transition-all dark:invert" alt="Amazon">
-                <img src="assets/images/parceiro4.png" class="h-8 sm:h-10 opacity-40 grayscale hover:grayscale-0 hover:opacity-100 transition-all dark:invert" alt="Apple">
-                <!-- Set 2 (Cópia exata) -->
-                <img src="https://upload.wikimedia.org/wikipedia/commons/2/2f/Google_2015_logo.svg" class="h-6 sm:h-8 opacity-40 grayscale hover:grayscale-0 hover:opacity-100 transition-all dark:invert" alt="Google">
-                <img src="https://upload.wikimedia.org/wikipedia/commons/4/44/BMW.svg" class="h-8 sm:h-10 opacity-40 grayscale hover:grayscale-0 hover:opacity-100 transition-all" alt="BMW">
-                <img src="https://upload.wikimedia.org/wikipedia/commons/6/69/Airbnb_Logo_B%C3%A9lo.svg" class="h-8 sm:h-10 opacity-40 grayscale hover:grayscale-0 hover:opacity-100 transition-all dark:invert" alt="Airbnb">
-                <img src="https://upload.wikimedia.org/wikipedia/commons/a/a9/Amazon_logo.svg" class="h-6 sm:h-8 opacity-40 grayscale hover:grayscale-0 hover:opacity-100 transition-all dark:invert" alt="Amazon">
-                <img src="https://upload.wikimedia.org/wikipedia/commons/f/fa/Apple_logo_black.svg" class="h-8 sm:h-10 opacity-40 grayscale hover:grayscale-0 hover:opacity-100 transition-all dark:invert" alt="Apple">
+                <i class="ph-fill ph-google-logo text-4xl text-slate-300 hover:text-slate-600 dark:hover:text-white transition-colors"></i>
+                <i class="ph-fill ph-apple-logo text-4xl text-slate-300 hover:text-slate-600 dark:hover:text-white transition-colors"></i>
+                <i class="ph-fill ph-amazon-logo text-4xl text-slate-300 hover:text-slate-600 dark:hover:text-white transition-colors"></i>
+                <i class="ph-fill ph-microsoft-logo text-4xl text-slate-300 hover:text-slate-600 dark:hover:text-white transition-colors"></i>
+                <i class="ph-fill ph-stripe-logo text-4xl text-slate-300 hover:text-slate-600 dark:hover:text-white transition-colors"></i>
+                <i class="ph-fill ph-uber-logo text-4xl text-slate-300 hover:text-slate-600 dark:hover:text-white transition-colors"></i>
+                <!-- Set 2 -->
+                <i class="ph-fill ph-google-logo text-4xl text-slate-300 hover:text-slate-600 dark:hover:text-white transition-colors"></i>
+                <i class="ph-fill ph-apple-logo text-4xl text-slate-300 hover:text-slate-600 dark:hover:text-white transition-colors"></i>
+                <i class="ph-fill ph-amazon-logo text-4xl text-slate-300 hover:text-slate-600 dark:hover:text-white transition-colors"></i>
+                <i class="ph-fill ph-microsoft-logo text-4xl text-slate-300 hover:text-slate-600 dark:hover:text-white transition-colors"></i>
+                <i class="ph-fill ph-stripe-logo text-4xl text-slate-300 hover:text-slate-600 dark:hover:text-white transition-colors"></i>
+                <i class="ph-fill ph-uber-logo text-4xl text-slate-300 hover:text-slate-600 dark:hover:text-white transition-colors"></i>
             </div>
         </div>
     </section>
 
-    <!-- DOWNLOAD CARD (Figma Style) -->
-    <section id="download" class="py-20 px-4">
-        <div class="max-w-5xl mx-auto relative rounded-[32px] overflow-hidden shadow-neon group">
-            <!-- Background Complexo -->
-            <div class="absolute inset-0 bg-[#0f172a]"></div> <!-- Fundo base escuro -->
-            <div class="absolute inset-0 bg-gradient-to-br from-brand-600 via-brand-800 to-slate-900 opacity-90"></div>
-            <div class="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-10 mix-blend-overlay"></div>
-            
-            <div class="relative z-10 px-8 py-16 text-center">
-                <h2 class="text-3xl sm:text-5xl font-extrabold text-white mb-4 tracking-tight">Comece sua jornada hoje</h2>
-                <p class="text-brand-100 text-lg mb-10 max-w-xl mx-auto">
-                    Baixe o aplicativo para Passageiros ou Motoristas. Disponível nas melhores lojas.
-                </p>
-
-                <!-- BOTÕES DE DOWNLOAD CORRIGIDOS -->
-                <div class="flex flex-col sm:flex-row items-center justify-center gap-6">
-                    
-                    <!-- Botão Android -->
-                    <a href="assets/app/aotravel.apk" download class="app-btn-container group">
-                        <!-- Imagem vai se ajustar a altura do container -->
-                        <img src="assets/images/google-play.png" 
-                             onerror="this.src='https://upload.wikimedia.org/wikipedia/commons/7/78/Google_Play_Store_badge_EN.svg'"
-                             alt="Disponível no Google Play">
-                    </a>
-
-                    <!-- Botão iOS (Container Branco para contraste) -->
-                    <a href="assets/app/aotravel.ipa" download class="app-btn-container light-mode-btn group">
-                        <img src="assets/images/app-store.png" 
-                             onerror="this.src='https://upload.wikimedia.org/wikipedia/commons/3/3c/Download_on_the_App_Store_Badge.svg'"
-                             alt="Baixar na App Store">
-                    </a>
-
-                </div>
-                <p class="mt-8 text-xs text-white/40 uppercase tracking-widest font-semibold">Versão 3.0 • Seguro & Verificado</p>
-            </div>
-        </div>
-    </section>
-
-    <!-- FOOTER PROFISSIONAL -->
-    <footer class="bg-white dark:bg-night-900 border-t border-slate-100 dark:border-slate-800 pt-16 pb-8">
+    <!-- FUNCIONALIDADES (Grid Bento) -->
+    <section id="features" class="py-24 bg-white dark:bg-dark-bg relative">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-12 mb-12">
+            <div class="text-center max-w-3xl mx-auto mb-20 reveal-on-scroll">
+                <h2 class="text-3xl sm:text-4xl font-extrabold text-slate-900 dark:text-white mb-4" data-i18n="features_title">Tudo o que você precisa</h2>
+                <p class="text-slate-500 dark:text-slate-400 text-lg" data-i18n="features_desc">Tecnologia de ponta para motoristas e passageiros.</p>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+                <!-- Card 1 -->
+                <div class="col-span-1 md:col-span-2 p-8 rounded-[32px] bg-slate-50 dark:bg-white/5 border border-slate-100 dark:border-white/5 hover:border-brand-500/30 transition-all group reveal-on-scroll">
+                    <div class="flex flex-col md:flex-row items-center gap-8 h-full">
+                        <div class="flex-1 text-center md:text-left">
+                            <div class="w-14 h-14 rounded-2xl bg-brand-100 dark:bg-brand-500/20 flex items-center justify-center text-brand-600 dark:text-brand-400 mb-6 mx-auto md:mx-0">
+                                <i class="ph-fill ph-map-trifold text-3xl"></i>
+                            </div>
+                            <h3 class="text-2xl font-bold text-slate-900 dark:text-white mb-3" data-i18n="feat_1_title">Navegação Inteligente</h3>
+                            <p class="text-slate-500 dark:text-slate-400 leading-relaxed" data-i18n="feat_1_desc">Algoritmos que encontram sempre a rota mais rápida, fugindo do trânsito de Luanda em tempo real.</p>
+                        </div>
+                        <div class="flex-1 relative h-48 w-full">
+                            <!-- Simulação de Mapa -->
+                            <div class="absolute inset-0 bg-slate-200 dark:bg-white/5 rounded-2xl overflow-hidden shadow-inner">
+                                <div class="absolute inset-0 bg-[url('https://upload.wikimedia.org/wikipedia/commons/e/ec/Map_of_Luanda.png')] bg-cover opacity-50 grayscale hover:grayscale-0 transition-all duration-700 mix-blend-multiply dark:mix-blend-luminosity"></div>
+                                <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 bg-brand-500 rounded-full border-4 border-white dark:border-dark-surface shadow-glow animate-pulse"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Card 2 -->
+                <div class="col-span-1 p-8 rounded-[32px] bg-slate-900 dark:bg-dark-surface border border-slate-800 dark:border-white/5 text-white shadow-2xl reveal-on-scroll delay-100">
+                    <div class="w-14 h-14 rounded-2xl bg-white/10 flex items-center justify-center text-brand-400 mb-6">
+                        <i class="ph-fill ph-wallet text-3xl"></i>
+                    </div>
+                    <h3 class="text-2xl font-bold mb-3" data-i18n="feat_2_title">Pagamentos Fáceis</h3>
+                    <p class="text-slate-400 leading-relaxed mb-6" data-i18n="feat_2_desc">Aceitamos Multicaixa Express, Dinheiro e Carteira Digital AOTRAVEL.</p>
+                    <div class="flex -space-x-3">
+                        <div class="w-10 h-10 rounded-full bg-white border-2 border-slate-900 flex items-center justify-center text-xs text-slate-900 font-bold">Kz</div>
+                        <div class="w-10 h-10 rounded-full bg-brand-500 border-2 border-slate-900 flex items-center justify-center text-white"><i class="ph-bold ph-credit-card"></i></div>
+                    </div>
+                </div>
+
+                <!-- Card 3 -->
+                <div class="col-span-1 p-8 rounded-[32px] bg-slate-50 dark:bg-white/5 border border-slate-100 dark:border-white/5 hover:border-brand-500/30 transition-all reveal-on-scroll delay-200">
+                    <div class="w-14 h-14 rounded-2xl bg-blue-100 dark:bg-blue-500/20 flex items-center justify-center text-blue-600 dark:text-blue-400 mb-6">
+                        <i class="ph-fill ph-shield-check text-3xl"></i>
+                    </div>
+                    <h3 class="text-xl font-bold text-slate-900 dark:text-white mb-3" data-i18n="feat_3_title">Segurança 24/7</h3>
+                    <p class="text-slate-500 dark:text-slate-400 text-sm leading-relaxed" data-i18n="feat_3_desc">Monitoramento em tempo real e botão de pânico integrado com a polícia.</p>
+                </div>
+
+                <!-- Card 4 -->
+                <div class="col-span-1 md:col-span-2 p-8 rounded-[32px] bg-gradient-to-br from-brand-500 to-orange-600 text-white shadow-lg shadow-orange-500/20 reveal-on-scroll delay-300">
+                    <div class="flex flex-col sm:flex-row items-center justify-between gap-6">
+                        <div>
+                            <h3 class="text-2xl font-bold mb-2" data-i18n="feat_4_title">Seja um Motorista</h3>
+                            <p class="text-orange-100 mb-6 max-w-sm" data-i18n="feat_4_desc">Faça seu horário. Lucre mais com as taxas mais baixas do mercado.</p>
+                            <button class="px-6 py-2 bg-white text-orange-600 rounded-full font-bold text-sm hover:bg-orange-50 transition-colors">
+                                Cadastrar Veículo
+                            </button>
+                        </div>
+                        <img src="https://cdn3d.iconscout.com/3d/premium/thumb/delivery-man-riding-scooter-4896152-4081520.png" class="w-40 h-40 object-contain drop-shadow-xl animate-float-medium" alt="Driver">
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- DOWNLOAD SECTION (CTA) -->
+    <section id="download" class="py-20 px-4">
+        <div class="max-w-6xl mx-auto relative rounded-[40px] overflow-hidden shadow-2xl reveal-on-scroll">
+            
+            <!-- Background Complexo -->
+            <div class="absolute inset-0 bg-[#020617]"></div>
+            <div class="absolute inset-0 bg-gradient-to-r from-brand-600/80 via-brand-900/80 to-slate-900/90"></div>
+            <!-- Textura -->
+            <div class="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-10 mix-blend-overlay"></div>
+            
+            <div class="relative z-10 grid grid-cols-1 lg:grid-cols-2 items-center gap-12 p-10 sm:p-20">
+                <div class="text-center lg:text-left">
+                    <h2 class="text-3xl sm:text-5xl font-extrabold text-white mb-6 tracking-tight leading-tight" data-i18n="download_title">
+                        Pronto para mudar <br> a sua jornada?
+                    </h2>
+                    <p class="text-brand-100 text-lg mb-10 max-w-md mx-auto lg:mx-0" data-i18n="download_desc">
+                        Baixe agora o AOTRAVEL. Disponível para Android e iOS. Leve, rápido e seguro.
+                    </p>
+
+                    <div class="flex flex-col sm:flex-row items-center gap-4 justify-center lg:justify-start">
+                        <!-- Google Play -->
+                        <a href="assets/app/aotravel.apk" download class="group flex items-center gap-3 bg-slate-950 border border-slate-700 hover:border-brand-500 rounded-xl px-5 py-3 transition-all hover:-translate-y-1">
+                            <img src="https://upload.wikimedia.org/wikipedia/commons/d/d0/Google_Play_Arrow_logo.svg" class="w-8 h-8" alt="Play Store">
+                            <div class="text-left">
+                                <div class="text-[10px] uppercase text-slate-400 font-bold">Disponível no</div>
+                                <div class="text-white font-bold text-lg leading-none">Google Play</div>
+                            </div>
+                        </a>
+                        
+                        <!-- App Store -->
+                        <a href="assets/app/aotravel.ipa" download class="group flex items-center gap-3 bg-white hover:bg-slate-50 rounded-xl px-5 py-3 transition-all hover:-translate-y-1 text-slate-900">
+                            <i class="ph-fill ph-apple-logo text-3xl"></i>
+                            <div class="text-left">
+                                <div class="text-[10px] uppercase text-slate-500 font-bold">Baixar na</div>
+                                <div class="text-slate-900 font-bold text-lg leading-none">App Store</div>
+                            </div>
+                        </a>
+                    </div>
+                </div>
+
+                <!-- Mockup de Celular -->
+                <div class="relative flex justify-center lg:justify-end">
+                    <div class="relative z-10 w-[280px] h-[580px] bg-slate-900 rounded-[40px] border-8 border-slate-800 shadow-2xl overflow-hidden rotate-[-6deg] hover:rotate-0 transition-transform duration-700">
+                        <!-- Screen Content -->
+                        <div class="w-full h-full bg-slate-800 flex flex-col relative">
+                            <!-- Header App -->
+                            <div class="h-24 bg-brand-500 rounded-b-3xl absolute top-0 w-full z-10"></div>
+                            <!-- Map Placeholder -->
+                            <div class="flex-1 bg-slate-100 opacity-80 bg-[url('https://upload.wikimedia.org/wikipedia/commons/e/ec/Map_of_Luanda.png')] bg-cover"></div>
+                            <!-- UI Elements -->
+                            <div class="absolute bottom-8 left-4 right-4 bg-white p-4 rounded-xl shadow-lg">
+                                <div class="h-2 w-12 bg-slate-200 rounded-full mx-auto mb-4"></div>
+                                <div class="h-4 w-3/4 bg-slate-800 rounded mb-2"></div>
+                                <div class="h-3 w-1/2 bg-slate-400 rounded"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Glow atrás do celular -->
+                    <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[300px] h-[500px] bg-brand-500/30 blur-[80px] rounded-full -z-10"></div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- FOOTER ROBUSTO -->
+    <footer class="bg-white dark:bg-dark-bg border-t border-slate-100 dark:border-white/5 pt-20 pb-10">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-12 mb-16">
                 
                 <!-- Brand Info -->
-                <div class="col-span-1 lg:col-span-1">
-                    <div class="flex items-center gap-2 mb-4">
-                        <i class="ph-fill ph-paper-plane-tilt text-2xl text-brand-600"></i>
+                <div class="col-span-1">
+                    <div class="flex items-center gap-2 mb-6">
+                        <div class="w-8 h-8 bg-brand-500 rounded-lg flex items-center justify-center text-white">
+                            <i class="ph-fill ph-paper-plane-tilt"></i>
+                        </div>
                         <span class="font-bold text-xl dark:text-white">AO<span class="text-brand-600">TRAVEL</span></span>
                     </div>
                     <p class="text-sm text-slate-500 dark:text-slate-400 mb-6 leading-relaxed">
-                        "Encurtando distâncias, multiplicando ganhos. O seu destino, a nossa missão."
+                        Redefinindo a mobilidade urbana em Angola com tecnologia, segurança e preços justos para todos.
                     </p>
                     <div class="flex gap-4">
-                        <a href="#" class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-brand-500 hover:text-white transition-colors">
-                            <i class="ph-fill ph-facebook-logo"></i>
+                        <a href="#" class="w-10 h-10 flex items-center justify-center rounded-full bg-slate-50 dark:bg-white/5 text-slate-600 dark:text-slate-400 hover:bg-brand-500 hover:text-white transition-all">
+                            <i class="ph-fill ph-facebook-logo text-xl"></i>
                         </a>
-                        <a href="#" class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-brand-500 hover:text-white transition-colors">
-                            <i class="ph-fill ph-instagram-logo"></i>
+                        <a href="#" class="w-10 h-10 flex items-center justify-center rounded-full bg-slate-50 dark:bg-white/5 text-slate-600 dark:text-slate-400 hover:bg-brand-500 hover:text-white transition-all">
+                            <i class="ph-fill ph-instagram-logo text-xl"></i>
                         </a>
-                        <a href="#" class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-brand-500 hover:text-white transition-colors">
-                            <i class="ph-fill ph-linkedin-logo"></i>
+                        <a href="#" class="w-10 h-10 flex items-center justify-center rounded-full bg-slate-50 dark:bg-white/5 text-slate-600 dark:text-slate-400 hover:bg-brand-500 hover:text-white transition-all">
+                            <i class="ph-fill ph-linkedin-logo text-xl"></i>
                         </a>
                     </div>
                 </div>
 
-                <!-- Contactos -->
-                <div class="col-span-1 lg:col-span-2">
-                    <h3 class="font-bold text-slate-900 dark:text-white mb-4">Central de Atendimento</h3>
-                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div class="flex items-start gap-3">
-                            <i class="ph-fill ph-envelope-simple text-brand-600 mt-1"></i>
-                            <div class="text-sm text-slate-500 dark:text-slate-400">
-                                <span class="block font-semibold text-slate-900 dark:text-slate-200">Email</span>
-                                <a href="mailto:denyneves14@gmail.com" class="hover:text-brand-500 block">denyneves14@gmail.com</a>
-                                <a href="mailto:augustoneve22@gmail.com" class="hover:text-brand-500 block">augustoneve22@gmail.com</a>
-                            </div>
-                        </div>
-                        <div class="flex items-start gap-3">
-                            <i class="ph-fill ph-phone-call text-brand-600 mt-1"></i>
-                            <div class="text-sm text-slate-500 dark:text-slate-400">
-                                <span class="block font-semibold text-slate-900 dark:text-slate-200">Telefone</span>
-                                <a href="tel:+244974120856" class="hover:text-brand-500 block">+244 974 120 856</a>
-                                <a href="tel:+244927825820" class="hover:text-brand-500 block">+244 927 825 820</a>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Links Rápidos -->
+                <!-- Links -->
                 <div>
-                    <h3 class="font-bold text-slate-900 dark:text-white mb-4">Legal</h3>
-                    <ul class="space-y-2 text-sm text-slate-500 dark:text-slate-400">
-                        <li><a href="#" class="hover:text-brand-500 transition-colors">Política de Privacidade</a></li>
-                        <li><a href="#" class="hover:text-brand-500 transition-colors">Termos de Uso</a></li>
-                        <li><a href="#" class="hover:text-brand-500 transition-colors">Segurança</a></li>
+                    <h4 class="font-bold text-slate-900 dark:text-white mb-6">Empresa</h4>
+                    <ul class="space-y-4 text-sm text-slate-500 dark:text-slate-400">
+                        <li><a href="#" class="hover:text-brand-500 transition-colors">Sobre Nós</a></li>
+                        <li><a href="#" class="hover:text-brand-500 transition-colors">Carreiras</a></li>
+                        <li><a href="#" class="hover:text-brand-500 transition-colors">Imprensa</a></li>
+                        <li><a href="#" class="hover:text-brand-500 transition-colors">Blog</a></li>
                     </ul>
+                </div>
+
+                <!-- Suporte -->
+                <div>
+                    <h4 class="font-bold text-slate-900 dark:text-white mb-6">Suporte</h4>
+                    <ul class="space-y-4 text-sm text-slate-500 dark:text-slate-400">
+                        <li><a href="#" class="hover:text-brand-500 transition-colors">Central de Ajuda</a></li>
+                        <li><a href="#" class="hover:text-brand-500 transition-colors">Segurança</a></li>
+                        <li><a href="#" class="hover:text-brand-500 transition-colors">Termos de Uso</a></li>
+                        <li><a href="#" class="hover:text-brand-500 transition-colors">Privacidade</a></li>
+                    </ul>
+                </div>
+
+                <!-- Contato -->
+                <div>
+                    <h4 class="font-bold text-slate-900 dark:text-white mb-6">Contato</h4>
+                    <div class="space-y-4">
+                        <div class="flex items-start gap-3">
+                            <i class="ph-fill ph-envelope-simple text-brand-500 mt-0.5"></i>
+                            <div class="text-sm text-slate-500 dark:text-slate-400">
+                                <a href="mailto:augustoneve22@gmail.com" class="hover:text-white transition-colors block">augustoneve22@gmail.com</a>
+                            </div>
+                        </div>
+                        <div class="flex items-start gap-3">
+                            <i class="ph-fill ph-phone text-brand-500 mt-0.5"></i>
+                            <div class="text-sm text-slate-500 dark:text-slate-400">
+                                <a href="tel:+244927825820" class="hover:text-white transition-colors block">+244 927 825 820</a>
+                            </div>
+                        </div>
+                        <div class="flex items-start gap-3">
+                            <i class="ph-fill ph-map-pin text-brand-500 mt-0.5"></i>
+                            <div class="text-sm text-slate-500 dark:text-slate-400">
+                                Luanda, Angola
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
-            <div class="border-t border-slate-100 dark:border-slate-800 pt-8 flex flex-col md:flex-row justify-between items-center gap-4">
-                <p class="text-xs text-slate-400">© 2024 AOTRAVEL. Angola.</p>
-                <p class="text-xs text-slate-400 flex items-center gap-1">
-                    Desenvolvido  Por Augusto Neves - Thejoker.
-                </p>
+            <div class="border-t border-slate-100 dark:border-white/5 pt-8 flex flex-col md:flex-row justify-between items-center gap-4">
+                <p class="text-xs text-slate-400">© 2026 AOTRAVEL Technologies. Todos os direitos reservados.</p>
+                <div class="flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                    <p class="text-xs text-slate-400 font-medium">Sistemas Operacionais: Normal</p>
+                </div>
+                <p class="text-xs text-slate-500">Desenvolvido por <span class="text-slate-900 dark:text-white font-semibold">Augusto Neves</span></p>
             </div>
         </div>
     </footer>
 
     <!-- LOGIC SCRIPTS -->
     <script>
-        // === 1. Lógica Dark Mode (Persistente) ===
+        // === 1. Lógica Dark Mode (Sistema + Manual) ===
         const html = document.documentElement;
         const toggleBtn = document.getElementById('theme-toggle');
 
@@ -430,54 +643,144 @@
             localStorage.theme = html.classList.contains('dark') ? 'dark' : 'light';
         });
 
-        // === 2. Slider Sincronizado (Texto + Avatar) ===
-        const textSlides = document.querySelectorAll('.text-slide');
-        const imgSlides = document.querySelectorAll('.mascot-img');
-        let currentIndex = 0;
-        const totalSlides = textSlides.length;
+        // === 2. Mobile Menu (Glass Animation) ===
+        const menuBtn = document.getElementById('mobile-menu-btn');
+        const mobileMenu = document.getElementById('mobile-menu');
+        const hamburger = document.querySelector('.hamburger');
+        let isMenuOpen = false;
 
-        function showSlide(index) {
-            // Esconde tudo
-            textSlides.forEach(el => {
-                el.style.opacity = '0';
-                el.style.transform = 'translateY(20px)';
-                el.style.pointerEvents = 'none';
-            });
-            imgSlides.forEach(el => {
-                el.style.opacity = '0';
-                el.style.transform = 'scale(0.9) translateY(20px)';
-                el.style.zIndex = '10';
-            });
-
-            // Mostra atual
-            // Texto
-            textSlides[index].style.opacity = '1';
-            textSlides[index].style.transform = 'translateY(0)';
-            textSlides[index].style.pointerEvents = 'auto';
-            // Imagem
-            imgSlides[index].style.opacity = '1';
-            imgSlides[index].style.transform = 'scale(1) translateY(0)';
-            imgSlides[index].style.zIndex = '20';
-        }
-
-        function nextSlide() {
-            currentIndex = (currentIndex + 1) % totalSlides;
-            showSlide(currentIndex);
-        }
-
-        // Inicia o slider
-        setInterval(nextSlide, 5000);
-
-        // === 3. Scroll Navbar Effect ===
-        window.addEventListener('scroll', () => {
-            const nav = document.getElementById('navbar');
-            if (window.scrollY > 10) {
-                nav.classList.add('shadow-glass');
+        function toggleMobileMenu() {
+            isMenuOpen = !isMenuOpen;
+            if (isMenuOpen) {
+                mobileMenu.classList.remove('translate-x-full');
+                hamburger.classList.add('active');
+                document.body.style.overflow = 'hidden'; // Previne scroll
             } else {
-                nav.classList.remove('shadow-glass');
+                mobileMenu.classList.add('translate-x-full');
+                hamburger.classList.remove('active');
+                document.body.style.overflow = 'auto';
             }
-        });
+        }
+
+        menuBtn.addEventListener('click', toggleMobileMenu);
+
+        // === 3. Scroll Reveal Animation (Intersection Observer) ===
+        const observerOptions = {
+            threshold: 0.1,
+            rootMargin: "0px 0px -50px 0px"
+        };
+
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    entry.target.classList.add('visible');
+                }
+            });
+        }, observerOptions);
+
+        document.querySelectorAll('.reveal-on-scroll').forEach(el => observer.observe(el));
+
+        // === 4. Sistema de Tradução (i18n Simples) ===
+        const translations = {
+            pt: {
+                nav_features: "Funcionalidades",
+                nav_safety: "Segurança",
+                nav_partners: "Parceiros",
+                nav_download: "Baixar Agora",
+                hero_badge: "Disponível em toda Angola",
+                hero_title_1: "O Futuro da",
+                hero_desc: "O Super App que move Angola. Transforme seu veículo em renda ou viaje com conforto e segurança inigualável.",
+                btn_start: "Começar Agora",
+                btn_video: "Ver Como Funciona",
+                partners_title: "Confiam na AOTRAVEL",
+                features_title: "Tudo o que você precisa",
+                features_desc: "Tecnologia de ponta para motoristas e passageiros.",
+                download_title: "Pronto para mudar a sua jornada?",
+                download_desc: "Baixe agora o AOTRAVEL. Disponível para Android e iOS. Leve, rápido e seguro.",
+                stat_users: "Usuários",
+                stat_rating: "Avaliação",
+                feat_1_title: "Navegação Inteligente",
+                feat_1_desc: "Algoritmos que encontram sempre a rota mais rápida.",
+                feat_2_title: "Pagamentos Fáceis",
+                feat_2_desc: "Aceitamos Multicaixa Express e Carteira Digital.",
+                feat_3_title: "Segurança 24/7",
+                feat_3_desc: "Monitoramento em tempo real.",
+                feat_4_title: "Seja um Motorista",
+                feat_4_desc: "Faça seu horário. Lucre mais."
+            },
+            en: {
+                nav_features: "Features",
+                nav_safety: "Safety",
+                nav_partners: "Partners",
+                nav_download: "Download Now",
+                hero_badge: "Available across Angola",
+                hero_title_1: "The Future of",
+                hero_desc: "The Super App moving Angola. Turn your vehicle into income or travel with unmatched comfort and safety.",
+                btn_start: "Start Now",
+                btn_video: "How it Works",
+                partners_title: "Trusted by",
+                features_title: "Everything you need",
+                features_desc: "Cutting-edge technology for drivers and passengers.",
+                download_title: "Ready to change your journey?",
+                download_desc: "Download AOTRAVEL now. Available for Android and iOS. Fast, secure, light.",
+                stat_users: "Users",
+                stat_rating: "Rating",
+                feat_1_title: "Smart Navigation",
+                feat_1_desc: "Algorithms finding the fastest route always.",
+                feat_2_title: "Easy Payments",
+                feat_2_desc: "We accept Multicaixa Express and Digital Wallet.",
+                feat_3_title: "24/7 Safety",
+                feat_3_desc: "Real-time monitoring.",
+                feat_4_title: "Become a Driver",
+                feat_4_desc: "Make your schedule. Earn more."
+            },
+            fr: {
+                nav_features: "Fonctionnalités",
+                nav_safety: "Sécurité",
+                nav_partners: "Partenaires",
+                nav_download: "Télécharger",
+                hero_badge: "Disponible dans tout l'Angola",
+                hero_title_1: "L'avenir de la",
+                hero_desc: "La Super App qui fait bouger l'Angola. Transformez votre véhicule en revenu ou voyagez en toute sécurité.",
+                btn_start: "Commencer",
+                btn_video: "Comment ça marche",
+                partners_title: "Ils font confiance à AOTRAVEL",
+                features_title: "Tout ce dont vous avez besoin",
+                features_desc: "Technologie de pointe pour chauffeurs et passagers.",
+                download_title: "Prêt à changer votre voyage ?",
+                download_desc: "Téléchargez AOTRAVEL maintenant. Disponible pour Android et iOS.",
+                stat_users: "Utilisateurs",
+                stat_rating: "Évaluation",
+                feat_1_title: "Navigation Intelligente",
+                feat_1_desc: "Des algorithmes qui trouvent toujours l'itinéraire le plus rapide.",
+                feat_2_title: "Paiements Faciles",
+                feat_2_desc: "Nous acceptons Multicaixa Express et Portefeuille Numérique.",
+                feat_3_title: "Sécurité 24/7",
+                feat_3_desc: "Surveillance en temps réel.",
+                feat_4_title: "Devenir Chauffeur",
+                feat_4_desc: "Faites votre emploi du temps. Gagnez plus."
+            }
+        };
+
+        function changeLanguage(lang) {
+            const elements = document.querySelectorAll('[data-i18n]');
+            elements.forEach(el => {
+                const key = el.getAttribute('data-i18n');
+                if (translations[lang] && translations[lang][key]) {
+                    // Fade out effect
+                    el.style.opacity = '0';
+                    setTimeout(() => {
+                        el.innerText = translations[lang][key];
+                        el.style.opacity = '1';
+                    }, 200);
+                }
+            });
+            // Atualiza texto dinâmico do hero separadamente para manter gradiente se necessário
+            const dynamicText = document.getElementById('dynamic-text');
+            if(lang === 'en') dynamicText.innerText = "Mobility";
+            if(lang === 'pt') dynamicText.innerText = "Mobilidade";
+            if(lang === 'fr') dynamicText.innerText = "Mobilité";
+        }
     </script>
 </body>
-
 </html>
