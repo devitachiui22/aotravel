@@ -254,10 +254,10 @@ io.on('connection', (socket) => {
         const { passenger_id, origin_lat, origin_lng, dest_lat, dest_lng, origin_name, dest_name, initial_price, ride_type, distance_km } = data;
 
         try {
-            // Busca motoristas ativos (20 min de tolerância para manter lista cheia, mas filtro de distância é restrito)
+            // Busca motoristas ativos (20 min de tolerância para manter lista cheia)
             const driversInDB = await pool.query(`SELECT * FROM driver_positions WHERE last_update > NOW() - INTERVAL '20 minutes'`);
 
-            // Filtro de Raio 8km (Atualizado conforme código Fonte)
+            // Filtro de Raio 8KM (Restrição Rígida conforme solicitado)
             const nearbyDrivers = driversInDB.rows.filter(d => getDistance(origin_lat, origin_lng, d.lat, d.lng) <= 8.0);
 
             if (nearbyDrivers.length === 0) {
