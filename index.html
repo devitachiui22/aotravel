@@ -492,8 +492,8 @@
 
                     <div class="flex flex-col sm:flex-row items-center gap-4 justify-center lg:justify-start">
                         <!-- Google Play -->
-                        <a href="assets/app/aotravel.apk" download class="group flex items-center gap-3 bg-slate-950 border border-slate-700 hover:border-brand-500 rounded-xl px-5 py-3 transition-all hover:-translate-y-1">
-                            <img src="https://github.com/devitachiui22/aotravel/releases/download/v1.0.0/Aotravel.apk" class="w-8 h-8" alt="Play Store">
+                        <a href="https://github.com/devitachiui22/aotravel/releases/download/v1.0.0/Aotravel.apk" download class="group flex items-center gap-3 bg-slate-950 border border-slate-700 hover:border-brand-500 rounded-xl px-5 py-3 transition-all hover:-translate-y-1">
+                            <img src="https://upload.wikimedia.org/wikipedia/commons/d/d0/Google_Play_Arrow_logo.svg" class="w-8 h-8" alt="Play Store">
                             <div class="text-left">
                                 <div class="text-[10px] uppercase text-slate-400 font-bold">Disponível no</div>
                                 <div class="text-white font-bold text-lg leading-none">Google Play</div>
@@ -512,25 +512,31 @@
                 </div>
 
                 <!-- Mockup de Celular -->
-                <div class="relative flex justify-center lg:justify-end">
-                    <div class="relative z-10 w-[280px] h-[580px] bg-slate-900 rounded-[40px] border-8 border-slate-800 shadow-2xl overflow-hidden rotate-[-6deg] hover:rotate-0 transition-transform duration-700">
-                        <!-- Screen Content -->
-                        <div class="w-full h-full bg-slate-800 flex flex-col relative">
-                            <!-- Header App -->
-                            <div class="h-24 bg-brand-500 rounded-b-3xl absolute top-0 w-full z-10"></div>
-                            <!-- Map Placeholder -->
-                            <div class="flex-1 bg-slate-100 opacity-80 bg-[url('https://upload.wikimedia.org/wikipedia/commons/e/ec/Map_of_Luanda.png')] bg-cover"></div>
-                            <!-- UI Elements -->
-                            <div class="absolute bottom-8 left-4 right-4 bg-white p-4 rounded-xl shadow-lg">
-                                <div class="h-2 w-12 bg-slate-200 rounded-full mx-auto mb-4"></div>
-                                <div class="h-4 w-3/4 bg-slate-800 rounded mb-2"></div>
-                                <div class="h-3 w-1/2 bg-slate-400 rounded"></div>
-                            </div>
-                        </div>
+            <div class="relative flex justify-center lg:justify-end group">
+                
+                <!-- Glow (Luz de fundo) -->
+                <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[300px] h-[500px] bg-brand-500/30 blur-[80px] rounded-full -z-10 animate-pulse"></div>
+
+                <!-- O Dispositivo (Chassi) -->
+                <div class="relative z-10 w-[280px] h-[580px] bg-slate-950 rounded-[45px] border-[8px] border-slate-800 shadow-2xl overflow-hidden rotate-[-6deg] group-hover:rotate-0 transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ring-1 ring-white/10">
+                    
+                    <!-- Câmera / Notch (Detalhe visual) -->
+                    <div class="absolute top-0 left-1/2 -translate-x-1/2 h-[25px] w-[120px] bg-slate-950 rounded-b-xl z-20 flex items-center justify-center gap-2">
+                        <div class="w-16 h-4 bg-slate-900/50 rounded-full"></div>
                     </div>
-                    <!-- Glow atrás do celular -->
-                    <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[300px] h-[500px] bg-brand-500/30 blur-[80px] rounded-full -z-10"></div>
+
+                    <!-- A Imagem do Print (App Real) -->
+                    <img 
+                        src="assets/images/print.png" 
+                        onerror="this.src='https://cdn.dribbble.com/users/1615584/screenshots/15710288/media/6c7a695e5d4f0a947065912ebdc9d482.jpg?resize=400x800'" 
+                        alt="Tela do App AOTRAVEL" 
+                        class="w-full h-full object-cover bg-slate-900"
+                    >
+
+                    <!-- Reflexo de Vidro (Glass Reflection Overlay) -->
+                    <div class="absolute inset-0 pointer-events-none bg-gradient-to-tr from-white/5 via-transparent to-transparent opacity-50 z-20"></div>
                 </div>
+            </div>
             </div>
         </div>
     </section>
@@ -784,5 +790,3 @@
     </script>
 </body>
 </html>
-
-
