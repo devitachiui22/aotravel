@@ -1,6 +1,6 @@
 /**
  * =========================================================================
- * AOTRAVEL SERVER PRO 2026 - FINAL GOLD MASTER (FULL PRODUCTION)
+ * AOTRAVEL SERVER PRO 2026 - FINAL ABSOLUTE VERSION (STABLE & FAST)
  * Localização: backend/server.js
  * Descrição: Backend Robusto para Transporte e Entregas (Angola).
  * Status: FIXED (Sync, Broadcast, ACID Transactions, Full Data Integrity)
@@ -10,6 +10,7 @@
  *   - Injeção de Dados de Veículo e Fotos REAIS.
  *   - Navegação Síncrona (Driver + Passenger mudam de tela juntos).
  *   - Raio de Busca Ajustado para 8KM (Real).
+ *   - Timeout Agressivo (5000ms) para Máxima Velocidade.
  * =========================================================================
  */
 
@@ -42,7 +43,7 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 
-// SERVIDOR HTTP COM SOCKET.IO
+// SERVIDOR HTTP COM SOCKET.IO (OTIMIZADO PARA VELOCIDADE)
 const server = http.createServer(app);
 const io = new Server(server, {
     cors: {
@@ -51,9 +52,9 @@ const io = new Server(server, {
         allowedHeaders: ["my-custom-header"],
         credentials: true
     },
-    // Configurações para estabilidade em redes móveis (3G/4G Angola)
-    pingTimeout: 60000,
-    pingInterval: 25000
+    // ATUALIZAÇÃO APLICADA: Configurações Agressivas para Redes Móveis (3G/4G Angola)
+    pingTimeout: 5000,   // Reduzido para detectar desconexões mais rápido
+    pingInterval: 10000  // Ping mais frequente para manter a conexão viva
 });
 
 /**
@@ -247,17 +248,17 @@ io.on('connection', (socket) => {
 
     /**
      * --- SOLICITAR CORRIDA (FILTRO 8KM REAL) ---
-     * Correção: Força final_price = initial_price para evitar null.
+     * Mantém a lógica segura do filtro de 8KM (PRO Feature)
      */
     socket.on('request_ride', async (data) => {
         console.log("📡 Nova solicitação:", data);
         const { passenger_id, origin_lat, origin_lng, dest_lat, dest_lng, origin_name, dest_name, initial_price, ride_type, distance_km } = data;
 
         try {
-            // Busca motoristas ativos (20 min de tolerância para manter lista cheia)
+            // Busca motoristas ativos (20 min de tolerância para manter lista cheia, mas filtro de distância é restrito)
             const driversInDB = await pool.query(`SELECT * FROM driver_positions WHERE last_update > NOW() - INTERVAL '20 minutes'`);
 
-            // Filtro de Raio 8KM (Restrição Rígida conforme solicitado)
+            // Filtro de Raio 8KM
             const nearbyDrivers = driversInDB.rows.filter(d => getDistance(origin_lat, origin_lng, d.lat, d.lng) <= 8.0);
 
             if (nearbyDrivers.length === 0) {
@@ -280,7 +281,7 @@ io.on('connection', (socket) => {
             socket.join(`ride_${ride.id}`);
             io.to(`user_${passenger_id}`).emit('ride_created', ride);
 
-            // Notifica motoristas próximos
+            // Notifica motoristas próximos (Broadcasting Seguro)
             nearbyDrivers.forEach(driver => {
                 io.to(`user_${driver.driver_id}`).emit('ride_opportunity', ride);
             });
@@ -293,7 +294,7 @@ io.on('connection', (socket) => {
 
     /**
      * --- NEGOCIAÇÃO DE PREÇO (CHAT) ---
-     * Sincronização driver + passageiro
+     * Sincronização driver + passageiro (Atomic Update)
      */
     socket.on('update_price_negotiation', async (data) => {
         const { ride_id, new_price } = data;
@@ -322,9 +323,10 @@ io.on('connection', (socket) => {
             // FETCH COMPLETO IMEDIATO (Injeção de Dados Reais)
             const fullData = await getFullRideDetails(ride_id);
 
-            // Envia para AMBOS (Redundância de segurança para garantir update na tela)
+            // Envia para AMBOS usando io.to para garantir entrega
             io.to(`ride_${ride_id}`).emit('ride_accepted_by_driver', fullData);
             io.to(`user_${fullData.passenger_id}`).emit('ride_accepted_by_driver', fullData);
+            io.to(`user_${driver_id}`).emit('ride_accepted_by_driver', fullData);
 
         } catch (e) { console.error("Erro accept_ride:", e); }
     });
@@ -535,7 +537,7 @@ server.listen(port, '0.0.0.0', () => {
        📡 PORTA: ${port}
        📍 RAIO: 8.0 KM
        🗄️ DB: NEON POSTGRESQL (SSL)
-       ⚡ SOCKET: ATIVO (DUP-FIX + SYNC NAV APPLIED)
+       ⚡ SOCKET: ATIVO (TIMEOUT 5s + SYNC NAV APPLIED)
     ===================================================
     `);
 });
