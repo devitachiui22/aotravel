@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="pt-AO" class="scroll-smooth">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AOTRAVEL | Viaje. Entregue. Lucre.</title>
+    
+    <!-- Tipografia Premium: Plus Jakarta Sans (Padrão Tech Moderno) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <!-- Phosphor Icons (Ícones Vetoriais Ultra Nítidos) -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+
+    <!-- Tailwind CSS v3.4 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Configuração do Design System -->
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['"Plus Jakarta Sans"', 'sans-serif'],
+                    },
+                    colors: {
+                        // Paleta Personalizada: Amarelo/Laranja Escuro Profundo
+                        brand: {
+                            50: '#fffbeb',
+                            100: '#fef3c7',
+                            400: '#fbbf24',
+                            500: '#f59e0b', // Primary Yellow
+                            600: '#d97706',
+                            700: '#b45309', // Dark Orange/Brownish
+                            800: '#92400e',
+                            900: '#78350f',
+                        },
+                        // Fundo Dark Mode "Rico" (Não é preto puro, é azul noturno profundo)
+                        night: {
+                            900: '#020617', // Slate 950
+                            800: '#0f172a', // Slate 900
+                            card: '#1e293b',
+                        }
+                    },
+                    backgroundImage: {
+                        'gradient-radial': 'radial-gradient(var(--tw-gradient-stops))',
+                        'hero-glow': 'conic-gradient(from 180deg at 50% 50%, #F59E0B 0deg, #EA580C 180deg, #F59E0B 360deg)',
+                    },
+                    boxShadow: {
+                        'neon': '0 0 40px -10px rgba(245, 158, 11, 0.4)',
+                        'glass': '0 8px 32px 0 rgba(0, 0, 0, 0.05)',
+                    },
+                    animation: {
+                        'float': 'float 6s ease-in-out infinite',
+                        'marquee': 'marquee 25s linear infinite',
+                        'pulse-slow': 'pulse 4s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+                    },
+                    keyframes: {
+                        float: {
+                            '0%, 100%': { transform: 'translateY(0)' },
+                            '50%': { transform: 'translateY(-20px)' },
+                        },
+                        marquee: {
+                            '0%': { transform: 'translateX(0%)' },
+                            '100%': { transform: 'translateX(-50%)' },
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        /* CSS RESET E REFINAMENTOS */
+        body {
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        /* Glassmorphism Realista */
+        .glass-nav {
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+        }
+        .dark .glass-nav {
+            background: rgba(2, 6, 23, 0.8); /* night-900 com opacidade */
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        /* Gradiente de Texto Premium */
+        .text-gradient {
+            background: linear-gradient(135deg, #F59E0B 0%, #EA580C 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        /* MÁSCARA DO CARROSSEL (Fades laterais) */
+        .marquee-mask {
+            mask-image: linear-gradient(to right, transparent, black 20%, black 80%, transparent);
+            -webkit-mask-image: linear-gradient(to right, transparent, black 20%, black 80%, transparent);
+        }
+
+        /* CORREÇÃO DOS BOTÕES (Tamanho Igual) */
+        .app-btn-container {
+            height: 56px; /* Altura fixa para ambos os botões */
+            min-width: 160px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #000;
+            border-radius: 12px;
+            padding: 0 16px;
+            transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+            border: 1px solid rgba(255,255,255,0.1);
+            overflow: hidden;
+        }
+        
+        .app-btn-container.light-mode-btn {
+            background: #fff;
+            border: 1px solid #e2e8f0;
+        }
+
+        .app-btn-container:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 10px 25px -5px rgba(0,0,0,0.15);
+        }
+
+        .app-btn-container img {
+            height: 100%; /* Força a imagem a ocupar a altura do container */
+            width: auto;
+            object-fit: contain; /* Garante que a imagem não estique */
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 dark:bg-night-900 text-slate-900 dark:text-slate-100 transition-colors duration-500 overflow-x-hidden selection:bg-brand-500 selection:text-white">
+
+    <!-- EFEITOS DE FUNDO (Ambient Light) -->
+    <div class="fixed inset-0 pointer-events-none -z-10 overflow-hidden">
+        <div class="absolute top-[-10%] left-[-10%] w-[600px] h-[600px] bg-brand-500/10 rounded-full blur-[120px] mix-blend-multiply dark:mix-blend-screen animate-pulse-slow"></div>
+        <div class="absolute bottom-[10%] right-[-5%] w-[500px] h-[500px] bg-orange-600/10 rounded-full blur-[100px] mix-blend-multiply dark:mix-blend-screen"></div>
+    </div>
+
+    <!-- NAVBAR (Estilo App Nativo) -->
+    <nav class="fixed w-full z-50 glass-nav transition-all duration-300" id="navbar">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between items-center h-20">
+                
+                <!-- Logo -->
+                <div class="flex items-center gap-3">
+                    <div class="w-10 h-10 bg-gradient-to-br from-brand-500 to-brand-700 rounded-xl flex items-center justify-center text-white shadow-lg shadow-brand-500/30">
+                        <i class="ph-fill ph-paper-plane-tilt text-xl"></i>
+                    </div>
+                    <div class="flex flex-col">
+                        <span class="font-extrabold text-xl tracking-tight leading-none dark:text-white">AO<span class="text-brand-600">TRAVEL</span></span>
+                        <span class="text-[0.65rem] font-bold text-slate-400 uppercase tracking-[0.2em]">Angola</span>
+                    </div>
+                </div>
+
+                <!-- Right Actions -->
+                <div class="flex items-center gap-4">
+                    <!-- Theme Toggle -->
+                    <button id="theme-toggle" class="w-10 h-10 rounded-full bg-white dark:bg-night-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center text-slate-600 dark:text-brand-500 hover:scale-105 transition-transform">
+                        <i class="ph-fill ph-sun hidden dark:block text-xl"></i>
+                        <i class="ph-fill ph-moon dark:hidden text-xl"></i>
+                    </button>
+                    <!-- CTA Button (Desktop) -->
+                    <a href="#download" class="hidden sm:inline-flex items-center justify-center px-6 py-2.5 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-full font-bold text-sm shadow-lg hover:shadow-xl transition-all hover:-translate-y-0.5">
+                        Baixar App
+                    </a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- HERO SECTION (Imersiva) -->
+    <main class="pt-32 pb-16 lg:pt-40 lg:pb-24 overflow-hidden">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
+                
+                <!-- COLUNA 1: TEXTO & VALOR -->
+                <div class="flex flex-col items-center lg:items-start text-center lg:text-left z-10">
+                    
+                    <!-- Badge de Novidade -->
+                    <div class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-brand-50 dark:bg-brand-900/30 border border-brand-200 dark:border-brand-700/50 text-brand-700 dark:text-brand-400 text-xs font-bold uppercase tracking-wider mb-8">
+                        <span class="relative flex h-2 w-2">
+                          <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand-400 opacity-75"></span>
+                          <span class="relative inline-flex rounded-full h-2 w-2 bg-brand-500"></span>
+                        </span>
+                        Disponível em toda Angola
+                    </div>
+
+                    <!-- SLIDER DE TEXTO (Título) -->
+                    <div class="relative w-full h-[140px] sm:h-[180px] lg:h-[200px] mb-6">
+                        <!-- Texto 1 -->
+                        <div class="text-slide absolute top-0 w-full transition-all duration-700 opacity-100 translate-y-0" data-index="0">
+                            <h1 class="text-5xl sm:text-6xl lg:text-7xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-[1.1]">
+                                Lucre com seu <br>
+                                <span class="text-gradient">Automóvel</span>
+                            </h1>
+                        </div>
+                        <!-- Texto 2 -->
+                        <div class="text-slide absolute top-0 w-full transition-all duration-700 opacity-0 translate-y-8 pointer-events-none" data-index="1">
+                            <h1 class="text-5xl sm:text-6xl lg:text-7xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-[1.1]">
+                                Entregas de <br>
+                                <span class="text-gradient">Motorizada</span>
+                            </h1>
+                        </div>
+                        <!-- Texto 3 -->
+                        <div class="text-slide absolute top-0 w-full transition-all duration-700 opacity-0 translate-y-8 pointer-events-none" data-index="2">
+                            <h1 class="text-5xl sm:text-6xl lg:text-7xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-[1.1]">
+                                Viaje para onde <br>
+                                <span class="text-gradient">Quiser</span>
+                            </h1>
+                        </div>
+                    </div>
+
+                    <p class="text-lg sm:text-xl text-slate-600 dark:text-slate-400 mb-10 max-w-lg leading-relaxed">
+                        O app que conecta Angola. Transforme seu veículo numa fonte de renda ou peça uma viagem em segundos.
+                    </p>
+
+                    <!-- Benefícios (Grid Mini) -->
+                    <div class="grid grid-cols-2 gap-4 w-full max-w-md">
+                        <div class="flex items-center gap-3 p-3 rounded-xl bg-white dark:bg-night-800 border border-slate-100 dark:border-slate-800 shadow-sm">
+                            <div class="w-10 h-10 rounded-lg bg-green-100 dark:bg-green-900/30 flex items-center justify-center text-green-600 dark:text-green-400">
+                                <i class="ph-fill ph-money text-2xl"></i>
+                            </div>
+                            <div class="text-left">
+                                <p class="text-[10px] uppercase font-bold text-slate-400">Ganhos</p>
+                                <p class="text-sm font-bold text-slate-800 dark:text-white">Diários</p>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-3 p-3 rounded-xl bg-white dark:bg-night-800 border border-slate-100 dark:border-slate-800 shadow-sm">
+                            <div class="w-10 h-10 rounded-lg bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center text-blue-600 dark:text-blue-400">
+                                <i class="ph-fill ph-shield-check text-2xl"></i>
+                            </div>
+                            <div class="text-left">
+                                <p class="text-[10px] uppercase font-bold text-slate-400">Viagem</p>
+                                <p class="text-sm font-bold text-slate-800 dark:text-white">Segura</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- COLUNA 2: VISUAL 3D (Avatar) -->
+                <div class="relative flex items-center justify-center mt-10 lg:mt-0 h-[400px] lg:h-[500px]">
+                    <!-- Elemento Gráfico de Fundo (Orbit) -->
+                    <div class="absolute w-[300px] h-[300px] sm:w-[450px] sm:h-[450px] rounded-full border border-slate-200 dark:border-slate-800 animate-[spin_30s_linear_infinite]"></div>
+                    <div class="absolute w-[250px] h-[250px] sm:w-[380px] sm:h-[380px] rounded-full border border-dashed border-brand-500/20 animate-[spin_20s_linear_infinite_reverse]"></div>
+                    
+                    <!-- Glow Central -->
+                    <div class="absolute w-40 h-40 bg-brand-500/30 blur-[60px] rounded-full"></div>
+
+                    <!-- Container Imagens -->
+                    <div class="relative w-full h-full flex items-center justify-center animate-float">
+                        <!-- Avatar 1 (Carro) -->
+                        <img src="assets/images/avatar1.png" 
+                             onerror="this.src='https://cdn3d.iconscout.com/3d/premium/thumb/taxi-driver-5683955-4743770.png'"
+                             class="mascot-img absolute max-w-[80%] max-h-[80%] object-contain drop-shadow-2xl transition-all duration-700 opacity-100 scale-100 z-20"
+                             alt="Motorista AOTRAVEL">
+                        
+                        <!-- Avatar 2 (Moto) -->
+                        <img src="assets/images/avatar1.png" 
+                             onerror="this.src='https://cdn3d.iconscout.com/3d/premium/thumb/delivery-boy-riding-scooter-5481358-4569562.png'"
+                             class="mascot-img absolute max-w-[80%] max-h-[80%] object-contain drop-shadow-2xl transition-all duration-700 opacity-0 scale-90 translate-y-8 z-10"
+                             alt="Entregador AOTRAVEL">
+
+                         <!-- Avatar 3 (App/Passageiro) -->
+                         <img src="assets/images/avatar1.png" 
+                         onerror="this.src='https://cdn3d.iconscout.com/3d/premium/thumb/woman-traveler-using-mobile-phone-navigation-4952044-4131551.png'"
+                         class="mascot-img absolute max-w-[80%] max-h-[80%] object-contain drop-shadow-2xl transition-all duration-700 opacity-0 scale-90 translate-y-8 z-10"
+                         alt="Passageiro AOTRAVEL">
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- CARROSSEL DE PARCEIROS (High-End Infinite Scroll) -->
+    <section class="py-10 border-y border-slate-100 dark:border-white/5 bg-white/50 dark:bg-white/[0.02]">
+        <div class="max-w-7xl mx-auto overflow-hidden relative marquee-mask">
+            <div class="flex gap-16 w-max animate-marquee items-center">
+                <!-- Logos (Duplicar para loop) -->
+                <!-- Set 1 -->
+                <img src="assets/images/parceiro.png" class="h-6 sm:h-8 opacity-40 grayscale hover:grayscale-0 hover:opacity-100 transition-all dark:invert" alt="Google">
+                <img src="assets/images/parceiro1.png" class="h-8 sm:h-10 opacity-40 grayscale hover:grayscale-0 hover:opacity-100 transition-all" alt="BMW">
+                <img src="assets/images/parceiro2.png" class="h-8 sm:h-10 opacity-40 grayscale hover:grayscale-0 hover:opacity-100 transition-all dark:invert" alt="Airbnb">
+                <img src="assets/images/parceiro3.png" class="h-6 sm:h-8 opacity-40 grayscale hover:grayscale-0 hover:opacity-100 transition-all dark:invert" alt="Amazon">
+                <img src="assets/images/parceiro4.png" class="h-8 sm:h-10 opacity-40 grayscale hover:grayscale-0 hover:opacity-100 transition-all dark:invert" alt="Apple">
+                <!-- Set 2 (Cópia exata) -->
+                <img src="https://upload.wikimedia.org/wikipedia/commons/2/2f/Google_2015_logo.svg" class="h-6 sm:h-8 opacity-40 grayscale hover:grayscale-0 hover:opacity-100 transition-all dark:invert" alt="Google">
+                <img src="https://upload.wikimedia.org/wikipedia/commons/4/44/BMW.svg" class="h-8 sm:h-10 opacity-40 grayscale hover:grayscale-0 hover:opacity-100 transition-all" alt="BMW">
+                <img src="https://upload.wikimedia.org/wikipedia/commons/6/69/Airbnb_Logo_B%C3%A9lo.svg" class="h-8 sm:h-10 opacity-40 grayscale hover:grayscale-0 hover:opacity-100 transition-all dark:invert" alt="Airbnb">
+                <img src="https://upload.wikimedia.org/wikipedia/commons/a/a9/Amazon_logo.svg" class="h-6 sm:h-8 opacity-40 grayscale hover:grayscale-0 hover:opacity-100 transition-all dark:invert" alt="Amazon">
+                <img src="https://upload.wikimedia.org/wikipedia/commons/f/fa/Apple_logo_black.svg" class="h-8 sm:h-10 opacity-40 grayscale hover:grayscale-0 hover:opacity-100 transition-all dark:invert" alt="Apple">
+            </div>
+        </div>
+    </section>
+
+    <!-- DOWNLOAD CARD (Figma Style) -->
+    <section id="download" class="py-20 px-4">
+        <div class="max-w-5xl mx-auto relative rounded-[32px] overflow-hidden shadow-neon group">
+            <!-- Background Complexo -->
+            <div class="absolute inset-0 bg-[#0f172a]"></div> <!-- Fundo base escuro -->
+            <div class="absolute inset-0 bg-gradient-to-br from-brand-600 via-brand-800 to-slate-900 opacity-90"></div>
+            <div class="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-10 mix-blend-overlay"></div>
+            
+            <div class="relative z-10 px-8 py-16 text-center">
+                <h2 class="text-3xl sm:text-5xl font-extrabold text-white mb-4 tracking-tight">Comece sua jornada hoje</h2>
+                <p class="text-brand-100 text-lg mb-10 max-w-xl mx-auto">
+                    Baixe o aplicativo para Passageiros ou Motoristas. Disponível nas melhores lojas.
+                </p>
+
+                <!-- BOTÕES DE DOWNLOAD CORRIGIDOS -->
+                <div class="flex flex-col sm:flex-row items-center justify-center gap-6">
+                    
+                    <!-- Botão Android -->
+                    <a href="assets/app/aotravel.apk" download class="app-btn-container group">
+                        <!-- Imagem vai se ajustar a altura do container -->
+                        <img src="assets/images/google-play.png" 
+                             onerror="this.src='https://upload.wikimedia.org/wikipedia/commons/7/78/Google_Play_Store_badge_EN.svg'"
+                             alt="Disponível no Google Play">
+                    </a>
+
+                    <!-- Botão iOS (Container Branco para contraste) -->
+                    <a href="assets/app/aotravel.ipa" download class="app-btn-container light-mode-btn group">
+                        <img src="assets/images/app-store.png" 
+                             onerror="this.src='https://upload.wikimedia.org/wikipedia/commons/3/3c/Download_on_the_App_Store_Badge.svg'"
+                             alt="Baixar na App Store">
+                    </a>
+
+                </div>
+                <p class="mt-8 text-xs text-white/40 uppercase tracking-widest font-semibold">Versão 3.0 • Seguro & Verificado</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- FOOTER PROFISSIONAL -->
+    <footer class="bg-white dark:bg-night-900 border-t border-slate-100 dark:border-slate-800 pt-16 pb-8">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-12 mb-12">
+                
+                <!-- Brand Info -->
+                <div class="col-span-1 lg:col-span-1">
+                    <div class="flex items-center gap-2 mb-4">
+                        <i class="ph-fill ph-paper-plane-tilt text-2xl text-brand-600"></i>
+                        <span class="font-bold text-xl dark:text-white">AO<span class="text-brand-600">TRAVEL</span></span>
+                    </div>
+                    <p class="text-sm text-slate-500 dark:text-slate-400 mb-6 leading-relaxed">
+                        "Encurtando distâncias, multiplicando ganhos. O seu destino, a nossa missão."
+                    </p>
+                    <div class="flex gap-4">
+                        <a href="#" class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-brand-500 hover:text-white transition-colors">
+                            <i class="ph-fill ph-facebook-logo"></i>
+                        </a>
+                        <a href="#" class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-brand-500 hover:text-white transition-colors">
+                            <i class="ph-fill ph-instagram-logo"></i>
+                        </a>
+                        <a href="#" class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-brand-500 hover:text-white transition-colors">
+                            <i class="ph-fill ph-linkedin-logo"></i>
+                        </a>
+                    </div>
+                </div>
+
+                <!-- Contactos -->
+                <div class="col-span-1 lg:col-span-2">
+                    <h3 class="font-bold text-slate-900 dark:text-white mb-4">Central de Atendimento</h3>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div class="flex items-start gap-3">
+                            <i class="ph-fill ph-envelope-simple text-brand-600 mt-1"></i>
+                            <div class="text-sm text-slate-500 dark:text-slate-400">
+                                <span class="block font-semibold text-slate-900 dark:text-slate-200">Email</span>
+                                <a href="mailto:denyneves14@gmail.com" class="hover:text-brand-500 block">denyneves14@gmail.com</a>
+                                <a href="mailto:augustoneve22@gmail.com" class="hover:text-brand-500 block">augustoneve22@gmail.com</a>
+                            </div>
+                        </div>
+                        <div class="flex items-start gap-3">
+                            <i class="ph-fill ph-phone-call text-brand-600 mt-1"></i>
+                            <div class="text-sm text-slate-500 dark:text-slate-400">
+                                <span class="block font-semibold text-slate-900 dark:text-slate-200">Telefone</span>
+                                <a href="tel:+244974120856" class="hover:text-brand-500 block">+244 974 120 856</a>
+                                <a href="tel:+244927825820" class="hover:text-brand-500 block">+244 927 825 820</a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Links Rápidos -->
+                <div>
+                    <h3 class="font-bold text-slate-900 dark:text-white mb-4">Legal</h3>
+                    <ul class="space-y-2 text-sm text-slate-500 dark:text-slate-400">
+                        <li><a href="#" class="hover:text-brand-500 transition-colors">Política de Privacidade</a></li>
+                        <li><a href="#" class="hover:text-brand-500 transition-colors">Termos de Uso</a></li>
+                        <li><a href="#" class="hover:text-brand-500 transition-colors">Segurança</a></li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="border-t border-slate-100 dark:border-slate-800 pt-8 flex flex-col md:flex-row justify-between items-center gap-4">
+                <p class="text-xs text-slate-400">© 2024 AOTRAVEL. Angola.</p>
+                <p class="text-xs text-slate-400 flex items-center gap-1">
+                    Desenvolvido com <i class="ph-fill ph-heart text-red-500"></i> e Tecnologia.
+                </p>
+            </div>
+        </div>
+    </footer>
+
+    <!-- LOGIC SCRIPTS -->
+    <script>
+        // === 1. Lógica Dark Mode (Persistente) ===
+        const html = document.documentElement;
+        const toggleBtn = document.getElementById('theme-toggle');
+
+        function applyTheme() {
+            if (localStorage.theme === 'dark' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+                html.classList.add('dark');
+            } else {
+                html.classList.remove('dark');
+            }
+        }
+        applyTheme();
+
+        toggleBtn.addEventListener('click', () => {
+            html.classList.toggle('dark');
+            localStorage.theme = html.classList.contains('dark') ? 'dark' : 'light';
+        });
+
+        // === 2. Slider Sincronizado (Texto + Avatar) ===
+        const textSlides = document.querySelectorAll('.text-slide');
+        const imgSlides = document.querySelectorAll('.mascot-img');
+        let currentIndex = 0;
+        const totalSlides = textSlides.length;
+
+        function showSlide(index) {
+            // Esconde tudo
+            textSlides.forEach(el => {
+                el.style.opacity = '0';
+                el.style.transform = 'translateY(20px)';
+                el.style.pointerEvents = 'none';
+            });
+            imgSlides.forEach(el => {
+                el.style.opacity = '0';
+                el.style.transform = 'scale(0.9) translateY(20px)';
+                el.style.zIndex = '10';
+            });
+
+            // Mostra atual
+            // Texto
+            textSlides[index].style.opacity = '1';
+            textSlides[index].style.transform = 'translateY(0)';
+            textSlides[index].style.pointerEvents = 'auto';
+            // Imagem
+            imgSlides[index].style.opacity = '1';
+            imgSlides[index].style.transform = 'scale(1) translateY(0)';
+            imgSlides[index].style.zIndex = '20';
+        }
+
+        function nextSlide() {
+            currentIndex = (currentIndex + 1) % totalSlides;
+            showSlide(currentIndex);
+        }
+
+        // Inicia o slider
+        setInterval(nextSlide, 5000);
+
+        // === 3. Scroll Navbar Effect ===
+        window.addEventListener('scroll', () => {
+            const nav = document.getElementById('navbar');
+            if (window.scrollY > 10) {
+                nav.classList.add('shadow-glass');
+            } else {
+                nav.classList.remove('shadow-glass');
+            }
+        });
+    </script>
+</body>
+</html>
