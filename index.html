@@ -51,17 +51,13 @@
                             border: '#1e293b',
                         }
                     },
-                    backgroundImage: {
-                        'gradient-radial': 'radial-gradient(var(--tw-gradient-stops))',
-                        'hero-mesh': 'radial-gradient(at 0% 0%, hsla(37,91%,65%,1) 0, transparent 50%), radial-gradient(at 50% 0%, hsla(24,100%,60%,1) 0, transparent 50%), radial-gradient(at 100% 0%, hsla(340,100%,76%,0.5) 0, transparent 50%)',
-                    },
                     animation: {
                         'float-slow': 'float 8s ease-in-out infinite',
                         'float-medium': 'float 6s ease-in-out infinite',
                         'float-fast': 'float 4s ease-in-out infinite',
-                        'blob': 'blob 7s infinite',
-                        'fade-in-up': 'fadeInUp 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards',
-                        'slide-in-right': 'slideInRight 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+                        'blob': 'blob 10s infinite',
+                        'spin-slow': 'spin 20s linear infinite',
+                        'marquee': 'marquee 25s linear infinite',
                     },
                     keyframes: {
                         float: {
@@ -74,18 +70,13 @@
                             '66%': { transform: 'translate(-20px, 20px) scale(0.9)' },
                             '100%': { transform: 'translate(0px, 0px) scale(1)' },
                         },
-                        fadeInUp: {
-                            '0%': { opacity: 0, transform: 'translateY(40px)' },
-                            '100%': { opacity: 1, transform: 'translateY(0)' },
-                        },
-                        slideInRight: {
-                            '0%': { transform: 'translateX(100%)' },
-                            '100%': { transform: 'translateX(0)' },
+                        marquee: {
+                            '0%': { transform: 'translateX(0%)' },
+                            '100%': { transform: 'translateX(-100%)' },
                         }
                     },
                     boxShadow: {
                         'glass': '0 8px 32px 0 rgba(0, 0, 0, 0.07)',
-                        'glass-dark': '0 8px 32px 0 rgba(0, 0, 0, 0.3)',
                         'glow': '0 0 50px -10px rgba(245, 158, 11, 0.5)',
                     }
                 }
@@ -94,61 +85,37 @@
     </script>
 
     <style>
-        /* CSS Customizado para Efeitos Premium (Glassmorphism & Utils) */
-        
+        /* CSS Customizado e Reset */
         body {
             -webkit-tap-highlight-color: transparent;
             overflow-x: hidden;
         }
 
-        /* Scrollbar Moderna */
-        ::-webkit-scrollbar {
-            width: 8px;
-        }
-        ::-webkit-scrollbar-track {
-            background: transparent;
-        }
-        ::-webkit-scrollbar-thumb {
-            background: #cbd5e1;
-            border-radius: 4px;
-        }
-        .dark ::-webkit-scrollbar-thumb {
-            background: #334155;
-        }
+        /* Scrollbar */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        .dark ::-webkit-scrollbar-thumb { background: #334155; }
 
-        /* Efeito Vidro Fosco (Glassmorphism) */
-        .glass-panel {
-            background: rgba(255, 255, 255, 0.7);
-            backdrop-filter: blur(16px);
-            -webkit-backdrop-filter: blur(16px);
-            border: 1px solid rgba(255, 255, 255, 0.5);
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
-        }
-        .dark .glass-panel {
-            background: rgba(15, 23, 42, 0.6);
-            border: 1px solid rgba(255, 255, 255, 0.05);
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
-        }
-
+        /* Glassmorphism Sidebar */
         .sidebar-glass {
-            background: rgba(255, 255, 255, 0.95);
+            background: rgba(255, 255, 255, 0.9);
             backdrop-filter: blur(20px);
             -webkit-backdrop-filter: blur(20px);
-            border-left: 1px solid rgba(255, 255, 255, 0.2);
+            border-left: 1px solid rgba(255, 255, 255, 0.3);
         }
         .dark .sidebar-glass {
-            background: rgba(3, 7, 18, 0.95);
+            background: rgba(3, 7, 18, 0.9);
             border-left: 1px solid rgba(255, 255, 255, 0.05);
         }
 
-        /* Texto Gradiente Premium */
+        /* Hero Text Gradient */
         .text-gradient-gold {
             background: linear-gradient(135deg, #d97706 0%, #f59e0b 50%, #fbbf24 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
         }
-        
         .dark .text-gradient-gold {
             background: linear-gradient(135deg, #fbbf24 0%, #f59e0b 50%, #d97706 100%);
             -webkit-background-clip: text;
@@ -156,16 +123,48 @@
             background-clip: text;
         }
 
-        /* Máscara para o Carrossel Infinito */
-        .mask-linear-fade {
-            mask-image: linear-gradient(to right, transparent, black 15%, black 85%, transparent);
-            -webkit-mask-image: linear-gradient(to right, transparent, black 15%, black 85%, transparent);
+        /* Slider Animations */
+        .slide {
+            position: absolute;
+            inset: 0;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 1s ease-in-out;
+            transform: scale(1.05);
+            z-index: 0;
+        }
+        .slide.active {
+            opacity: 1;
+            visibility: visible;
+            transform: scale(1);
+            z-index: 10;
         }
 
-        /* Loader de Imagens */
-        img { transition: opacity 0.5s ease-in-out; }
-        
-        /* Utilitários de Animação de Entrada */
+        /* Animação dos elementos internos do Slide quando ativos */
+        .slide.active .slide-content {
+            animation: slideUpContent 1s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+            opacity: 0; /* Começa invisível */
+        }
+        .slide.active .slide-image {
+            animation: float 6s ease-in-out infinite, fadeInImage 1.2s ease-out forwards;
+            opacity: 0;
+        }
+
+        @keyframes slideUpContent {
+            0% { opacity: 0; transform: translateY(40px); }
+            100% { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes fadeInImage {
+            0% { opacity: 0; transform: scale(0.95); }
+            100% { opacity: 1; transform: scale(1); }
+        }
+
+        /* Mask for Partners */
+        .mask-linear-fade {
+            mask-image: linear-gradient(to right, transparent, black 10%, black 90%, transparent);
+            -webkit-mask-image: linear-gradient(to right, transparent, black 10%, black 90%, transparent);
+        }
+
         .reveal-on-scroll {
             opacity: 0;
             transform: translateY(30px);
@@ -175,49 +174,26 @@
             opacity: 1;
             transform: translateY(0);
         }
-
-        /* Slider Transitions */
-        .slide {
-            position: absolute;
-            inset: 0;
-            opacity: 0;
-            transition: opacity 1s ease-in-out, transform 1s ease-in-out;
-            pointer-events: none;
-            transform: scale(1.05);
-        }
-        .slide.active {
-            opacity: 1;
-            pointer-events: all;
-            transform: scale(1);
-            z-index: 10;
-        }
     </style>
 </head>
-<body class="bg-slate-50 dark:bg-dark-bg text-slate-900 dark:text-slate-100 transition-colors duration-500 antialiased selection:bg-brand-500 selection:text-white overflow-x-hidden">
+<body class="bg-slate-50 dark:bg-dark-bg text-slate-900 dark:text-slate-100 transition-colors duration-500 antialiased selection:bg-brand-500 selection:text-white">
 
-    <!-- BACKGROUND AMBIENTE ANIMADO -->
+    <!-- BACKGROUND EFFECTS -->
     <div class="fixed inset-0 overflow-hidden pointer-events-none -z-10">
-        <!-- Blobs de cor -->
-        <div class="absolute top-[-10%] left-[-10%] w-[50vw] h-[50vw] bg-brand-400/20 rounded-full blur-[100px] animate-blob mix-blend-multiply dark:mix-blend-screen dark:opacity-20"></div>
-        <div class="absolute top-[20%] right-[-10%] w-[40vw] h-[40vw] bg-orange-500/20 rounded-full blur-[100px] animate-blob animation-delay-2000 mix-blend-multiply dark:mix-blend-screen dark:opacity-20"></div>
-        <div class="absolute bottom-[-10%] left-[20%] w-[45vw] h-[45vw] bg-yellow-300/20 rounded-full blur-[100px] animate-blob animation-delay-4000 mix-blend-multiply dark:mix-blend-screen dark:opacity-10"></div>
-        <!-- Grid Pattern Overlay -->
-        <div class="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20 brightness-100 contrast-150"></div>
+        <div class="absolute top-[-20%] right-[-10%] w-[60vw] h-[60vw] bg-brand-400/10 rounded-full blur-[120px] animate-blob dark:opacity-20"></div>
+        <div class="absolute bottom-[-20%] left-[-10%] w-[50vw] h-[50vw] bg-blue-500/10 rounded-full blur-[120px] animate-blob animation-delay-2000 dark:opacity-20"></div>
+        <div class="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-15 brightness-100 contrast-150 mix-blend-overlay"></div>
     </div>
 
     <!-- NAVBAR PREMIUM -->
-    <nav class="fixed w-full z-50 transition-all duration-300 top-0" id="navbar">
-        <div class="absolute inset-0 bg-white/70 dark:bg-dark-bg/70 backdrop-blur-xl border-b border-white/20 dark:border-white/5 transition-all"></div>
-        
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative">
+    <nav class="fixed w-full z-50 transition-all duration-300 top-0 backdrop-blur-md bg-white/70 dark:bg-dark-bg/80 border-b border-white/20 dark:border-white/5" id="navbar">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="flex justify-between items-center h-20">
                 
                 <!-- LOGO -->
                 <a href="#" class="flex items-center gap-3 group">
                     <div class="relative w-10 h-10 flex items-center justify-center rounded-xl bg-gradient-to-br from-brand-400 to-brand-600 text-white shadow-lg shadow-brand-500/40 group-hover:scale-105 transition-transform duration-300">
                         <i class="ph-fill ph-paper-plane-tilt text-xl"></i>
-                        <!-- Brilho no ícone -->
-                        <div class="absolute inset-0 rounded-xl bg-white/20 blur opacity-0 group-hover:opacity-100 transition-opacity"></div>
                     </div>
                     <div class="flex flex-col">
                         <span class="font-bold text-xl tracking-tight leading-none text-slate-900 dark:text-white">
@@ -226,7 +202,7 @@
                     </div>
                 </a>
 
-                <!-- DESKTOP MENU (Escondido em Mobile) -->
+                <!-- DESKTOP MENU -->
                 <div class="hidden lg:flex items-center gap-8">
                     <a href="#features" data-i18n="nav_features" class="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-brand-600 dark:hover:text-brand-400 transition-colors">Funcionalidades</a>
                     <a href="#safety" data-i18n="nav_safety" class="text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-brand-600 dark:hover:text-brand-400 transition-colors">Segurança</a>
@@ -235,223 +211,200 @@
 
                 <!-- RIGHT ACTIONS (Desktop) -->
                 <div class="hidden lg:flex items-center gap-3">
-                    
-                    <!-- Language Switcher -->
+                    <!-- Lang -->
                     <div class="relative group">
-                        <button class="w-9 h-9 rounded-full bg-slate-100 dark:bg-white/10 flex items-center justify-center hover:bg-slate-200 dark:hover:bg-white/20 transition-colors text-slate-700 dark:text-slate-200">
+                        <button class="w-9 h-9 rounded-full bg-slate-100 dark:bg-white/10 flex items-center justify-center hover:bg-slate-200 transition-colors">
                             <i class="ph ph-translate text-lg"></i>
                         </button>
-                        <!-- Dropdown -->
-                        <div class="absolute right-0 top-full mt-2 w-32 py-2 bg-white dark:bg-dark-surface rounded-xl shadow-xl border border-slate-100 dark:border-white/10 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 transform origin-top-right scale-95 group-hover:scale-100">
-                            <button onclick="changeLanguage('pt')" class="w-full text-left px-4 py-2 text-sm hover:bg-slate-50 dark:hover:bg-white/5 flex items-center gap-2">🇦🇴 Português</button>
-                            <button onclick="changeLanguage('en')" class="w-full text-left px-4 py-2 text-sm hover:bg-slate-50 dark:hover:bg-white/5 flex items-center gap-2">🇺🇸 English</button>
-                            <button onclick="changeLanguage('fr')" class="w-full text-left px-4 py-2 text-sm hover:bg-slate-50 dark:hover:bg-white/5 flex items-center gap-2">🇫🇷 Français</button>
+                        <div class="absolute right-0 top-full mt-2 w-32 py-2 bg-white dark:bg-dark-surface rounded-xl shadow-xl border border-slate-100 dark:border-white/10 opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all scale-95 group-hover:scale-100">
+                            <button onclick="changeLanguage('pt')" class="w-full text-left px-4 py-2 text-sm hover:bg-slate-50 dark:hover:bg-white/5">🇦🇴 Português</button>
+                            <button onclick="changeLanguage('en')" class="w-full text-left px-4 py-2 text-sm hover:bg-slate-50 dark:hover:bg-white/5">🇺🇸 English</button>
+                            <button onclick="changeLanguage('fr')" class="w-full text-left px-4 py-2 text-sm hover:bg-slate-50 dark:hover:bg-white/5">🇫🇷 Français</button>
                         </div>
                     </div>
-
-                    <!-- Theme Toggle -->
-                    <button id="theme-toggle" class="w-9 h-9 rounded-full bg-slate-100 dark:bg-white/10 flex items-center justify-center text-brand-600 dark:text-brand-400 transition-all hover:scale-110">
+                    <!-- Theme -->
+                    <button id="theme-toggle" class="w-9 h-9 rounded-full bg-slate-100 dark:bg-white/10 flex items-center justify-center text-brand-600 dark:text-brand-400 hover:scale-110 transition-transform">
                         <i class="ph-fill ph-sun hidden dark:block text-lg"></i>
                         <i class="ph-fill ph-moon dark:hidden text-lg"></i>
                     </button>
-
-                    <div class="h-6 w-px bg-slate-200 dark:bg-white/10 mx-1"></div>
-
                     <!-- CTA -->
-                    <a href="#download" data-i18n="nav_download" class="relative overflow-hidden group px-6 py-2.5 rounded-full font-bold text-sm text-white bg-slate-900 dark:bg-white dark:text-slate-900 transition-all shadow-lg hover:shadow-xl hover:-translate-y-0.5">
-                        <span class="relative z-10">Baixar Agora</span>
-                        <div class="absolute inset-0 h-full w-full bg-gradient-to-r from-brand-500 to-brand-600 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+                    <a href="#download" class="ml-2 px-6 py-2.5 rounded-full font-bold text-sm text-white bg-slate-900 dark:bg-white dark:text-slate-900 transition-all shadow-lg hover:shadow-xl hover:-translate-y-0.5">
+                        Baixar Agora
                     </a>
                 </div>
 
-                <!-- MOBILE SIDEBAR TOGGLE BUTTON (Novo Design) -->
-                <button id="sidebar-toggle-btn" class="lg:hidden relative z-50 w-10 h-10 flex items-center justify-center rounded-xl bg-slate-100 dark:bg-white/10 text-slate-900 dark:text-white hover:bg-brand-500 hover:text-white transition-all shadow-md group">
-                    <i class="ph-bold ph-squares-four text-xl transition-transform duration-300 group-hover:rotate-90"></i>
+                <!-- MOBILE TOGGLE (SIDEBAR BUTTON) -->
+                <button id="sidebar-toggle-btn" class="lg:hidden w-10 h-10 flex items-center justify-center rounded-xl bg-slate-100 dark:bg-white/10 text-slate-900 dark:text-white hover:bg-brand-500 hover:text-white transition-colors">
+                    <i class="ph-bold ph-squares-four text-xl"></i>
                 </button>
             </div>
         </div>
     </nav>
 
     <!-- SIDEBAR NAVIGATION (OFF-CANVAS) -->
-    <div id="sidebar-overlay" class="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm opacity-0 invisible transition-all duration-500"></div>
+    <div id="sidebar-overlay" class="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm opacity-0 invisible transition-all duration-500"></div>
     <aside id="sidebar-menu" class="fixed top-0 right-0 bottom-0 w-[300px] z-[60] sidebar-glass translate-x-full transition-transform duration-500 shadow-2xl flex flex-col">
-        <!-- Sidebar Header -->
         <div class="h-24 flex items-center justify-between px-6 border-b border-slate-100 dark:border-white/10">
             <span class="font-bold text-xl text-slate-900 dark:text-white">Menu</span>
-            <button id="sidebar-close-btn" class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-100 dark:bg-white/10 hover:rotate-90 transition-transform">
+            <button id="sidebar-close-btn" class="w-8 h-8 flex items-center justify-center rounded-full bg-slate-100 dark:bg-white/10 hover:bg-red-500 hover:text-white transition-colors">
                 <i class="ph-bold ph-x text-lg"></i>
             </button>
         </div>
-
-        <!-- Sidebar Links -->
         <div class="flex-1 overflow-y-auto py-8 px-6 space-y-6">
-            <div class="flex flex-col gap-4">
-                <a href="#features" onclick="toggleSidebar()" class="text-lg font-semibold text-slate-600 dark:text-slate-300 hover:text-brand-500 dark:hover:text-brand-400 hover:pl-2 transition-all">Funcionalidades</a>
-                <a href="#safety" onclick="toggleSidebar()" class="text-lg font-semibold text-slate-600 dark:text-slate-300 hover:text-brand-500 dark:hover:text-brand-400 hover:pl-2 transition-all">Segurança</a>
-                <a href="#partners" onclick="toggleSidebar()" class="text-lg font-semibold text-slate-600 dark:text-slate-300 hover:text-brand-500 dark:hover:text-brand-400 hover:pl-2 transition-all">Parceiros</a>
-            </div>
-
+            <nav class="flex flex-col gap-4">
+                <a href="#features" onclick="toggleSidebar()" class="text-lg font-semibold text-slate-600 dark:text-slate-300 hover:text-brand-500 hover:pl-2 transition-all">Funcionalidades</a>
+                <a href="#safety" onclick="toggleSidebar()" class="text-lg font-semibold text-slate-600 dark:text-slate-300 hover:text-brand-500 hover:pl-2 transition-all">Segurança</a>
+                <a href="#partners" onclick="toggleSidebar()" class="text-lg font-semibold text-slate-600 dark:text-slate-300 hover:text-brand-500 hover:pl-2 transition-all">Parceiros</a>
+            </nav>
             <div class="h-px w-full bg-slate-200 dark:bg-white/10"></div>
-
-            <!-- Settings in Sidebar -->
             <div class="space-y-4">
-                <p class="text-xs font-bold uppercase text-slate-400 tracking-widest">Configurações</p>
-                
-                <!-- Dark Mode -->
+                <p class="text-xs font-bold uppercase text-slate-400 tracking-widest">Aparência</p>
                 <div class="flex items-center justify-between p-3 rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-100 dark:border-white/5">
-                    <span class="text-sm font-medium">Tema Escuro</span>
-                    <button id="sidebar-theme-toggle" class="w-10 h-6 rounded-full bg-slate-300 dark:bg-brand-600 relative transition-colors">
+                    <span class="text-sm font-medium">Modo Escuro</span>
+                    <button id="sidebar-theme-toggle" class="relative w-10 h-6 rounded-full bg-slate-300 dark:bg-brand-600 transition-colors">
                         <div class="absolute top-1 left-1 dark:left-5 w-4 h-4 bg-white rounded-full transition-all duration-300 shadow-sm"></div>
                     </button>
                 </div>
-
-                <!-- Languages -->
                 <div class="grid grid-cols-3 gap-2">
-                    <button onclick="changeLanguage('pt')" class="flex flex-col items-center justify-center p-2 rounded-lg bg-slate-50 dark:bg-white/5 hover:bg-brand-100 dark:hover:bg-brand-900/30 border border-transparent hover:border-brand-500 transition-all">
-                        <span class="text-xl">🇦🇴</span>
-                        <span class="text-[10px] font-bold mt-1">PT</span>
-                    </button>
-                    <button onclick="changeLanguage('en')" class="flex flex-col items-center justify-center p-2 rounded-lg bg-slate-50 dark:bg-white/5 hover:bg-brand-100 dark:hover:bg-brand-900/30 border border-transparent hover:border-brand-500 transition-all">
-                        <span class="text-xl">🇺🇸</span>
-                        <span class="text-[10px] font-bold mt-1">EN</span>
-                    </button>
-                    <button onclick="changeLanguage('fr')" class="flex flex-col items-center justify-center p-2 rounded-lg bg-slate-50 dark:bg-white/5 hover:bg-brand-100 dark:hover:bg-brand-900/30 border border-transparent hover:border-brand-500 transition-all">
-                        <span class="text-xl">🇫🇷</span>
-                        <span class="text-[10px] font-bold mt-1">FR</span>
-                    </button>
+                    <button onclick="changeLanguage('pt')" class="p-2 rounded-lg bg-slate-50 dark:bg-white/5 hover:border-brand-500 border border-transparent transition-all"><span class="text-xl">🇦🇴</span></button>
+                    <button onclick="changeLanguage('en')" class="p-2 rounded-lg bg-slate-50 dark:bg-white/5 hover:border-brand-500 border border-transparent transition-all"><span class="text-xl">🇺🇸</span></button>
+                    <button onclick="changeLanguage('fr')" class="p-2 rounded-lg bg-slate-50 dark:bg-white/5 hover:border-brand-500 border border-transparent transition-all"><span class="text-xl">🇫🇷</span></button>
                 </div>
             </div>
         </div>
-
-        <!-- Sidebar Footer -->
         <div class="p-6 border-t border-slate-100 dark:border-white/10">
-            <a href="#download" onclick="toggleSidebar()" class="flex items-center justify-center w-full py-4 bg-gradient-to-r from-brand-600 to-brand-500 text-white rounded-xl font-bold text-base shadow-lg shadow-brand-500/30 active:scale-95 transition-transform">
-                Baixar Aplicativo
-            </a>
+            <a href="#download" onclick="toggleSidebar()" class="flex items-center justify-center w-full py-4 bg-brand-600 text-white rounded-xl font-bold shadow-lg shadow-brand-500/30">Baixar App</a>
         </div>
     </aside>
 
-    <!-- HERO SECTION SLIDER (CARROUSEL) -->
-    <main class="relative pt-32 pb-20 lg:pt-48 lg:pb-32 overflow-hidden h-auto min-h-[850px] lg:min-h-[800px] flex items-center">
+    <!-- HERO SECTION SLIDER (CORRIGIDO E PREMIUM) -->
+    <main class="relative w-full h-screen min-h-[700px] lg:min-h-[850px] overflow-hidden bg-slate-50 dark:bg-dark-bg">
         
-        <!-- SLIDES CONTAINER -->
-        <div id="hero-slider" class="absolute inset-0 w-full h-full z-0">
-            
-            <!-- SLIDE 1: APP GERAL -->
-            <div class="slide active flex items-center justify-center w-full h-full" data-index="0">
-                <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 w-full h-full flex flex-col lg:flex-row items-center gap-12">
-                    <!-- Text -->
-                    <div class="flex-1 text-center lg:text-left z-10">
-                        <div class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-brand-50 dark:bg-brand-900/20 border border-brand-200 dark:border-brand-500/30 text-brand-700 dark:text-brand-400 text-xs font-bold uppercase tracking-widest mb-8">
-                            <span class="relative flex h-2 w-2">
-                                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand-400 opacity-75"></span>
-                                <span class="relative inline-flex rounded-full h-2 w-2 bg-brand-500"></span>
-                            </span>
-                            <span>Super App #1 de Angola</span>
+        <!-- Slider Container -->
+        <div id="hero-slider" class="relative w-full h-full">
+
+            <!-- SLIDE 1: APLICATIVO GERAL -->
+            <div class="slide active w-full h-full flex items-center justify-center" data-index="0">
+                <div class="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 h-full flex flex-col-reverse lg:flex-row items-center justify-center lg:justify-between gap-8 lg:gap-16 pt-20 pb-10">
+                    
+                    <!-- Content -->
+                    <div class="slide-content flex-1 text-center lg:text-left z-10 max-w-2xl">
+                        <div class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-brand-100 dark:bg-brand-900/30 text-brand-700 dark:text-brand-400 text-xs font-bold uppercase tracking-widest mb-6">
+                            <span class="w-2 h-2 rounded-full bg-brand-500 animate-pulse"></span>
+                            App #1 de Angola
                         </div>
-                        <h1 class="text-5xl sm:text-6xl lg:text-7xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-[1.1] mb-6">
+                        <h1 class="text-4xl sm:text-5xl lg:text-7xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-[1.1] mb-6">
                             O Futuro da <br> <span class="text-gradient-gold">Mobilidade Urbana</span>
                         </h1>
-                        <p class="text-lg sm:text-xl text-slate-600 dark:text-slate-400 mb-10 max-w-lg mx-auto lg:mx-0 leading-relaxed">
-                            Uma plataforma completa que conecta você ao seu destino. Carros, motos e entregas em um só lugar.
+                        <p class="text-lg text-slate-600 dark:text-slate-400 mb-8 max-w-lg mx-auto lg:mx-0">
+                            Transforme sua forma de se mover. Carros, motos e encomendas em um único aplicativo inteligente.
                         </p>
-                        <div class="flex flex-col sm:flex-row gap-4 w-full sm:w-auto justify-center lg:justify-start">
-                            <a href="#download" class="px-8 py-4 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-full font-bold shadow-lg hover:-translate-y-1 transition-all">Começar Agora</a>
+                        <div class="flex flex-col sm:flex-row gap-4 justify-center lg:justify-start">
+                            <a href="#download" class="px-8 py-4 bg-slate-900 dark:bg-white text-white dark:text-slate-900 rounded-full font-bold shadow-lg hover:-translate-y-1 transition-all">Baixar Agora</a>
                         </div>
                     </div>
-                    <!-- 3D Image (App/Phone) -->
-                    <div class="flex-1 flex justify-center items-center relative h-[500px]">
-                        <img src="assets/images/avatar1.png" alt="3D Location" class="w-[80%] lg:w-[100%] object-contain animate-float-medium drop-shadow-2xl">
+
+                    <!-- Visual (3D) -->
+                    <div class="slide-image flex-1 w-full max-w-[300px] sm:max-w-[400px] lg:max-w-none flex justify-center items-center h-[40vh] lg:h-auto relative">
+                        <!-- Círculos decorativos atrás -->
+                        <div class="absolute inset-0 bg-gradient-radial from-brand-500/20 to-transparent blur-3xl opacity-50"></div>
+                        <img src="assets/images/avatar1.png" onerror="this.src='https://cdn3d.iconscout.com/3d/premium/thumb/smartphone-navigation-4963365-4159001.png'" class="w-full h-full object-contain drop-shadow-2xl" alt="App Navigation">
                     </div>
                 </div>
             </div>
 
-            <!-- SLIDE 2: MOTO / ENTREGAS -->
-            <div class="slide flex items-center justify-center w-full h-full" data-index="1">
-                <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 w-full h-full flex flex-col lg:flex-row items-center gap-12">
-                    <!-- Text -->
-                    <div class="flex-1 text-center lg:text-left z-10">
-                        <div class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-500/30 text-blue-700 dark:text-blue-400 text-xs font-bold uppercase tracking-widest mb-8">
-                            <i class="ph-fill ph-package"></i>
-                            <span>Delivery Express</span>
+            <!-- SLIDE 2: ENTREGAS (MOTO) -->
+            <div class="slide w-full h-full flex items-center justify-center" data-index="1">
+                <div class="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 h-full flex flex-col-reverse lg:flex-row items-center justify-center lg:justify-between gap-8 lg:gap-16 pt-20 pb-10">
+                    
+                    <div class="slide-content flex-1 text-center lg:text-left z-10 max-w-2xl">
+                        <div class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 text-xs font-bold uppercase tracking-widest mb-6">
+                            <i class="ph-fill ph-package"></i> Delivery Express
                         </div>
-                        <h1 class="text-5xl sm:text-6xl lg:text-7xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-[1.1] mb-6">
+                        <h1 class="text-4xl sm:text-5xl lg:text-7xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-[1.1] mb-6">
                             Entregas <br> <span class="text-transparent bg-clip-text bg-gradient-to-r from-blue-500 to-cyan-400">Relâmpago</span>
                         </h1>
-                        <p class="text-lg sm:text-xl text-slate-600 dark:text-slate-400 mb-10 max-w-lg mx-auto lg:mx-0 leading-relaxed">
-                            Precisa enviar algo rápido? Nossos motorizados parceiros cruzam a cidade em tempo recorde para entregar sua encomenda.
+                        <p class="text-lg text-slate-600 dark:text-slate-400 mb-8 max-w-lg mx-auto lg:mx-0">
+                            Envie encomendas para qualquer lugar da cidade. Nossos motorizados parceiros garantem rapidez e segurança.
                         </p>
-                        <div class="flex flex-col sm:flex-row gap-4 w-full sm:w-auto justify-center lg:justify-start">
+                        <div class="flex flex-col sm:flex-row gap-4 justify-center lg:justify-start">
                             <a href="#download" class="px-8 py-4 bg-blue-600 text-white rounded-full font-bold shadow-lg shadow-blue-500/30 hover:-translate-y-1 transition-all">Pedir Entrega</a>
                         </div>
                     </div>
-                    <!-- 3D Image (Scooter/Delivery) -->
-                    <div class="flex-1 flex justify-center items-center relative h-[500px]">
-                        <img src="assets/images/avatar2.png" alt="3D Scooter" class="w-[80%] lg:w-[100%] object-contain animate-float-fast drop-shadow-2xl">
+
+                    <div class="slide-image flex-1 w-full max-w-[300px] sm:max-w-[400px] lg:max-w-none flex justify-center items-center h-[40vh] lg:h-auto relative">
+                        <div class="absolute inset-0 bg-gradient-radial from-blue-500/20 to-transparent blur-3xl opacity-50"></div>
+                        <img src="assets/images/avatar2.png" onerror="this.src='https://cdn3d.iconscout.com/3d/premium/thumb/scooter-delivery-4861343-4051666.png'" class="w-full h-full object-contain drop-shadow-2xl transform scale-110" alt="Moto Delivery">
                     </div>
                 </div>
             </div>
 
-            <!-- SLIDE 3: CARRO / CORRIDAS -->
-            <div class="slide flex items-center justify-center w-full h-full" data-index="2">
-                <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 w-full h-full flex flex-col lg:flex-row items-center gap-12">
-                    <!-- Text -->
-                    <div class="flex-1 text-center lg:text-left z-10">
-                        <div class="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-500/30 text-green-700 dark:text-green-400 text-xs font-bold uppercase tracking-widest mb-8">
-                            <i class="ph-fill ph-car"></i>
-                            <span>Conforto & Segurança</span>
+            <!-- SLIDE 3: CORRIDAS (CARRO) -->
+            <div class="slide w-full h-full flex items-center justify-center" data-index="2">
+                <div class="max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 h-full flex flex-col-reverse lg:flex-row items-center justify-center lg:justify-between gap-8 lg:gap-16 pt-20 pb-10">
+                    
+                    <div class="slide-content flex-1 text-center lg:text-left z-10 max-w-2xl">
+                        <div class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-xs font-bold uppercase tracking-widest mb-6">
+                            <i class="ph-fill ph-car"></i> Conforto VIP
                         </div>
-                        <h1 class="text-5xl sm:text-6xl lg:text-7xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-[1.1] mb-6">
-                            Viagens <br> <span class="text-transparent bg-clip-text bg-gradient-to-r from-green-500 to-emerald-400">Premium</span>
+                        <h1 class="text-4xl sm:text-5xl lg:text-7xl font-extrabold tracking-tight text-slate-900 dark:text-white leading-[1.1] mb-6">
+                            Viaje com <br> <span class="text-transparent bg-clip-text bg-gradient-to-r from-green-500 to-emerald-400">Exclusividade</span>
                         </h1>
-                        <p class="text-lg sm:text-xl text-slate-600 dark:text-slate-400 mb-10 max-w-lg mx-auto lg:mx-0 leading-relaxed">
-                            Carros modernos, ar-condicionado e motoristas verificados. A melhor experiência de viagem de Angola.
+                        <p class="text-lg text-slate-600 dark:text-slate-400 mb-8 max-w-lg mx-auto lg:mx-0">
+                            Carros modernos, ar-condicionado e os melhores motoristas de Luanda. Chegue ao seu destino relaxado.
                         </p>
-                        <div class="flex flex-col sm:flex-row gap-4 w-full sm:w-auto justify-center lg:justify-start">
-                            <a href="#download" class="px-8 py-4 bg-green-600 text-white rounded-full font-bold shadow-lg shadow-green-500/30 hover:-translate-y-1 transition-all">Solicitar Carro</a>
+                        <div class="flex flex-col sm:flex-row gap-4 justify-center lg:justify-start">
+                            <a href="#download" class="px-8 py-4 bg-green-600 text-white rounded-full font-bold shadow-lg shadow-green-500/30 hover:-translate-y-1 transition-all">Chamar Carro</a>
                         </div>
                     </div>
-                    <!-- 3D Image (Car) -->
-                    <div class="flex-1 flex justify-center items-center relative h-[500px]">
-                        <img src="assets/images/avatar3.png" alt="3D Car" class="w-[80%] lg:w-[100%] object-contain animate-float-slow drop-shadow-2xl">
+
+                    <div class="slide-image flex-1 w-full max-w-[300px] sm:max-w-[400px] lg:max-w-none flex justify-center items-center h-[40vh] lg:h-auto relative">
+                        <div class="absolute inset-0 bg-gradient-radial from-green-500/20 to-transparent blur-3xl opacity-50"></div>
+                        <img src="assets/images/avatar3.png" onerror="this.src='https://cdn3d.iconscout.com/3d/premium/thumb/taxi-4963363-4158999.png'" class="w-full h-full object-contain drop-shadow-2xl" alt="Car Travel">
                     </div>
                 </div>
             </div>
 
         </div>
 
-        <!-- SLIDER CONTROLS -->
-        <div class="absolute bottom-10 left-0 right-0 z-20 flex justify-center gap-3">
-            <button class="slide-dot w-3 h-3 rounded-full bg-slate-300 dark:bg-white/20 transition-all duration-300 hover:bg-brand-500 active-dot" onclick="goToSlide(0)"></button>
-            <button class="slide-dot w-3 h-3 rounded-full bg-slate-300 dark:bg-white/20 transition-all duration-300 hover:bg-brand-500" onclick="goToSlide(1)"></button>
-            <button class="slide-dot w-3 h-3 rounded-full bg-slate-300 dark:bg-white/20 transition-all duration-300 hover:bg-brand-500" onclick="goToSlide(2)"></button>
+        <!-- Slider Indicators -->
+        <div class="absolute bottom-8 lg:bottom-12 left-0 right-0 z-30 flex justify-center gap-3">
+            <button class="slide-dot w-3 h-3 rounded-full bg-slate-300 dark:bg-white/20 transition-all duration-300 hover:scale-125 hover:bg-brand-500" onclick="goToSlide(0)"></button>
+            <button class="slide-dot w-3 h-3 rounded-full bg-slate-300 dark:bg-white/20 transition-all duration-300 hover:scale-125 hover:bg-brand-500" onclick="goToSlide(1)"></button>
+            <button class="slide-dot w-3 h-3 rounded-full bg-slate-300 dark:bg-white/20 transition-all duration-300 hover:scale-125 hover:bg-brand-500" onclick="goToSlide(2)"></button>
         </div>
     </main>
 
-    <!-- LOGOS DOS PARCEIROS (Infinite Scroll) -->
+    <!-- LOGOS DOS PARCEIROS (Imagens Locais) -->
     <section id="partners" class="py-10 border-y border-slate-100 dark:border-white/5 bg-white/50 dark:bg-white/[0.02]">
         <p class="text-center text-xs font-bold uppercase text-slate-400 tracking-widest mb-8" data-i18n="partners_title">Confiam na AOTRAVEL</p>
         <div class="max-w-7xl mx-auto overflow-hidden relative mask-linear-fade">
-            <div class="flex gap-12 sm:gap-20 w-max animate-[marquee_30s_linear_infinite] items-center">
-                <!-- Logos -->
-                <i class="ph-fill ph-google-logo text-4xl text-slate-300 hover:text-slate-600 dark:hover:text-white transition-colors"></i>
-                <i class="ph-fill ph-apple-logo text-4xl text-slate-300 hover:text-slate-600 dark:hover:text-white transition-colors"></i>
-                <i class="ph-fill ph-amazon-logo text-4xl text-slate-300 hover:text-slate-600 dark:hover:text-white transition-colors"></i>
-                <i class="ph-fill ph-microsoft-logo text-4xl text-slate-300 hover:text-slate-600 dark:hover:text-white transition-colors"></i>
-                <i class="ph-fill ph-stripe-logo text-4xl text-slate-300 hover:text-slate-600 dark:hover:text-white transition-colors"></i>
-                <i class="ph-fill ph-uber-logo text-4xl text-slate-300 hover:text-slate-600 dark:hover:text-white transition-colors"></i>
-                <!-- Repeats -->
-                <i class="ph-fill ph-google-logo text-4xl text-slate-300 hover:text-slate-600 dark:hover:text-white transition-colors"></i>
-                <i class="ph-fill ph-apple-logo text-4xl text-slate-300 hover:text-slate-600 dark:hover:text-white transition-colors"></i>
-                <i class="ph-fill ph-amazon-logo text-4xl text-slate-300 hover:text-slate-600 dark:hover:text-white transition-colors"></i>
-                <i class="ph-fill ph-microsoft-logo text-4xl text-slate-300 hover:text-slate-600 dark:hover:text-white transition-colors"></i>
-                <i class="ph-fill ph-stripe-logo text-4xl text-slate-300 hover:text-slate-600 dark:hover:text-white transition-colors"></i>
-                <i class="ph-fill ph-uber-logo text-4xl text-slate-300 hover:text-slate-600 dark:hover:text-white transition-colors"></i>
+            <div class="flex gap-12 sm:gap-20 w-max animate-marquee items-center">
+                <!-- Logos (Imagens Reais solicitadas) -->
+                <!-- Nota: Como são arquivos locais, adicionei um fallback em JS caso a imagem não carregue para não ficar quebrado -->
+                <img src="assets/images/parceiro.png" alt="Parceiro 1" class="h-10 opacity-60 hover:opacity-100 transition-opacity grayscale hover:grayscale-0">
+                <img src="assets/images/parceiro1.png" alt="Parceiro 2" class="h-10 opacity-60 hover:opacity-100 transition-opacity grayscale hover:grayscale-0">
+                <img src="assets/images/parceiro.png" alt="Parceiro 3" class="h-10 opacity-60 hover:opacity-100 transition-opacity grayscale hover:grayscale-0">
+                <img src="assets/images/parceiro1.png" alt="Parceiro 4" class="h-10 opacity-60 hover:opacity-100 transition-opacity grayscale hover:grayscale-0">
+                <img src="assets/images/parceiro.png" alt="Parceiro 5" class="h-10 opacity-60 hover:opacity-100 transition-opacity grayscale hover:grayscale-0">
+                <img src="assets/images/parceiro1.png" alt="Parceiro 6" class="h-10 opacity-60 hover:opacity-100 transition-opacity grayscale hover:grayscale-0">
+                <img src="assets/images/parceiro.png" alt="Parceiro 7" class="h-10 opacity-60 hover:opacity-100 transition-opacity grayscale hover:grayscale-0">
+                <img src="assets/images/parceiro1.png" alt="Parceiro 8" class="h-10 opacity-60 hover:opacity-100 transition-opacity grayscale hover:grayscale-0">
+                
+                <!-- Duplicação para Loop Infinito -->
+                <img src="assets/images/parceiro.png" alt="Parceiro 1" class="h-10 opacity-60 hover:opacity-100 transition-opacity grayscale hover:grayscale-0">
+                <img src="assets/images/parceiro1.png" alt="Parceiro 2" class="h-10 opacity-60 hover:opacity-100 transition-opacity grayscale hover:grayscale-0">
+                <img src="assets/images/parceiro.png" alt="Parceiro 3" class="h-10 opacity-60 hover:opacity-100 transition-opacity grayscale hover:grayscale-0">
+                <img src="assets/images/parceiro1.png" alt="Parceiro 4" class="h-10 opacity-60 hover:opacity-100 transition-opacity grayscale hover:grayscale-0">
+                <img src="assets/images/parceiro.png" alt="Parceiro 5" class="h-10 opacity-60 hover:opacity-100 transition-opacity grayscale hover:grayscale-0">
+                <img src="assets/images/parceiro1.png" alt="Parceiro 6" class="h-10 opacity-60 hover:opacity-100 transition-opacity grayscale hover:grayscale-0">
+                <img src="assets/images/parceiro.png" alt="Parceiro 7" class="h-10 opacity-60 hover:opacity-100 transition-opacity grayscale hover:grayscale-0">
+                <img src="assets/images/parceiro1.png" alt="Parceiro 8" class="h-10 opacity-60 hover:opacity-100 transition-opacity grayscale hover:grayscale-0">
             </div>
         </div>
     </section>
 
-    <!-- FUNCIONALIDADES (Grid Bento) -->
+    <!-- FEATURES BENTO GRID -->
     <section id="features" class="py-24 bg-white dark:bg-dark-bg relative">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div class="text-center max-w-3xl mx-auto mb-20 reveal-on-scroll">
@@ -459,20 +412,19 @@
                 <p class="text-slate-500 dark:text-slate-400 text-lg" data-i18n="features_desc">Tecnologia de ponta para motoristas e passageiros.</p>
             </div>
 
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
-                <!-- Card 1 -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6 lg:gap-8">
+                <!-- Card 1 (Large) -->
                 <div class="col-span-1 md:col-span-2 p-8 rounded-[32px] bg-slate-50 dark:bg-white/5 border border-slate-100 dark:border-white/5 hover:border-brand-500/30 transition-all group reveal-on-scroll">
                     <div class="flex flex-col md:flex-row items-center gap-8 h-full">
                         <div class="flex-1 text-center md:text-left">
-                            <div class="w-14 h-14 rounded-2xl bg-brand-100 dark:bg-brand-500/20 flex items-center justify-center text-brand-600 dark:text-brand-400 mb-6 mx-auto md:mx-0">
-                                <i class="ph-fill ph-map-trifold text-3xl"></i>
+                            <div class="w-12 h-12 rounded-xl bg-brand-100 dark:bg-brand-500/20 flex items-center justify-center text-brand-600 dark:text-brand-400 mb-6 mx-auto md:mx-0">
+                                <i class="ph-fill ph-map-trifold text-2xl"></i>
                             </div>
-                            <h3 class="text-2xl font-bold text-slate-900 dark:text-white mb-3" data-i18n="feat_1_title">Navegação Inteligente</h3>
-                            <p class="text-slate-500 dark:text-slate-400 leading-relaxed" data-i18n="feat_1_desc">Algoritmos que encontram sempre a rota mais rápida, fugindo do trânsito de Luanda em tempo real.</p>
+                            <h3 class="text-2xl font-bold text-slate-900 dark:text-white mb-3" data-i18n="feat_1_title">Rota Otimizada</h3>
+                            <p class="text-slate-500 dark:text-slate-400 leading-relaxed" data-i18n="feat_1_desc">Algoritmos que analisam o trânsito de Luanda em tempo real para encontrar sempre o caminho mais rápido.</p>
                         </div>
                         <div class="flex-1 relative h-48 w-full">
-                            <!-- Simulação de Mapa -->
-                            <div class="absolute inset-0 bg-slate-200 dark:bg-white/5 rounded-2xl overflow-hidden shadow-inner">
+                            <div class="absolute inset-0 bg-slate-200 dark:bg-white/5 rounded-2xl overflow-hidden shadow-inner group-hover:shadow-lg transition-all">
                                 <div class="absolute inset-0 bg-[url('https://upload.wikimedia.org/wikipedia/commons/e/ec/Map_of_Luanda.png')] bg-cover opacity-50 grayscale hover:grayscale-0 transition-all duration-700 mix-blend-multiply dark:mix-blend-luminosity"></div>
                                 <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 bg-brand-500 rounded-full border-4 border-white dark:border-dark-surface shadow-glow animate-pulse"></div>
                             </div>
@@ -480,13 +432,13 @@
                     </div>
                 </div>
 
-                <!-- Card 2 -->
+                <!-- Card 2 (Dark) -->
                 <div class="col-span-1 p-8 rounded-[32px] bg-slate-900 dark:bg-dark-surface border border-slate-800 dark:border-white/5 text-white shadow-2xl reveal-on-scroll delay-100">
-                    <div class="w-14 h-14 rounded-2xl bg-white/10 flex items-center justify-center text-brand-400 mb-6">
-                        <i class="ph-fill ph-wallet text-3xl"></i>
+                    <div class="w-12 h-12 rounded-xl bg-white/10 flex items-center justify-center text-brand-400 mb-6">
+                        <i class="ph-fill ph-wallet text-2xl"></i>
                     </div>
-                    <h3 class="text-2xl font-bold mb-3" data-i18n="feat_2_title">Pagamentos Fáceis</h3>
-                    <p class="text-slate-400 leading-relaxed mb-6" data-i18n="feat_2_desc">Aceitamos Multicaixa Express, Dinheiro e Carteira Digital AOTRAVEL.</p>
+                    <h3 class="text-2xl font-bold mb-3" data-i18n="feat_2_title">Pagamentos</h3>
+                    <p class="text-slate-400 leading-relaxed mb-6" data-i18n="feat_2_desc">Aceitamos Multicaixa, Dinheiro e Carteira Digital AOTRAVEL.</p>
                     <div class="flex -space-x-3">
                         <div class="w-10 h-10 rounded-full bg-white border-2 border-slate-900 flex items-center justify-center text-xs text-slate-900 font-bold">Kz</div>
                         <div class="w-10 h-10 rounded-full bg-brand-500 border-2 border-slate-900 flex items-center justify-center text-white"><i class="ph-bold ph-credit-card"></i></div>
@@ -495,61 +447,59 @@
 
                 <!-- Card 3 -->
                 <div class="col-span-1 p-8 rounded-[32px] bg-slate-50 dark:bg-white/5 border border-slate-100 dark:border-white/5 hover:border-brand-500/30 transition-all reveal-on-scroll delay-200">
-                    <div class="w-14 h-14 rounded-2xl bg-blue-100 dark:bg-blue-500/20 flex items-center justify-center text-blue-600 dark:text-blue-400 mb-6">
-                        <i class="ph-fill ph-shield-check text-3xl"></i>
+                    <div class="w-12 h-12 rounded-xl bg-blue-100 dark:bg-blue-500/20 flex items-center justify-center text-blue-600 dark:text-blue-400 mb-6">
+                        <i class="ph-fill ph-shield-check text-2xl"></i>
                     </div>
                     <h3 class="text-xl font-bold text-slate-900 dark:text-white mb-3" data-i18n="feat_3_title">Segurança 24/7</h3>
-                    <p class="text-slate-500 dark:text-slate-400 text-sm leading-relaxed" data-i18n="feat_3_desc">Monitoramento em tempo real e botão de pânico integrado com a polícia.</p>
+                    <p class="text-slate-500 dark:text-slate-400 text-sm leading-relaxed" data-i18n="feat_3_desc">Monitoramento em tempo real, reconhecimento facial e botão SOS.</p>
                 </div>
 
-                <!-- Card 4 -->
-                <div class="col-span-1 md:col-span-2 p-8 rounded-[32px] bg-gradient-to-br from-brand-500 to-orange-600 text-white shadow-lg shadow-orange-500/20 reveal-on-scroll delay-300">
-                    <div class="flex flex-col sm:flex-row items-center justify-between gap-6">
+                <!-- Card 4 (Driver CTA) -->
+                <div class="col-span-1 md:col-span-2 p-8 rounded-[32px] bg-gradient-to-br from-brand-500 to-orange-600 text-white shadow-lg shadow-orange-500/20 reveal-on-scroll delay-300 relative overflow-hidden">
+                    <div class="flex flex-col sm:flex-row items-center justify-between gap-6 relative z-10">
                         <div>
                             <h3 class="text-2xl font-bold mb-2" data-i18n="feat_4_title">Seja um Motorista</h3>
-                            <p class="text-orange-100 mb-6 max-w-sm" data-i18n="feat_4_desc">Faça seu horário. Lucre mais com as taxas mais baixas do mercado.</p>
+                            <p class="text-orange-100 mb-6 max-w-sm" data-i18n="feat_4_desc">Faça seu próprio horário. Lucre mais com as menores taxas do mercado angolano.</p>
                             <button class="px-6 py-2 bg-white text-orange-600 rounded-full font-bold text-sm hover:bg-orange-50 transition-colors">
                                 Cadastrar Veículo
                             </button>
                         </div>
-                        <img src="assets/images/avatar1.png" onerror="this.src='https://cdn3d.iconscout.com/3d/premium/thumb/driver-avatar-6299541-5187873.png'" class="w-40 h-40 object-contain drop-shadow-xl animate-float-medium" alt="Driver">
+                        <img src="assets/images/avatar1.png" onerror="this.src='https://cdn3d.iconscout.com/3d/premium/thumb/driver-avatar-6299541-5187873.png'" class="w-32 h-32 object-contain drop-shadow-xl" alt="Driver">
                     </div>
+                    <!-- Pattern -->
+                    <div class="absolute right-0 top-0 w-64 h-64 bg-white/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2"></div>
                 </div>
             </div>
         </div>
     </section>
 
-    <!-- DOWNLOAD SECTION (CTA) -->
+    <!-- DOWNLOAD SECTION -->
     <section id="download" class="py-20 px-4">
-        <div class="max-w-6xl mx-auto relative rounded-[40px] overflow-hidden shadow-2xl reveal-on-scroll">
-            
-            <!-- Background Complexo -->
+        <div class="max-w-6xl mx-auto relative rounded-[48px] overflow-hidden shadow-2xl reveal-on-scroll">
             <div class="absolute inset-0 bg-[#020617]"></div>
             <div class="absolute inset-0 bg-gradient-to-r from-brand-600/80 via-brand-900/80 to-slate-900/90"></div>
-            <!-- Textura -->
             <div class="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-10 mix-blend-overlay"></div>
             
             <div class="relative z-10 grid grid-cols-1 lg:grid-cols-2 items-center gap-12 p-10 sm:p-20">
                 <div class="text-center lg:text-left">
                     <h2 class="text-3xl sm:text-5xl font-extrabold text-white mb-6 tracking-tight leading-tight" data-i18n="download_title">
-                        Pronto para mudar <br> a sua jornada?
+                        Sua jornada começa <br> com um toque.
                     </h2>
                     <p class="text-brand-100 text-lg mb-10 max-w-md mx-auto lg:mx-0" data-i18n="download_desc">
                         Baixe agora o AOTRAVEL. Disponível para Android e iOS. Leve, rápido e seguro.
                     </p>
 
                     <div class="flex flex-col sm:flex-row items-center gap-4 justify-center lg:justify-start">
-                        <!-- Google Play -->
-                        <a href="https://github.com/devitachiui22/aotravel/releases/download/v1.0.0/Aotravel.apk" download class="group flex items-center gap-3 bg-slate-950 border border-slate-700 hover:border-brand-500 rounded-xl px-5 py-3 transition-all hover:-translate-y-1">
+                        <!-- Play Store -->
+                        <a href="#" class="flex items-center gap-3 bg-slate-950 border border-slate-700 hover:border-brand-500 rounded-xl px-5 py-3 transition-all hover:-translate-y-1 w-full sm:w-auto justify-center sm:justify-start">
                             <img src="https://upload.wikimedia.org/wikipedia/commons/d/d0/Google_Play_Arrow_logo.svg" class="w-8 h-8" alt="Play Store">
                             <div class="text-left">
                                 <div class="text-[10px] uppercase text-slate-400 font-bold">Disponível no</div>
                                 <div class="text-white font-bold text-lg leading-none">Google Play</div>
                             </div>
                         </a>
-                        
                         <!-- App Store -->
-                        <a href="https://github.com/devitachiui22/aotravel/releases/download/v1.0.0/Aotravel.apk" download class="group flex items-center gap-3 bg-white hover:bg-slate-50 rounded-xl px-5 py-3 transition-all hover:-translate-y-1 text-slate-900">
+                        <a href="#" class="flex items-center gap-3 bg-white hover:bg-slate-50 rounded-xl px-5 py-3 transition-all hover:-translate-y-1 text-slate-900 w-full sm:w-auto justify-center sm:justify-start">
                             <i class="ph-fill ph-apple-logo text-3xl"></i>
                             <div class="text-left">
                                 <div class="text-[10px] uppercase text-slate-500 font-bold">Baixar na</div>
@@ -559,156 +509,102 @@
                     </div>
                 </div>
 
-                <!-- Mockup de Celular -->
-            <div class="relative flex justify-center lg:justify-end group">
-                
-                <!-- Glow (Luz de fundo) -->
-                <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[300px] h-[500px] bg-brand-500/30 blur-[80px] rounded-full -z-10 animate-pulse"></div>
-
-                <!-- O Dispositivo (Chassi) -->
-                <div class="relative z-10 w-[280px] h-[580px] bg-slate-950 rounded-[45px] border-[8px] border-slate-800 shadow-2xl overflow-hidden rotate-[-6deg] group-hover:rotate-0 transition-transform duration-700 ease-[cubic-bezier(0.23,1,0.32,1)] ring-1 ring-white/10">
-                    
-                    <!-- Câmera / Notch (Detalhe visual) -->
-                    <div class="absolute top-0 left-1/2 -translate-x-1/2 h-[25px] w-[120px] bg-slate-950 rounded-b-xl z-20 flex items-center justify-center gap-2">
-                        <div class="w-16 h-4 bg-slate-900/50 rounded-full"></div>
+                <!-- Phone Mockup -->
+                <div class="relative flex justify-center lg:justify-end">
+                    <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[300px] h-[500px] bg-brand-500/30 blur-[80px] rounded-full -z-10 animate-pulse"></div>
+                    <div class="relative z-10 w-[280px] h-[580px] bg-slate-950 rounded-[45px] border-[8px] border-slate-800 shadow-2xl overflow-hidden rotate-[-6deg] hover:rotate-0 transition-transform duration-700 ring-1 ring-white/10">
+                        <div class="absolute top-0 left-1/2 -translate-x-1/2 h-[25px] w-[120px] bg-slate-950 rounded-b-xl z-20"></div>
+                        <img src="assets/images/print.png" onerror="this.src='https://cdn.dribbble.com/users/1615584/screenshots/15710288/media/6c7a695e5d4f0a947065912ebdc9d482.jpg?resize=400x800'" alt="App Screen" class="w-full h-full object-cover">
+                        <div class="absolute inset-0 pointer-events-none bg-gradient-to-tr from-white/10 via-transparent to-transparent opacity-50 z-20"></div>
                     </div>
-
-                    <!-- A Imagem do Print (App Real) -->
-                    <img 
-                        src="assets/images/print.png" 
-                        onerror="this.src='https://cdn.dribbble.com/users/1615584/screenshots/15710288/media/6c7a695e5d4f0a947065912ebdc9d482.jpg?resize=400x800'" 
-                        alt="Tela do App AOTRAVEL" 
-                        class="w-full h-full object-cover bg-slate-900"
-                    >
-
-                    <!-- Reflexo de Vidro (Glass Reflection Overlay) -->
-                    <div class="absolute inset-0 pointer-events-none bg-gradient-to-tr from-white/5 via-transparent to-transparent opacity-50 z-20"></div>
                 </div>
-            </div>
             </div>
         </div>
     </section>
 
     <!-- FOOTER ULTRA MODERN -->
-    <footer class="bg-slate-950 text-white pt-20 pb-10 relative overflow-hidden">
-        
-        <!-- Big Text Watermark -->
-        <div class="absolute bottom-[-5%] left-1/2 -translate-x-1/2 text-[15vw] font-black text-white/[0.03] select-none pointer-events-none whitespace-nowrap">
+    <footer class="bg-slate-950 text-white pt-24 pb-12 relative overflow-hidden mt-12">
+        <!-- Watermark Big Text -->
+        <div class="absolute bottom-0 left-1/2 -translate-x-1/2 text-[18vw] font-black text-white/[0.02] select-none pointer-events-none whitespace-nowrap leading-none">
             AOTRAVEL
         </div>
 
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
-            
-            <!-- Top CTA -->
-            <div class="flex flex-col md:flex-row justify-between items-center pb-12 border-b border-white/10 mb-12 gap-8">
+            <div class="flex flex-col md:flex-row justify-between items-start md:items-center border-b border-white/10 pb-12 mb-12 gap-8">
                 <div>
-                    <h3 class="text-2xl font-bold mb-2">Pronto para começar?</h3>
-                    <p class="text-slate-400">Junte-se a milhares de angolanos que já usam AOTRAVEL.</p>
+                    <h3 class="text-2xl font-bold">Inove sua mobilidade</h3>
+                    <p class="text-slate-400 mt-1">Junte-se a milhares de angolanos que confiam na AOTRAVEL.</p>
                 </div>
                 <div class="flex gap-4">
-                    <a href="#download" class="px-6 py-3 bg-brand-500 hover:bg-brand-400 text-white font-bold rounded-lg transition-colors">Passageiro</a>
-                    <a href="#download" class="px-6 py-3 bg-white/10 hover:bg-white/20 text-white font-bold rounded-lg transition-colors">Motorista</a>
+                    <button class="px-6 py-3 bg-brand-500 hover:bg-brand-400 text-white font-bold rounded-lg transition-colors">Passageiro</button>
+                    <button class="px-6 py-3 bg-white/10 hover:bg-white/20 text-white font-bold rounded-lg transition-colors">Motorista</button>
                 </div>
             </div>
 
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-12 mb-16">
-                
-                <!-- Brand Info -->
-                <div class="lg:col-span-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-12 mb-16">
+                <!-- Brand -->
+                <div>
                     <div class="flex items-center gap-2 mb-6">
-                        <div class="w-10 h-10 bg-brand-500 rounded-lg flex items-center justify-center text-white text-xl">
-                            <i class="ph-fill ph-paper-plane-tilt"></i>
-                        </div>
+                        <div class="w-10 h-10 bg-brand-500 rounded-lg flex items-center justify-center text-white text-xl"><i class="ph-fill ph-paper-plane-tilt"></i></div>
                         <span class="font-bold text-2xl">AO<span class="text-brand-500">TRAVEL</span></span>
                     </div>
-                    <p class="text-sm text-slate-400 mb-8 leading-relaxed max-w-xs">
-                        Redefinindo a mobilidade urbana em Angola. Tecnologia segura, pagamentos fáceis e suporte 24h.
-                    </p>
-                    <div class="flex gap-4">
-                        <a href="#" class="w-10 h-10 flex items-center justify-center rounded-full bg-white/5 text-slate-400 hover:bg-brand-500 hover:text-white transition-all transform hover:scale-110">
-                            <i class="ph-fill ph-facebook-logo text-xl"></i>
-                        </a>
-                        <a href="#" class="w-10 h-10 flex items-center justify-center rounded-full bg-white/5 text-slate-400 hover:bg-brand-500 hover:text-white transition-all transform hover:scale-110">
-                            <i class="ph-fill ph-instagram-logo text-xl"></i>
-                        </a>
-                        <a href="#" class="w-10 h-10 flex items-center justify-center rounded-full bg-white/5 text-slate-400 hover:bg-brand-500 hover:text-white transition-all transform hover:scale-110">
-                            <i class="ph-fill ph-linkedin-logo text-xl"></i>
-                        </a>
+                    <p class="text-sm text-slate-400 mb-6 leading-relaxed">Conectando destinos, aproximando pessoas. A plataforma de mobilidade mais completa de Angola.</p>
+                    <div class="flex gap-3">
+                        <a href="#" class="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center hover:bg-brand-500 transition-colors"><i class="ph-fill ph-facebook-logo"></i></a>
+                        <a href="#" class="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center hover:bg-brand-500 transition-colors"><i class="ph-fill ph-instagram-logo"></i></a>
+                        <a href="#" class="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center hover:bg-brand-500 transition-colors"><i class="ph-fill ph-linkedin-logo"></i></a>
                     </div>
                 </div>
 
-                <!-- Links Grid -->
-                <div class="lg:col-span-2">
-                    <h4 class="font-bold text-white mb-6 uppercase text-sm tracking-wider">Empresa</h4>
-                    <ul class="space-y-4 text-sm text-slate-400">
+                <!-- Links 1 -->
+                <div>
+                    <h4 class="font-bold text-white mb-6">Empresa</h4>
+                    <ul class="space-y-3 text-sm text-slate-400">
                         <li><a href="#" class="hover:text-brand-500 transition-colors">Sobre Nós</a></li>
                         <li><a href="#" class="hover:text-brand-500 transition-colors">Carreiras</a></li>
-                        <li><a href="#" class="hover:text-brand-500 transition-colors">Notícias</a></li>
-                        <li><a href="#" class="hover:text-brand-500 transition-colors">Marca</a></li>
+                        <li><a href="#" class="hover:text-brand-500 transition-colors">Blog</a></li>
+                        <li><a href="#" class="hover:text-brand-500 transition-colors">Imprensa</a></li>
                     </ul>
                 </div>
 
-                <div class="lg:col-span-2">
-                    <h4 class="font-bold text-white mb-6 uppercase text-sm tracking-wider">Produto</h4>
-                    <ul class="space-y-4 text-sm text-slate-400">
-                        <li><a href="#" class="hover:text-brand-500 transition-colors">Para Passageiros</a></li>
-                        <li><a href="#" class="hover:text-brand-500 transition-colors">Para Motoristas</a></li>
-                        <li><a href="#" class="hover:text-brand-500 transition-colors">Para Empresas</a></li>
+                <!-- Links 2 -->
+                <div>
+                    <h4 class="font-bold text-white mb-6">Suporte</h4>
+                    <ul class="space-y-3 text-sm text-slate-400">
+                        <li><a href="#" class="hover:text-brand-500 transition-colors">Central de Ajuda</a></li>
                         <li><a href="#" class="hover:text-brand-500 transition-colors">Segurança</a></li>
+                        <li><a href="#" class="hover:text-brand-500 transition-colors">Termos de Uso</a></li>
+                        <li><a href="#" class="hover:text-brand-500 transition-colors">Privacidade</a></li>
                     </ul>
                 </div>
 
-                <!-- Contact Box -->
-                <div class="lg:col-span-4">
-                    <div class="bg-white/5 p-6 rounded-2xl border border-white/5 hover:border-brand-500/30 transition-colors">
-                        <h4 class="font-bold text-white mb-4">Contato Oficial</h4>
-                        <div class="space-y-4">
-                            <div class="flex items-center gap-3">
-                                <i class="ph-fill ph-envelope-simple text-brand-500 text-lg"></i>
-                                <a href="mailto:augustoneve22@gmail.com" class="text-sm text-slate-300 hover:text-white">augustoneve22@gmail.com</a>
-                            </div>
-                            <div class="flex items-center gap-3">
-                                <i class="ph-fill ph-phone text-brand-500 text-lg"></i>
-                                <a href="tel:+244927825820" class="text-sm text-slate-300 hover:text-white">+244 927 825 820</a>
-                            </div>
-                            <div class="flex items-center gap-3">
-                                <i class="ph-fill ph-map-pin text-brand-500 text-lg"></i>
-                                <span class="text-sm text-slate-300">Luanda, Angola</span>
-                            </div>
-                        </div>
-                    </div>
+                <!-- Contact -->
+                <div>
+                    <h4 class="font-bold text-white mb-6">Contato</h4>
+                    <ul class="space-y-4 text-sm text-slate-400">
+                        <li class="flex items-center gap-3"><i class="ph-fill ph-envelope-simple text-brand-500"></i> augustoneve22@gmail.com</li>
+                        <li class="flex items-center gap-3"><i class="ph-fill ph-phone text-brand-500"></i> +244 927 825 820</li>
+                        <li class="flex items-center gap-3"><i class="ph-fill ph-map-pin text-brand-500"></i> Luanda, Angola</li>
+                    </ul>
                 </div>
             </div>
 
             <div class="border-t border-white/10 pt-8 flex flex-col md:flex-row justify-between items-center gap-4">
                 <p class="text-xs text-slate-500">© 2026 AOTRAVEL. Todos os direitos reservados.</p>
-                
-                <div class="flex items-center gap-6">
-                    <a href="#" class="text-xs text-slate-500 hover:text-white transition-colors">Privacidade</a>
-                    <a href="#" class="text-xs text-slate-500 hover:text-white transition-colors">Termos</a>
-                    <div class="flex items-center gap-2 px-3 py-1 rounded-full bg-white/5 border border-white/10">
-                        <span class="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
-                        <span class="text-[10px] font-medium text-slate-300">Sistemas Operacionais</span>
-                    </div>
-                </div>
-                
-                <p class="text-xs text-slate-500">Dev by <span class="text-white font-semibold">Augusto Neves</span></p>
+                <p class="text-xs text-slate-500">Desenvolvido por <span class="text-white font-semibold">Augusto Neves</span></p>
             </div>
         </div>
     </footer>
 
-    <!-- LOGIC SCRIPTS -->
+    <!-- JAVASCRIPT LOGIC -->
     <script>
-        // === 1. Lógica Dark Mode (Sistema + Manual) ===
+        // === 1. THEME MANAGER ===
         const html = document.documentElement;
-        // Botão do Navbar
         const toggleBtn = document.getElementById('theme-toggle');
-        // Botão da Sidebar
         const sidebarToggleBtn = document.getElementById('sidebar-theme-toggle');
 
         function applyTheme() {
-            const isDark = localStorage.theme === 'dark' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches);
-            if (isDark) {
+            if (localStorage.theme === 'dark' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
                 html.classList.add('dark');
             } else {
                 html.classList.remove('dark');
@@ -724,7 +620,7 @@
         if(toggleBtn) toggleBtn.addEventListener('click', toggleTheme);
         if(sidebarToggleBtn) sidebarToggleBtn.addEventListener('click', toggleTheme);
 
-        // === 2. Sidebar Navigation (Off-Canvas) ===
+        // === 2. SIDEBAR MANAGER ===
         const sidebar = document.getElementById('sidebar-menu');
         const overlay = document.getElementById('sidebar-overlay');
         const openBtn = document.getElementById('sidebar-toggle-btn');
@@ -732,19 +628,16 @@
 
         function toggleSidebar() {
             const isOpen = !sidebar.classList.contains('translate-x-full');
-            
             if (isOpen) {
-                // Fechar
                 sidebar.classList.add('translate-x-full');
                 overlay.classList.remove('opacity-100', 'visible');
                 overlay.classList.add('opacity-0', 'invisible');
                 document.body.style.overflow = 'auto';
             } else {
-                // Abrir
                 sidebar.classList.remove('translate-x-full');
                 overlay.classList.remove('opacity-0', 'invisible');
                 overlay.classList.add('opacity-100', 'visible');
-                document.body.style.overflow = 'hidden'; // Previne scroll no body
+                document.body.style.overflow = 'hidden';
             }
         }
 
@@ -752,7 +645,7 @@
         closeBtn.addEventListener('click', toggleSidebar);
         overlay.addEventListener('click', toggleSidebar);
 
-        // === 3. Hero Carousel Logic ===
+        // === 3. HERO SLIDER MANAGER ===
         let currentSlide = 0;
         const slides = document.querySelectorAll('.slide');
         const dots = document.querySelectorAll('.slide-dot');
@@ -763,11 +656,20 @@
             slides.forEach((slide, index) => {
                 if (index === currentSlide) {
                     slide.classList.add('active');
+                    // Reset Animation Hack to replay CSS animations
+                    const content = slide.querySelector('.slide-content');
+                    const img = slide.querySelector('.slide-image');
+                    
+                    if(content) {
+                        content.style.animation = 'none';
+                        content.offsetHeight; /* trigger reflow */
+                        content.style.animation = null; 
+                    }
                 } else {
                     slide.classList.remove('active');
                 }
             });
-            
+
             dots.forEach((dot, index) => {
                 if(index === currentSlide) {
                     dot.classList.add('bg-brand-500', 'scale-125');
@@ -792,87 +694,55 @@
 
         function resetInterval() {
             clearInterval(slideInterval);
-            slideInterval = setInterval(nextSlide, 5000); // 5 Segundos
+            slideInterval = setInterval(nextSlide, 5000);
         }
 
-        // Initialize Carousel
+        // Init
         updateSlidePosition();
         resetInterval();
 
-        // === 4. Scroll Reveal Animation ===
-        const observerOptions = {
-            threshold: 0.1,
-            rootMargin: "0px 0px -50px 0px"
-        };
-
+        // === 4. SCROLL REVEAL ===
         const observer = new IntersectionObserver((entries) => {
             entries.forEach(entry => {
                 if (entry.isIntersecting) {
                     entry.target.classList.add('visible');
                 }
             });
-        }, observerOptions);
+        }, { threshold: 0.1 });
 
         document.querySelectorAll('.reveal-on-scroll').forEach(el => observer.observe(el));
 
-        // === 5. Sistema de Tradução ===
+        // === 5. TRANSLATION ===
         const translations = {
             pt: {
-                nav_features: "Funcionalidades",
-                nav_safety: "Segurança",
-                nav_partners: "Parceiros",
-                nav_download: "Baixar Agora",
+                nav_features: "Funcionalidades", nav_safety: "Segurança", nav_partners: "Parceiros",
+                features_title: "Tudo o que você precisa", features_desc: "Tecnologia de ponta para motoristas e passageiros.",
+                download_title: "Sua jornada começa com um toque.", download_desc: "Baixe agora o AOTRAVEL. Disponível para Android e iOS.",
                 partners_title: "Confiam na AOTRAVEL",
-                features_title: "Tudo o que você precisa",
-                features_desc: "Tecnologia de ponta para motoristas e passageiros.",
-                download_title: "Pronto para mudar a sua jornada?",
-                download_desc: "Baixe agora o AOTRAVEL. Disponível para Android e iOS. Leve, rápido e seguro.",
-                feat_1_title: "Navegação Inteligente",
-                feat_1_desc: "Algoritmos que encontram sempre a rota mais rápida.",
-                feat_2_title: "Pagamentos Fáceis",
-                feat_2_desc: "Aceitamos Multicaixa Express e Carteira Digital.",
-                feat_3_title: "Segurança 24/7",
-                feat_3_desc: "Monitoramento em tempo real.",
-                feat_4_title: "Seja um Motorista",
-                feat_4_desc: "Faça seu horário. Lucre mais."
+                feat_1_title: "Rota Otimizada", feat_1_desc: "Algoritmos que analisam o trânsito.",
+                feat_2_title: "Pagamentos", feat_2_desc: "Aceitamos Multicaixa, Dinheiro e Carteira Digital.",
+                feat_3_title: "Segurança 24/7", feat_3_desc: "Monitoramento em tempo real.",
+                feat_4_title: "Seja um Motorista", feat_4_desc: "Faça seu próprio horário."
             },
             en: {
-                nav_features: "Features",
-                nav_safety: "Safety",
-                nav_partners: "Partners",
-                nav_download: "Download Now",
+                nav_features: "Features", nav_safety: "Safety", nav_partners: "Partners",
+                features_title: "Everything you need", features_desc: "Cutting-edge technology for drivers and passengers.",
+                download_title: "Your journey starts with a tap.", download_desc: "Download AOTRAVEL now. Available for Android and iOS.",
                 partners_title: "Trusted by",
-                features_title: "Everything you need",
-                features_desc: "Cutting-edge technology for drivers and passengers.",
-                download_title: "Ready to change your journey?",
-                download_desc: "Download AOTRAVEL now. Available for Android and iOS. Fast, secure, light.",
-                feat_1_title: "Smart Navigation",
-                feat_1_desc: "Algorithms finding the fastest route always.",
-                feat_2_title: "Easy Payments",
-                feat_2_desc: "We accept Multicaixa Express and Digital Wallet.",
-                feat_3_title: "24/7 Safety",
-                feat_3_desc: "Real-time monitoring.",
-                feat_4_title: "Become a Driver",
-                feat_4_desc: "Make your schedule. Earn more."
+                feat_1_title: "Optimized Route", feat_1_desc: "Algorithms analyzing traffic in real-time.",
+                feat_2_title: "Payments", feat_2_desc: "We accept Multicaixa, Cash, and Digital Wallet.",
+                feat_3_title: "24/7 Safety", feat_3_desc: "Real-time monitoring.",
+                feat_4_title: "Become a Driver", feat_4_desc: "Make your own schedule."
             },
             fr: {
-                nav_features: "Fonctionnalités",
-                nav_safety: "Sécurité",
-                nav_partners: "Partenaires",
-                nav_download: "Télécharger",
+                nav_features: "Fonctionnalités", nav_safety: "Sécurité", nav_partners: "Partenaires",
+                features_title: "Tout ce dont vous avez besoin", features_desc: "Technologie de pointe pour chauffeurs et passagers.",
+                download_title: "Votre voyage commence ici.", download_desc: "Téléchargez AOTRAVEL maintenant.",
                 partners_title: "Ils font confiance à AOTRAVEL",
-                features_title: "Tout ce dont vous avez besoin",
-                features_desc: "Technologie de pointe pour chauffeurs et passagers.",
-                download_title: "Prêt à changer votre voyage ?",
-                download_desc: "Téléchargez AOTRAVEL maintenant. Disponible pour Android et iOS.",
-                feat_1_title: "Navigation Intelligente",
-                feat_1_desc: "Des algorithmes qui trouvent toujours l'itinéraire le plus rapide.",
-                feat_2_title: "Paiements Faciles",
-                feat_2_desc: "Nous acceptons Multicaixa Express et Portefeuille Numérique.",
-                feat_3_title: "Sécurité 24/7",
-                feat_3_desc: "Surveillance en temps réel.",
-                feat_4_title: "Devenir Chauffeur",
-                feat_4_desc: "Faites votre emploi du temps. Gagnez plus."
+                feat_1_title: "Itinéraire Optimisé", feat_1_desc: "Algorithmes analysant le trafic.",
+                feat_2_title: "Paiements", feat_2_desc: "Nous acceptons Multicaixa et Portefeuille Numérique.",
+                feat_3_title: "Sécurité 24/7", feat_3_desc: "Surveillance en temps réel.",
+                feat_4_title: "Devenir Chauffeur", feat_4_desc: "Faites votre propre emploi du temps."
             }
         };
 
@@ -888,10 +758,7 @@
                     }, 200);
                 }
             });
-            // Fechar sidebar se estiver aberta
-            if(!sidebar.classList.contains('translate-x-full')) {
-                toggleSidebar();
-            }
+            if(!sidebar.classList.contains('translate-x-full')) toggleSidebar();
         }
     </script>
 </body>
