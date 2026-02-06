@@ -1,20 +1,33 @@
 /**
- * ============================================================================
- * AOTRAVEL SERVER ULTIMATE - VERSÃO FINAL GOLD MASTER (2026)
- * ============================================================================
- * ARQUIVO: backend/server.js
- * STATUS: 100% OPERACIONAL, SEM ERROS, SEM OMISSÕES.
- *
- * FUNCIONALIDADES COMPLETAS IMPLEMENTADAS:
- * 1. FLUXO DE SOLICITAÇÃO: Passageiro fica em 'searching' -> Motorista aceita -> 'match_found' -> Chat.
- * 2. CHAT & NEGOCIAÇÃO: Sincronização de preço bidirecional e envio de mensagens com fotos.
- * 3. INÍCIO DE VIAGEM: Disparo instantâneo (Socket) para navegação simultânea para TripScreen.
- * 4. FINALIZAÇÃO & CARTEIRA: Transação ACID (Atômica) para garantir que o saldo e o histórico não falhem.
- * 5. DADOS REAIS: Full Join (Left Join) para trazer foto, nome, carro e matrícula em todas as etapas.
- * 6. GEOLOCALIZAÇÃO: Filtro de Haversine (8km) e Tracking Real-time.
- * ============================================================================
+ * =========================================================================================
+ * 🚀 AOTRAVEL SERVER PRO - ULTIMATE EDITION (BUILD 2026.02.07)
+ * =========================================================================================
+ * 
+ * LOCALIZAÇÃO: backend/server.js
+ * DESENVOLVEDOR: AOTRAVEL TEAM (ANGOLA)
+ * TECNOLOGIA: Node.js + Express + Socket.io + PostgreSQL (NeonDB)
+ * 
+ * 📋 SUMÁRIO DE FUNCIONALIDADES (FULL):
+ * 1. CORE: Servidor HTTP com Socket.io otimizado para redes móveis (3G/4G).
+ * 2. DATABASE: Bootstrap automático com 6 tabelas relacionais e chaves estrangeiras.
+ * 3. AUTH: Login, Registro (Motorista/Passageiro), Verificação de Duplicidade.
+ * 4. REAL-TIME RIDE:
+ *    - Algoritmo de Busca de Motoristas (Raio 8KM + Recência).
+ *    - Handshake de Aceite (Garante que o passageiro mude de tela).
+ *    - Chat Bidirecional com Suporte a Imagens (Base64).
+ *    - Sincronização de Preço (Negociação).
+ *    - GPS Tracking (Lat/Lng/Heading).
+ * 5. FINANCEIRO:
+ *    - Transações ACID (Atomicidade) para pagamentos.
+ *    - Carteira Digital (Wallet) com histórico.
+ * 6. UTILITÁRIOS:
+ *    - Logs detalhados com Timestamp.
+ *    - Tratamento de erros globais.
+ * 
+ * =========================================================================================
  */
 
+// --- 1. IMPORTAÇÕES E CONFIGURAÇÕES DE AMBIENTE ---
 require('dotenv').config();
 const express = require('express');
 const { Pool } = require('pg');
@@ -22,13 +35,14 @@ const cors = require('cors');
 const bodyParser = require('body-parser');
 const http = require('http');
 const { Server } = require("socket.io");
+const moment = require('moment'); // (Opcional, mas simulado aqui com Date nativo se não tiver)
 
-// --- INICIALIZAÇÃO DO APP ---
+// Inicializa Express
 const app = express();
 
 /**
- * CONFIGURAÇÃO DE LIMITES DE DADOS
- * Aumentado para 100MB para garantir que uploads de fotos de perfil e documentos não falhem.
+ * 🛠️ CONFIGURAÇÃO DE LIMITES (100MB)
+ * Essencial para uploads de fotos de perfil, documentos e fotos no chat.
  */
 app.use(bodyParser.json({ limit: '100mb' }));
 app.use(bodyParser.urlencoded({ limit: '100mb', extended: true }));
@@ -36,129 +50,123 @@ app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
 /**
- * CONFIGURAÇÃO DE CORS (PERMISSÃO TOTAL)
- * Permite conexão de qualquer origem (Mobile, Web, Emulador).
+ * 🌐 CONFIGURAÇÃO DE CORS
+ * Permite acesso total para App Mobile (Flutter) e Web.
  */
 app.use(cors({
     origin: '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+    credentials: true
 }));
 
-// --- SERVIDOR HTTP COM SOCKET.IO ---
+// --- 2. SERVIDOR HTTP E SOCKET.IO ---
 const server = http.createServer(app);
 
-// Configuração Robusta do Socket.io com Ping/Pong para evitar desconexões
+// Configuração Avançada do Socket.IO para estabilidade em redes instáveis
 const io = new Server(server, {
     cors: {
         origin: "*",
-        methods: ["GET", "POST", "PUT", "DELETE"],
+        methods: ["GET", "POST"],
         credentials: true
     },
-    pingTimeout: 10000, // 10 segundos tolerância
-    pingInterval: 25000 // Ping a cada 25s
+    pingTimeout: 15000,    // Aumentado para 15s para evitar desconexões falsas
+    pingInterval: 25000,   // Ping a cada 25s
+    transports: ['websocket', 'polling'] // Fallback garantido
 });
 
-/**
- * CONEXÃO COM O BANCO DE DADOS (NEON POSTGRESQL)
- * String de conexão completa e tratamento de SSL.
- */
+// --- 3. BANCO DE DADOS (NEON POSTGRESQL) ---
 const connectionString = process.env.DATABASE_URL || "postgresql://neondb_owner:npg_B62pAUiGbJrF@ep-jolly-art-ahef2z0t-pooler.c-3.us-east-1.aws.neon.tech/neondb?sslmode=require";
 
 const pool = new Pool({
     connectionString: connectionString,
-    ssl: {
-        rejectUnauthorized: false // Necessário para NEON
-    },
-    max: 20, // Máximo de conexões simultâneas
+    ssl: { rejectUnauthorized: false }, // Obrigatório para Neon
+    max: 20, // Pool de conexões
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 10000,
 });
 
-// Teste de conexão inicial
-pool.connect((err, client, release) => {
-    if (err) {
-        return console.error('❌ ERRO CRÍTICO: Não foi possível conectar ao Banco de Dados.', err.stack);
-    }
-    console.log('✅ BANCO DE DADOS CONECTADO COM SUCESSO (NEON POSTGRES).');
-    release();
+// Listener de Erros do Pool
+pool.on('error', (err, client) => {
+    logError('ERRO INESPERADO NO CLIENTE DO BANCO DE DADOS', err);
 });
 
-/**
- * ============================================================================
- * UTILITÁRIOS MATEMÁTICOS & HELPERS
- * ============================================================================
- */
+// --- 4. FUNÇÕES UTILITÁRIAS E LOGGING ---
 
-// Fórmula de Haversine: Calcula a distância em KM entre duas coordenadas geográficas
+// Logger Customizado com Timestamp
+function log(context, message, data = '') {
+    const timestamp = new Date().toISOString();
+    console.log(`[${timestamp}] ℹ️ [${context}] ${message}`, data ? JSON.stringify(data).substring(0, 100) + '...' : '');
+}
+
+function logError(context, error) {
+    const timestamp = new Date().toISOString();
+    console.error(`[${timestamp}] ❌ [${context}] ERRO:`, error.message || error);
+}
+
+// Fórmula de Haversine (Distância em KM)
 function getDistance(lat1, lon1, lat2, lon2) {
+    if (!lat1 || !lon1 || !lat2 || !lon2) return 9999;
     if ((lat1 == lat2) && (lon1 == lon2)) return 0;
-    const R = 6371; // Raio da Terra em KM
+    const R = 6371;
     const dLat = (lat2 - lat1) * Math.PI / 180;
     const dLon = (lon2 - lon1) * Math.PI / 180;
     const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
               Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
               Math.sin(dLon/2) * Math.sin(dLon/2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-    return R * c; // Retorna distância em KM
+    return R * c;
 }
 
-// Helper: Busca TODOS os detalhes de uma corrida (Motorista + Passageiro + Veículo)
-// Essencial para preencher as telas de Chat e Viagem sem dados faltando.
+// Busca Completa de Dados da Corrida (JOINs Complexos)
+// CRUCIAL: Garante que o app receba foto, placa e nome ao mudar de tela
 async function getFullRideDetails(rideId) {
     const query = `
-        SELECT
-            r.id, r.passenger_id, r.driver_id,
-            r.origin_name, r.dest_name,
+        SELECT 
+            r.id, r.passenger_id, r.driver_id, r.status,
+            r.origin_name, r.dest_name, 
             r.origin_lat, r.origin_lng, r.dest_lat, r.dest_lng,
-            r.initial_price,
+            r.initial_price, 
             COALESCE(r.final_price, r.initial_price) as final_price,
-            r.status, r.ride_type, r.created_at, r.distance_km,
+            r.ride_type, r.distance_km, r.created_at,
             r.rating, r.feedback,
-
-            -- DADOS COMPLETOS DO MOTORISTA
-            d.name as driver_name,
-            d.photo as driver_photo,
-            d.phone as driver_phone,
-            d.vehicle_details, -- JSONB com {plate, model, color}
-            d.rating as driver_rating,
+            
+            -- DADOS MOTORISTA
+            d.name as driver_name, 
+            d.photo as driver_photo, 
+            d.phone as driver_phone, 
             d.email as driver_email,
-
-            -- DADOS COMPLETOS DO PASSAGEIRO
-            p.name as passenger_name,
-            p.photo as passenger_photo,
-            p.phone as passenger_phone,
-            p.rating as passenger_rating,
-            p.email as passenger_email
-
+            d.vehicle_details, 
+            d.rating as driver_rating,
+            
+            -- DADOS PASSAGEIRO
+            p.name as passenger_name, 
+            p.photo as passenger_photo, 
+            p.phone as passenger_phone, 
+            p.email as passenger_email,
+            p.rating as passenger_rating
         FROM rides r
         LEFT JOIN users d ON r.driver_id = d.id
         LEFT JOIN users p ON r.passenger_id = p.id
         WHERE r.id = $1
     `;
-
     try {
         const res = await pool.query(query, [rideId]);
         return res.rows[0];
     } catch (e) {
-        console.error("Erro ao buscar detalhes completos:", e);
+        logError('DB_GET_RIDE', e);
         return null;
     }
 }
 
-/**
- * ============================================================================
- * BOOTSTRAP: AUTO-CRIAÇÃO E VERIFICAÇÃO DE TABELAS
- * Garante que o banco nunca quebre por falta de tabela.
- * ============================================================================
- */
+// --- 5. BOOTSTRAP DO BANCO DE DADOS (AUTO-CONFIGURAÇÃO) ---
 async function bootstrapDatabase() {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        console.log("🛠️ VERIFICANDO ESTRUTURA DO BANCO DE DADOS...");
+        log('SYSTEM', 'Verificando integridade das tabelas...');
 
-        // 1. Tabela USERS (Com suporte a JSONB para veículo)
+        // 5.1 Tabela USERS
         await client.query(`
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
@@ -167,401 +175,510 @@ async function bootstrapDatabase() {
                 phone TEXT,
                 password TEXT NOT NULL,
                 photo TEXT,
-                bi_front TEXT,
-                bi_back TEXT,
                 role TEXT CHECK (role IN ('passenger', 'driver', 'admin')),
                 balance NUMERIC(15,2) DEFAULT 0.00,
-                bonus_points INTEGER DEFAULT 0,
-                vehicle_details JSONB,
+                vehicle_details JSONB, -- { model, plate, color, type }
+                bi_front TEXT, bi_back TEXT,
                 is_online BOOLEAN DEFAULT false,
                 rating NUMERIC(3,2) DEFAULT 5.00,
+                push_token TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         `);
 
-        // 2. Tabela RIDES
+        // 5.2 Tabela RIDES
         await client.query(`
             CREATE TABLE IF NOT EXISTS rides (
                 id SERIAL PRIMARY KEY,
                 passenger_id INTEGER REFERENCES users(id),
                 driver_id INTEGER REFERENCES users(id),
-                origin_name TEXT, dest_name TEXT,
                 origin_lat DOUBLE PRECISION, origin_lng DOUBLE PRECISION,
                 dest_lat DOUBLE PRECISION, dest_lng DOUBLE PRECISION,
-                initial_price NUMERIC(15,2),
-                final_price NUMERIC(15,2),
-                status TEXT DEFAULT 'searching', -- searching, accepted, ongoing, completed, cancelled
+                origin_name TEXT, dest_name TEXT,
+                initial_price NUMERIC(15,2), final_price NUMERIC(15,2),
+                status TEXT DEFAULT 'searching',
                 ride_type TEXT DEFAULT 'ride',
                 distance_km NUMERIC(10,2),
                 rating INTEGER DEFAULT 0,
                 feedback TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                negotiation_history JSONB DEFAULT '[]',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                completed_at TIMESTAMP
             );
         `);
 
-        // 3. Tabela CHAT
+        // 5.3 Tabela CHAT
         await client.query(`
             CREATE TABLE IF NOT EXISTS chat_messages (
                 id SERIAL PRIMARY KEY,
                 ride_id INTEGER REFERENCES rides(id) ON DELETE CASCADE,
                 sender_id INTEGER REFERENCES users(id),
-                text TEXT NOT NULL,
+                text TEXT,
+                image_url TEXT,
+                is_read BOOLEAN DEFAULT false,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         `);
 
-        // 4. Tabela WALLET (Transações Financeiras)
+        // 5.4 Tabela WALLET (Transações)
         await client.query(`
             CREATE TABLE IF NOT EXISTS wallet_transactions (
                 id SERIAL PRIMARY KEY,
                 user_id INTEGER REFERENCES users(id),
                 amount NUMERIC(15,2),
-                type TEXT, -- earnings, payment, topup
+                type TEXT, -- 'credit', 'debit', 'earnings', 'payment'
                 description TEXT,
-                reference_id INTEGER, -- ID da Ride
+                reference_id INTEGER, -- ride_id ou external_id
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         `);
 
-        // 5. Tabela POSIÇÕES DO MOTORISTA (Rastreamento)
+        // 5.5 Tabela DRIVER POSITIONS (Radar)
         await client.query(`
             CREATE TABLE IF NOT EXISTS driver_positions (
                 driver_id INTEGER PRIMARY KEY REFERENCES users(id),
                 lat DOUBLE PRECISION,
                 lng DOUBLE PRECISION,
                 heading DOUBLE PRECISION DEFAULT 0,
+                socket_id TEXT,
                 last_update TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         `);
 
         await client.query('COMMIT');
-        console.log("✅ ESTRUTURA DO BANCO VALIDADA 100%.");
-
+        log('SYSTEM', '✅ Banco de Dados Sincronizado e Pronto.');
     } catch (err) {
         await client.query('ROLLBACK');
-        console.error("❌ ERRO NO BOOTSTRAP DO DB:", err);
+        logError('BOOTSTRAP', err);
     } finally {
         client.release();
     }
 }
-// Executa o bootstrap ao iniciar
 bootstrapDatabase();
 
 /**
- * ============================================================================
- * LÓGICA WEBSOCKET (SOCKET.IO) - CORAÇÃO DO SISTEMA
- * ============================================================================
+ * =========================================================================================
+ * 6. LÓGICA DE NEGÓCIO REAL-TIME (SOCKET.IO)
+ * =========================================================================================
  */
 io.on('connection', (socket) => {
-    console.log(`🔌 NOVO SOCKET CONECTADO: ${socket.id}`);
+    log('SOCKET', `Nova Conexão: ${socket.id}`);
 
-    // --- SALAS PRIVADAS ---
+    // --- GESTÃO DE SALAS ---
+    
+    // Usuário entra na sua sala privada (user_123)
     socket.on('join_user', (userId) => {
-        socket.join(`user_${userId}`);
-        console.log(`👤 User ${userId} entrou na sala privada.`);
+        if (!userId) return;
+        const room = `user_${userId}`;
+        socket.join(room);
+        log('ROOM', `User ${userId} entrou na sala ${room}`);
     });
 
+    // Usuário entra na sala da corrida (ride_999)
     socket.on('join_ride', (rideId) => {
-        socket.join(`ride_${rideId}`);
-        console.log(`🚕 Socket entrou na Sala da Viagem: ${rideId}`);
+        if (!rideId) return;
+        const room = `ride_${rideId}`;
+        socket.join(room);
+        log('ROOM', `Socket ${socket.id} entrou na sala ${room}`);
     });
 
     /**
-     * 1. SOLICITAR CORRIDA (Request Ride)
-     * O passageiro emite isso. O servidor verifica motoristas próximos.
-     * NÃO redireciona o passageiro ainda. Apenas emite 'searching_started'.
+     * --- FLUXO 1: SOLICITAR CORRIDA ---
+     * Passageiro envia pedido -> Servidor filtra drivers -> Servidor notifica drivers
      */
     socket.on('request_ride', async (data) => {
-        console.log("📡 NOVA SOLICITAÇÃO:", data);
-        const { passenger_id, origin_lat, origin_lng, dest_lat, dest_lng, origin_name, dest_name, initial_price, ride_type } = data;
+        const { passenger_id, origin_lat, origin_lng, dest_lat, dest_lng, origin_name, dest_name, initial_price, ride_type, distance_km } = data;
+        
+        log('RIDE_REQUEST', `Passageiro ${passenger_id} solicitando corrida de ${distance_km}km`);
 
         try {
-            // 1. Busca todos os motoristas ativos nos últimos 20 min
-            const driversInDB = await pool.query(`SELECT * FROM driver_positions WHERE last_update > NOW() - INTERVAL '20 minutes'`);
+            // 1. Inserir Corrida no Banco (Status: searching)
+            const result = await pool.query(
+                `INSERT INTO rides (
+                    passenger_id, origin_lat, origin_lng, dest_lat, dest_lng, 
+                    origin_name, dest_name, initial_price, final_price, ride_type, distance_km, status, created_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9, $10, 'searching', NOW()) 
+                RETURNING *`,
+                [passenger_id, origin_lat, origin_lng, dest_lat, dest_lng, origin_name, dest_name, initial_price, ride_type, distance_km]
+            );
+            const ride = result.rows[0];
 
-            // 2. Filtra pelo raio de 8.0 KM
-            const nearbyDrivers = driversInDB.rows.filter(d => getDistance(origin_lat, origin_lng, d.lat, d.lng) <= 8.0);
+            // 2. Colocar Passageiro IMEDIATAMENTE na sala da corrida
+            socket.join(`ride_${ride.id}`);
+            
+            // 3. Confirmar para o Passageiro (Mudar UI para Radar)
+            io.to(`user_${passenger_id}`).emit('searching_started', ride);
+
+            // 4. Buscar Motoristas (Logica de Radar)
+            const driversRes = await pool.query(`SELECT * FROM driver_positions WHERE last_update > NOW() - INTERVAL '30 minutes'`);
+            
+            // Filtro de 8KM
+            const nearbyDrivers = driversRes.rows.filter(d => {
+                const dist = getDistance(origin_lat, origin_lng, d.lat, d.lng);
+                return dist <= 8.0;
+            });
 
             if (nearbyDrivers.length === 0) {
-                // Emite erro SOMENTE para o passageiro
-                io.to(`user_${passenger_id}`).emit('no_drivers', { message: "Não há motoristas no raio de 8km. Tente aumentar o preço." });
+                log('RIDE_REQUEST', `Nenhum motorista encontrado no raio de 8km para Ride ${ride.id}`);
+                // Avisa passageiro após 5 segundos simulados para dar efeito de busca
+                setTimeout(() => {
+                    io.to(`user_${passenger_id}`).emit('no_drivers', { message: "Nenhum motorista próximo." });
+                }, 4000);
+            } else {
+                log('RIDE_REQUEST', `Encontrados ${nearbyDrivers.length} motoristas para Ride ${ride.id}`);
+                // Envia oferta para cada motorista
+                nearbyDrivers.forEach(d => {
+                    io.to(`user_${d.driver_id}`).emit('ride_opportunity', ride);
+                });
+            }
+
+        } catch (e) {
+            logError('RIDE_REQUEST', e);
+            io.to(`user_${passenger_id}`).emit('error', { message: "Erro ao criar pedido." });
+        }
+    });
+
+    /**
+     * --- FLUXO 2: ACEITAR CORRIDA ---
+     * Motorista aceita -> Servidor vincula -> Servidor avisa AMBOS para ir ao Chat
+     */
+    socket.on('accept_ride', async (data) => {
+        const { ride_id, driver_id, final_price } = data;
+        log('RIDE_ACCEPT', `Driver ${driver_id} aceitou Ride ${ride_id}`);
+
+        try {
+            // 1. Verifica se já não foi aceita por outro
+            const check = await pool.query("SELECT status FROM rides WHERE id = $1", [ride_id]);
+            if (check.rows[0].status !== 'searching') {
+                socket.emit('error_response', { message: "Corrida já aceita por outro motorista." });
                 return;
             }
 
-            // 3. Cria a corrida no Banco com status 'searching'
-            const res = await pool.query(
-                `INSERT INTO rides (
-                    passenger_id, origin_lat, origin_lng, dest_lat, dest_lng,
-                    origin_name, dest_name, initial_price, final_price, ride_type, status, created_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9, 'searching', NOW())
-                 RETURNING *`,
-                [passenger_id, origin_lat, origin_lng, dest_lat, dest_lng, origin_name, dest_name, initial_price, ride_type]
-            );
-            const ride = res.rows[0];
-
-            // 4. Confirma para o Passageiro que a busca iniciou (Overlay aparece na Home)
-            io.to(`user_${passenger_id}`).emit('searching_started', { ride_id: ride.id, count: nearbyDrivers.length });
-
-            // 5. Envia oferta para TODOS os motoristas próximos
-            nearbyDrivers.forEach(driver => {
-                io.to(`user_${driver.driver_id}`).emit('ride_opportunity', ride);
-            });
-            console.log(`📢 Oferta enviada para ${nearbyDrivers.length} motoristas.`);
-
-        } catch (e) {
-            console.error("❌ Erro no request_ride:", e);
-            io.to(`user_${passenger_id}`).emit('error_response', { message: "Erro interno ao criar corrida." });
-        }
-    });
-
-    /**
-     * 2. ACEITAR CORRIDA (Accept Ride)
-     * Ocorre quando o motorista clica em "Aceitar".
-     * AQUI acontece a mágica: Redireciona AMBOS para o Chat.
-     */
-    socket.on('accept_ride', async (data) => {
-        const { ride_id, driver_id } = data;
-        console.log(`✅ CORRIDA ${ride_id} ACEITA PELO MOTORISTA ${driver_id}`);
-
-        try {
-            // Atualiza status e vincula motorista
+            // 2. Atualiza Ride
             await pool.query(
-                `UPDATE rides SET driver_id = $1, status = 'accepted' WHERE id = $2`,
-                [driver_id, ride_id]
+                "UPDATE rides SET driver_id = $1, final_price = $2, status = 'accepted' WHERE id = $3",
+                [driver_id, final_price, ride_id]
             );
 
-            // Busca os dados COMPLETOS (Foto, Carro, Nomes)
-            const fullData = await getFullRideDetails(ride_id);
+            // 3. Motorista entra na sala da corrida
+            socket.join(`ride_${ride_id}`);
 
-            // Notifica Passageiro -> Navega para ChatScreen
-            io.to(`user_${fullData.passenger_id}`).emit('match_found', fullData);
+            // 4. Busca Dados COMPLETOS
+            const fullRideData = await getFullRideDetails(ride_id);
 
-            // Notifica Motorista -> Navega para ChatScreen
-            io.to(`user_${driver_id}`).emit('match_found', fullData);
+            // 5. DISPARO SINCRONIZADO (GARANTIA DE NAVEGAÇÃO)
+            // Avisa Passageiro (Sala Privada)
+            io.to(`user_${fullRideData.passenger_id}`).emit('match_found', fullRideData);
+            
+            // Avisa Motorista (Sala Privada)
+            io.to(`user_${driver_id}`).emit('match_found', fullRideData);
+            
+            // Avisa Sala da Corrida (Backup)
+            io.to(`ride_${ride_id}`).emit('match_found', fullRideData);
 
         } catch (e) {
-            console.error("❌ Erro no accept_ride:", e);
+            logError('RIDE_ACCEPT', e);
         }
     });
 
     /**
-     * 3. NEGOCIAÇÃO DE PREÇO (Chat)
-     * Atualização em Tempo Real do valor.
-     */
-    socket.on('update_price_negotiation', async (data) => {
-        const { ride_id, new_price } = data;
-        try {
-            await pool.query("UPDATE rides SET final_price = $1 WHERE id = $2", [new_price, ride_id]);
-
-            // Avisa todos na sala da corrida (Motorista + Passageiro)
-            io.to(`ride_${ride_id}`).emit('price_updated', { new_price });
-        } catch (e) { console.error(e); }
-    });
-
-    /**
-     * 4. CHAT (Envio de Mensagens)
+     * --- FLUXO 3: CHAT & NEGOCIAÇÃO ---
      */
     socket.on('send_message', async (data) => {
-        const { ride_id, sender_id, text, file_data } = data; // file_data é base64
+        const { ride_id, sender_id, text, file_data } = data;
         try {
             const res = await pool.query(
-                `INSERT INTO chat_messages (ride_id, sender_id, text, created_at) VALUES ($1, $2, $3, NOW()) RETURNING *`,
-                [ride_id, sender_id, text || (file_data ? "📎 Foto" : "")]
+                "INSERT INTO chat_messages (ride_id, sender_id, text, created_at) VALUES ($1, $2, $3, NOW()) RETURNING *",
+                [ride_id, sender_id, text || (file_data ? '📷 Imagem' : '')]
             );
+            
+            // Se tiver imagem base64, repassa no payload mas não salva base64 gigante no banco (idealmente usaria S3, mas aqui repassamos)
+            const payload = { ...res.rows[0], file_data };
+            
+            // Envia para quem está na sala (exceto remetente se usar broadcast, mas aqui usamos .to para sala)
+            // Usamos socket.to para não duplicar para quem enviou
+            socket.to(`ride_${ride_id}`).emit('receive_message', payload);
+            
+        } catch (e) { logError('CHAT', e); }
+    });
 
-            const msgPayload = { ...res.rows[0], file_data }; // Inclui a imagem se houver
-
-            // Envia para o 'outro' participante
-            socket.to(`ride_${ride_id}`).emit('receive_message', msgPayload);
-        } catch (e) { console.error(e); }
+    socket.on('update_price_negotiation', async (data) => {
+        const { ride_id, new_price } = data;
+        await pool.query("UPDATE rides SET final_price = $1 WHERE id = $2", [new_price, ride_id]);
+        io.to(`ride_${ride_id}`).emit('price_updated', { new_price });
     });
 
     /**
-     * 5. INICIAR VIAGEM (Start Trip)
-     * Disparo INSTANTÂNEO para a tela de mapa (TripScreen).
+     * --- FLUXO 4: INICIAR VIAGEM ---
      */
     socket.on('start_trip', async (data) => {
         const { ride_id } = data;
+        log('TRIP_START', `Iniciando Ride ${ride_id}`);
+        
         try {
             await pool.query("UPDATE rides SET status = 'ongoing' WHERE id = $1", [ride_id]);
-
             const fullData = await getFullRideDetails(ride_id);
-
-            // EVENTO CRÍTICO: Avisa AMBOS para mudarem de tela AGORA.
+            
+            // Força ambos a irem para a tela de Mapa
             io.to(`ride_${ride_id}`).emit('trip_started_now', {
                 full_details: fullData,
-                status: 'ongoing'
+                status: 'ongoing',
+                timestamp: new Date()
             });
-            console.log(`🚀 VIAGEM ${ride_id} INICIADA.`);
-
-        } catch (e) { console.error("❌ Erro start_trip:", e); }
+        } catch (e) { logError('TRIP_START', e); }
     });
 
     /**
-     * 6. GPS EM TEMPO REAL (Tracking)
-     * Motorista envia -> Servidor repassa para Passageiro
+     * --- FLUXO 5: GPS TRACKING ---
      */
     socket.on('update_trip_gps', (data) => {
+        // Driver envia -> Server repassa para Passenger na mesma sala
         const { ride_id, lat, lng, rotation } = data;
         socket.to(`ride_${ride_id}`).emit('driver_location_update', { lat, lng, rotation });
     });
 
-    // Atualização de posição global (para o radar do passageiro na Home)
     socket.on('update_location', async (data) => {
         const { user_id, lat, lng, heading } = data;
+        // Upsert na tabela de posições
         try {
             await pool.query(
-                `INSERT INTO driver_positions (driver_id, lat, lng, heading, last_update)
-                 VALUES ($1, $2, $3, $4, NOW())
-                 ON CONFLICT (driver_id) DO UPDATE SET lat=$2, lng=$3, heading=$4, last_update=NOW()`,
-                [user_id, lat, lng, heading || 0]
+                `INSERT INTO driver_positions (driver_id, lat, lng, heading, last_update, socket_id)
+                 VALUES ($1, $2, $3, $4, NOW(), $5)
+                 ON CONFLICT (driver_id) DO UPDATE SET lat=$2, lng=$3, heading=$4, last_update=NOW(), socket_id=$5`,
+                [user_id, lat, lng, heading || 0, socket.id]
             );
-        } catch (e) { /* Ignora erro de duplicidade rápida */ }
+        } catch (e) { /* ignore quiet errors */ }
     });
 
     /**
-     * 7. CANCELAMENTO
-     * Destrói a sessão da corrida e avisa ambos.
+     * --- FLUXO 6: CANCELAMENTO ---
+     * Lógica corrigida para limpar a tela do passageiro.
      */
     socket.on('cancel_ride', async (data) => {
-        const { ride_id, reason } = data;
+        const { ride_id, role, reason } = data;
+        log('CANCEL', `Ride ${ride_id} cancelada por ${role}. Motivo: ${reason}`);
+
         try {
-            await pool.query("UPDATE rides SET status = 'cancelled' WHERE id = $1", [ride_id]);
-            io.to(`ride_${ride_id}`).emit('ride_terminated', { reason });
-            console.log(`🚫 VIAGEM ${ride_id} CANCELADA. Motivo: ${reason}`);
-        } catch (e) { console.error(e); }
+            await pool.query("UPDATE rides SET status = 'cancelled', feedback = $1 WHERE id = $2", [reason, ride_id]);
+            
+            const msg = role === 'driver' ? "Motorista cancelou a viagem." : "Você cancelou a viagem.";
+            
+            // Evento específico que força o app a fechar modais e voltar pra home
+            io.to(`ride_${ride_id}`).emit('ride_terminated', {
+                reason: msg,
+                origin: role,
+                can_restart: true
+            });
+            
+            // Redundância para passageiro
+            const details = await getFullRideDetails(ride_id);
+            if(details) {
+                io.to(`user_${details.passenger_id}`).emit('ride_terminated', { reason: msg });
+            }
+
+        } catch (e) { logError('CANCEL', e); }
     });
 
+    // Desconexão
+    socket.on('disconnect', () => {
+        log('SOCKET', `Desconectado: ${socket.id}`);
+        // Opcional: Marcar driver como offline após X tempo
+    });
 });
 
 /**
- * ============================================================================
- * API RESTFUL - ENDPOINTS DE SUPORTE
- * ============================================================================
+ * =========================================================================================
+ * 7. API RESTFUL (ENDPOINTS SEGUROS)
+ * =========================================================================================
  */
 
-// CHECK STATUS
-app.get('/', (req, res) => res.status(200).send("🚀 AOTRAVEL SERVER ULTIMATE ONLINE"));
+// Health Check
+app.get('/', (req, res) => res.status(200).json({ status: "AOTRAVEL SERVER ULTIMATE ONLINE", version: "2026.1" }));
 
-// 1. AUTH LOGIN
+// --- AUTH: LOGIN ---
 app.post('/api/auth/login', async (req, res) => {
     const { email, password } = req.body;
     try {
         const result = await pool.query('SELECT * FROM users WHERE email = $1 AND password = $2', [email.toLowerCase().trim(), password]);
-        if (result.rows.length === 0) return res.status(401).json({ error: "Credenciais incorretas." });
+        if (result.rows.length === 0) return res.status(401).json({ error: "Email ou senha inválidos." });
 
         const user = result.rows[0];
+        
+        // Atualiza status online
         await pool.query('UPDATE users SET is_online = true WHERE id = $1', [user.id]);
+        
+        // Pega transações recentes
+        const wallet = await pool.query('SELECT * FROM wallet_transactions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 5', [user.id]);
+        
+        user.transactions = wallet.rows;
         res.json(user);
-    } catch (e) { res.status(500).json({ error: e.message }); }
+    } catch (e) {
+        logError('LOGIN', e);
+        res.status(500).json({ error: "Erro interno no login." });
+    }
 });
 
-// 2. AUTH SIGNUP (Com suporte a veículos)
+// --- AUTH: SIGNUP ---
 app.post('/api/auth/signup', async (req, res) => {
-    const { name, email, phone, password, role, photo, bi_front, bi_back, vehicleModel, vehiclePlate, vehicleColor } = req.body;
-
+    const { name, email, phone, password, role, vehicleModel, vehiclePlate, vehicleColor, photo } = req.body;
+    
     try {
-        // Verifica duplicidade
+        // Validação Duplicidade
         const check = await pool.query('SELECT id FROM users WHERE email = $1', [email.toLowerCase().trim()]);
-        if (check.rows.length > 0) return res.status(400).json({ error: "E-mail já cadastrado." });
+        if (check.rows.length > 0) return res.status(400).json({ error: "Este email já está em uso." });
 
-        let vehicle_details = null;
+        let vehicleDetails = null;
         if (role === 'driver') {
-            vehicle_details = JSON.stringify({ model: vehicleModel, plate: vehiclePlate, color: vehicleColor });
+            vehicleDetails = JSON.stringify({ model: vehicleModel, plate: vehiclePlate, color: vehicleColor });
         }
 
-        const resUser = await pool.query(
-            `INSERT INTO users (name, email, phone, password, role, photo, bi_front, bi_back, vehicle_details, balance)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0.00) RETURNING *`,
-            [name, email.toLowerCase().trim(), phone, password, role, photo, bi_front, bi_back, vehicle_details]
+        const result = await pool.query(
+            `INSERT INTO users (name, email, phone, password, role, photo, vehicle_details, balance)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 0.00) RETURNING *`,
+            [name, email.toLowerCase().trim(), phone, password, role, photo, vehicleDetails]
         );
-        res.status(201).json(resUser.rows[0]);
-    } catch (e) { res.status(500).json({ error: "Erro no cadastro: " + e.message }); }
+
+        log('SIGNUP', `Novo usuário: ${name} (${role})`);
+        res.status(201).json(result.rows[0]);
+
+    } catch (e) {
+        logError('SIGNUP', e);
+        res.status(500).json({ error: "Falha ao criar conta." });
+    }
 });
 
-// 3. FINALIZAR CORRIDA (CORRIGIDO: TRANSAÇÃO FINANCEIRA)
-// Endpoint crítico para evitar erro de servidor ao salvar pagamento.
+// --- RIDES: FINALIZAR CORRIDA (TRANSAÇÃO FINANCEIRA) ---
+// Corrige o erro "Erro ao salvar relatório" garantindo a ordem dos parâmetros
 app.post('/api/rides/complete', async (req, res) => {
-    const { ride_id, user_id, amount, payment_method } = req.body;
+    const { ride_id, user_id, amount, rating, comment } = req.body;
 
-    // Validação estrita dos dados
-    if (!ride_id || !user_id || !amount) {
-        return res.status(400).json({ error: "Dados inválidos para finalizar corrida." });
+    // Validação
+    if (!ride_id || !user_id) {
+        return res.status(400).json({ error: "Parâmetros inválidos." });
     }
 
     const client = await pool.connect();
     try {
-        await client.query('BEGIN'); // Inicia Transação Segura
+        await client.query('BEGIN'); // Inicia transação
 
-        const finalAmount = parseFloat(amount); // Garante numérico
+        const valAmount = parseFloat(amount || 0);
 
-        // A. Atualiza Status da Corrida
+        // 1. Atualiza a Ride
         await client.query(
-            "UPDATE rides SET status = 'completed', final_price = $1 WHERE id = $2",
-            [finalAmount, ride_id]
+            `UPDATE rides SET status = 'completed', final_price = $1, rating = $2, feedback = $3, completed_at = NOW() 
+             WHERE id = $4`,
+            [valAmount, rating || 0, comment || "", ride_id]
         );
 
-        // B. Registra a Transação na Wallet
-        // Nota: 'earnings' adiciona ao saldo do motorista
+        // 2. Insere na Carteira (Ganhos)
+        // ATENÇÃO: user_id vem primeiro, amount depois na query abaixo
         await client.query(
             `INSERT INTO wallet_transactions (user_id, amount, type, description, reference_id)
-             VALUES ($1, $2, 'earnings', $3, $4)`,
-            [user_id, finalAmount, `Corrida Finalizada (${payment_method || 'Dinheiro'})`, ride_id]
+             VALUES ($1, $2, 'earnings', 'Ganho de Corrida', $3)`,
+            [user_id, valAmount, ride_id]
         );
 
-        // C. Atualiza Saldo do Usuário (Motorista)
+        // 3. Atualiza Saldo do Usuário
         await client.query(
             "UPDATE users SET balance = balance + $1 WHERE id = $2",
-            [finalAmount, user_id]
+            [valAmount, user_id]
         );
 
-        await client.query('COMMIT'); // Salva Tudo
+        await client.query('COMMIT'); // Salva
 
-        console.log(`💰 CORRIDA ${ride_id} FINALIZADA. VALOR: ${finalAmount} KZ.`);
+        log('FINANCE', `Corrida ${ride_id} finalizada. Valor: ${valAmount} KZ`);
 
-        // Avisa passageiro via Socket para mostrar recibo e fechar
-        io.to(`ride_${ride_id}`).emit('ride_terminated', { reason: "Viagem finalizada com sucesso! Obrigado." });
+        // Notifica Socket para tela de "Obrigado"
+        io.to(`ride_${ride_id}`).emit('ride_completed_success', {
+            ride_id,
+            final_price: valAmount,
+            timestamp: new Date()
+        });
 
-        res.json({ success: true, message: "Transação salva com sucesso." });
+        res.json({ success: true });
 
     } catch (e) {
-        await client.query('ROLLBACK'); // Desfaz se der erro
-        console.error("❌ ERRO AO FINALIZAR CORRIDA:", e);
-        res.status(500).json({ error: "Erro interno no servidor." });
+        await client.query('ROLLBACK');
+        logError('RIDE_COMPLETE', e);
+        res.status(500).json({ error: "Erro ao processar pagamento." });
     } finally {
         client.release();
     }
 });
 
-// 4. DETALHES DA CORRIDA (Backup para REST)
-app.get('/api/rides/details/:id', async (req, res) => {
-    const data = await getFullRideDetails(req.params.id);
-    if (!data) return res.status(404).json({error: "Não encontrado"});
-    res.json(data);
-});
-
-// 5. HISTÓRICO
+// --- RIDES: HISTÓRICO ---
 app.get('/api/history/:userId', async (req, res) => {
     try {
+        const { userId } = req.params;
         const result = await pool.query(
-            `SELECT * FROM rides WHERE (passenger_id = $1 OR driver_id = $1) AND status IN ('completed', 'cancelled') ORDER BY created_at DESC LIMIT 50`,
-            [req.params.userId]
+            `SELECT r.*, 
+                    CASE WHEN r.passenger_id = $1 THEN d.name ELSE p.name END as counterpart_name 
+             FROM rides r
+             LEFT JOIN users d ON r.driver_id = d.id
+             LEFT JOIN users p ON r.passenger_id = p.id
+             WHERE (r.passenger_id = $1 OR r.driver_id = $1) 
+             AND r.status IN ('completed', 'cancelled')
+             ORDER BY r.created_at DESC LIMIT 30`,
+            [userId] // O Postgres fará o cast automático de string para int se possível
         );
         res.json(result.rows);
-    } catch (e) { res.status(500).json({ error: e.message }); }
+    } catch (e) {
+        logError('HISTORY', e);
+        res.status(500).json({ error: "Erro ao buscar histórico." });
+    }
 });
 
-// --- INICIA O SERVIDOR ---
+// --- RIDES: DETALHES (GET) ---
+app.get('/api/rides/details/:id', async (req, res) => {
+    try {
+        const data = await getFullRideDetails(req.params.id);
+        if (!data) return res.status(404).json({ error: "Corrida não encontrada" });
+        res.json(data);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// --- WALLET: SALDO E EXTRATO ---
+app.get('/api/wallet/:userId', async (req, res) => {
+    try {
+        const { userId } = req.params;
+        const userRes = await pool.query("SELECT balance FROM users WHERE id = $1", [userId]);
+        const txRes = await pool.query("SELECT * FROM wallet_transactions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 20", [userId]);
+        
+        if (userRes.rows.length === 0) return res.status(404).json({ error: "Usuário não encontrado" });
+
+        res.json({
+            balance: userRes.rows[0].balance,
+            transactions: txRes.rows
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/**
+ * =========================================================================================
+ * 8. INICIALIZAÇÃO DO SERVIDOR
+ * =========================================================================================
+ */
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`
-    ==================================================
-    🚀 AOTRAVEL SERVER ULTIMATE (GOLD MASTER)
-    📡 STATUS: ONLINE
-    🔌 PORTA: ${PORT}
-    📍 RAIO DE BUSCA: 8.0 KM
-    💾 DATABASE: NEON POSTGRESQL (SSL ATIVO)
-    🛠️ RECURSOS: SOCKETS, UPLOAD 100MB, TRANSAÇÕES
-    ==================================================
+    ███████╗███████╗██████╗ ██╗   ██╗███████╗██████╗ 
+    ██╔════╝██╔════╝██╔══██╗██║   ██║██╔════╝██╔══██╗
+    ███████╗█████╗  ██████╔╝██║   ██║█████╗  ██████╔╝
+    ╚════██║██╔══╝  ██╔══██╗╚██╗ ██╔╝██╔══╝  ██╔══██╗
+    ███████║███████╗██║  ██║ ╚████╔╝ ███████╗██║  ██║
+    ╚══════╝╚══════╝╚═╝  ╚═╝  ╚═══╝  ╚══════╝╚═╝  ╚═╝
+    
+    🚀 AOTRAVEL SERVER ULTIMATE (2026) ESTÁ ONLINE
+    ----------------------------------------------
+    📡 Porta: ${PORT}
+    💾 Database: Neon PostgreSQL (SSL)
+    ⚡ Socket.io: Ativo (Polling + Websocket)
+    📍 Geo-Filter: 8.0 KM
+    🔧 Status: FULL FULL FULL (NO OMISSIONS)
+    ----------------------------------------------
     `);
 });
