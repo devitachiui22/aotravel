@@ -304,54 +304,66 @@ io.on('connection', (socket) => {
      * - Filtra motoristas por geolocalização.
      */
     socket.on('request_ride', async (data) => {
-        const { passenger_id, origin_lat, origin_lng, dest_lat, dest_lng, origin_name, dest_name, initial_price, ride_type, distance_km } = data;
-        logSystem('RIDE_REQUEST', `Passageiro ${passenger_id} solicitando corrida de ${distance_km}km`);
+            const { passenger_id, origin_lat, origin_lng, dest_lat, dest_lng, origin_name, dest_name, initial_price, ride_type, distance_km } = data;
+            logSystem('RIDE_REQUEST', `Passageiro ${passenger_id} solicitando corrida. Origem: ${origin_lat}, ${origin_lng}`);
 
-        try {
-            // 1. Inserir Corrida
-            const insertQuery = `
-                INSERT INTO rides (
-                    passenger_id, origin_lat, origin_lng, dest_lat, dest_lng,
-                    origin_name, dest_name, initial_price, final_price, ride_type, distance_km, status, created_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9, $10, 'searching', NOW())
-                RETURNING *
-            `;
-            const result = await pool.query(insertQuery, [passenger_id, origin_lat, origin_lng, dest_lat, dest_lng, origin_name, dest_name, initial_price, ride_type, distance_km]);
-            const ride = result.rows[0];
+            try {
+                // 1. Inserir Corrida
+                const insertQuery = `
+                    INSERT INTO rides (
+                        passenger_id, origin_lat, origin_lng, dest_lat, dest_lng,
+                        origin_name, dest_name, initial_price, final_price, ride_type, distance_km, status, created_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9, $10, 'searching', NOW())
+                    RETURNING *
+                `;
+                const result = await pool.query(insertQuery, [passenger_id, origin_lat, origin_lng, dest_lat, dest_lng, origin_name, dest_name, initial_price, ride_type, distance_km]);
+                const ride = result.rows[0];
 
-            // 2. VINCULAR SOCKET DO PASSAGEIRO À SALA (CRÍTICO PARA RECEBER RESPOSTAS)
-            socket.join(`ride_${ride.id}`);
+                socket.join(`ride_${ride.id}`);
+                io.to(`user_${passenger_id}`).emit('searching_started', ride);
 
-            // 3. Confirma para o app do passageiro que a busca começou
-            io.to(`user_${passenger_id}`).emit('searching_started', ride);
+                // 2. DIAGNÓSTICO DO BANCO DE DADOS (DEBUG)
+                // Vamos ver se o motorista SEQUER existe na tabela de posições
+                const debugQuery = `SELECT * FROM driver_positions`;
+                const debugRes = await pool.query(debugQuery);
+                console.log("🔍 [DEBUG RADAR] Total de motoristas na tabela 'driver_positions':", debugRes.rowCount);
 
-            // 4. Busca Motoristas (Raio 8KM + Ativos nos últimos 30 min)
-            const driversQuery = `SELECT * FROM driver_positions WHERE last_update > NOW() - INTERVAL '30 minutes'`;
-            const driversRes = await pool.query(driversQuery);
+                if (debugRes.rowCount > 0) {
+                    debugRes.rows.forEach(d => {
+                        const distDebug = getDistance(origin_lat, origin_lng, d.lat, d.lng);
+                        console.log(`   -> Driver ID: ${d.driver_id} | Lat: ${d.lat}, Lng: ${d.lng} | Distância: ${distDebug.toFixed(2)} KM | Update: ${d.last_update}`);
+                    });
+                } else {
+                    console.log("   -> ⚠️ A TABELA DE POSIÇÕES ESTÁ VAZIA! O App do motorista não está enviando GPS.");
+                }
 
-            const nearbyDrivers = driversRes.rows.filter(d => {
-                const dist = getDistance(origin_lat, origin_lng, d.lat, d.lng);
-                return dist <= 8.0; // Filtro de 8 KM
-            });
+                // 3. Busca Motoristas (Aumentei o tempo para 24h e raio para 50km para teste)
+                // Se funcionar agora, o problema era o filtro de tempo ou distância
+                const driversQuery = `SELECT * FROM driver_positions WHERE last_update > NOW() - INTERVAL '24 hours'`;
+                const driversRes = await pool.query(driversQuery);
 
-            if (nearbyDrivers.length === 0) {
-                logSystem('RIDE_REQUEST', `Zero motoristas encontrados para Ride ${ride.id}`);
-                // Avisa após um pequeno delay para não ser instantâneo demais
-                setTimeout(() => {
-                    io.to(`user_${passenger_id}`).emit('no_drivers', { message: "Nenhum motorista disponível no momento." });
-                }, 5000);
-            } else {
-                logSystem('RIDE_REQUEST', `Notificando ${nearbyDrivers.length} motoristas.`);
-                nearbyDrivers.forEach(d => {
-                    io.to(`user_${d.driver_id}`).emit('ride_opportunity', ride);
+                const nearbyDrivers = driversRes.rows.filter(d => {
+                    const dist = getDistance(origin_lat, origin_lng, d.lat, d.lng);
+                    return dist <= 50.0; // AUMENTADO PARA 50KM PARA TESTE
                 });
-            }
 
-        } catch (e) {
-            logError('RIDE_REQUEST', e);
-            io.to(`user_${passenger_id}`).emit('error', { message: "Erro ao processar solicitação." });
-        }
-    });
+                if (nearbyDrivers.length === 0) {
+                    logSystem('RIDE_REQUEST', `Zero motoristas encontrados (Filtro aplicado).`);
+                    setTimeout(() => {
+                        io.to(`user_${passenger_id}`).emit('no_drivers', { message: "Nenhum motorista disponível na área." });
+                    }, 5000);
+                } else {
+                    logSystem('RIDE_REQUEST', `Notificando ${nearbyDrivers.length} motoristas.`);
+                    nearbyDrivers.forEach(d => {
+                        io.to(`user_${d.driver_id}`).emit('ride_opportunity', ride);
+                    });
+                }
+
+            } catch (e) {
+                logError('RIDE_REQUEST', e);
+                io.to(`user_${passenger_id}`).emit('error', { message: "Erro ao processar solicitação." });
+            }
+        });
 
     /**
      * EVENTO 2: ACEITAR CORRIDA (Accept Ride)
