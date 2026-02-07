@@ -2,11 +2,11 @@
  * =================================================================================================
  * 🚀 AOTRAVEL SERVER PRO - ULTRA FINAL MEGA BLASTER (REVISION 2026.02.10)
  * =================================================================================================
- * 
+ *
  * ARQUIVO: backend/server.js
  * DESCRIÇÃO: Backend Monolítico Robusto para App de Transporte (Angola).
  * STATUS: PRODUCTION READY - FULL VERSION (ZERO OMISSÕES, ZERO SIMPLIFICAÇÕES)
- * 
+ *
  * --- ÍNDICE DE FUNCIONALIDADES ---
  * 1. CONFIGURAÇÃO & MIDDLEWARE (100MB Upload, CORS Total)
  * 2. DATABASE ENGINE (Neon PostgreSQL, Auto-Reconnect, Pool Management)
@@ -28,7 +28,7 @@
  *    - PERFIL DO USUÁRIO (Foto, Nome, Telefone, Documentos, Configurações)
  *    - ADMINISTRAÇÃO (Gestão Completa de Usuários, Corridas, Motoristas, Estatísticas)
  * 7. SISTEMA DE SESSÃO (Persistência Total - Sobrevive a Reinício de App)
- * 
+ *
  * =================================================================================================
  */
 
@@ -211,25 +211,28 @@ async function getFullRideDetails(rideId) {
     }
 }
 
-// Função para buscar dados completos do usuário
+// --- FUNÇÃO GETUSERFULLDETAILS REPARADA (COM COALESCE PARA EVITAR NULL CRASH) ---
 async function getUserFullDetails(userId) {
     const query = `
-        SELECT id, name, email, phone, photo, role, balance, bonus_points,
-               vehicle_details, bi_front, bi_back, is_online, rating,
+        SELECT id, name, email, phone, photo, role,
+               COALESCE(balance, 0)::FLOAT as balance,
+               COALESCE(bonus_points, 0) as bonus_points,
+               COALESCE(vehicle_details, '{}'::jsonb) as vehicle_details,
+               bi_front, bi_back, is_online, rating,
                fcm_token, created_at,
-               settings, privacy_settings, notification_preferences
+               COALESCE(settings, '{}'::jsonb) as settings
         FROM users
         WHERE id = $1
     `;
-
     try {
         const res = await pool.query(query, [userId]);
         return res.rows[0];
     } catch (e) {
-        logError('USER_FETCH', e);
+        console.error('❌ [USER_FETCH] ERRO:', e.message);
         return null;
     }
 }
+
 
 // --- 5. BOOTSTRAP: INICIALIZAÇÃO E MIGRAÇÃO COMPLETA DO BANCO ---
 async function bootstrapDatabase() {
@@ -416,6 +419,7 @@ async function bootstrapDatabase() {
         // --- MIGRAÇÃO DE REPARO (ADIÇÃO FORÇADA DE COLUNAS FALTANTES) ---
         const columnsToAdd = [
             // Users table
+            ['users', 'fcm_token', 'TEXT'], // ESTA LINHA É CRÍTICA
             ['users', 'session_token', 'TEXT'],
             ['users', 'session_expiry', 'TIMESTAMP'],
             ['users', 'last_login', 'TIMESTAMP'],
@@ -428,7 +432,7 @@ async function bootstrapDatabase() {
             ['users', 'driving_license_front', 'TEXT'],
             ['users', 'driving_license_back', 'TEXT'],
             ['users', 'updated_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP'],
-            
+
             // Rides table
             ['rides', 'accepted_at', 'TIMESTAMP'],
             ['rides', 'started_at', 'TIMESTAMP'],
@@ -437,10 +441,10 @@ async function bootstrapDatabase() {
             ['rides', 'cancellation_reason', 'TEXT'],
             ['rides', 'payment_method', 'TEXT'],
             ['rides', 'payment_status', 'TEXT DEFAULT \'pending\''],
-            
+
             // Chat messages table
             ['chat_messages', 'read_at', 'TIMESTAMP'],
-            
+
             // Wallet transactions table
             ['wallet_transactions', 'status', 'TEXT DEFAULT \'completed\''],
             ['wallet_transactions', 'metadata', 'JSONB DEFAULT \'{}\''],
@@ -475,7 +479,7 @@ async function bootstrapDatabase() {
         // Inserir configurações padrão do app
         await client.query(`
             INSERT INTO app_settings (key, value, description)
-            VALUES 
+            VALUES
             ('ride_prices', '{"base_price": 600, "km_rate": 300, "moto_base": 400, "moto_km_rate": 180, "delivery_base": 1000, "delivery_km_rate": 450}', 'Configurações de preços das corridas'),
             ('app_config', '{"max_radius_km": 15, "driver_timeout_minutes": 30, "ride_search_timeout": 600}', 'Configurações gerais do app'),
             ('commission_rates', '{"driver_commission": 0.8, "platform_commission": 0.2}', 'Taxas de comissão'),
@@ -511,13 +515,13 @@ async function authenticateToken(req, res, next) {
         if (sessionToken) {
             // Verificar sessão persistente
             const sessionRes = await pool.query(
-                `SELECT u.* FROM users u 
-                 JOIN user_sessions s ON u.id = s.user_id 
-                 WHERE s.session_token = $1 AND s.is_active = true 
+                `SELECT u.* FROM users u
+                 JOIN user_sessions s ON u.id = s.user_id
+                 WHERE s.session_token = $1 AND s.is_active = true
                  AND (s.expires_at IS NULL OR s.expires_at > NOW())`,
                 [sessionToken]
             );
-            
+
             if (sessionRes.rows.length > 0) {
                 user = sessionRes.rows[0];
                 // Atualizar última atividade
@@ -566,33 +570,33 @@ async function createPersistentSession(userId, deviceInfo = {}) {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        
+
         // Gerar token de sessão único
         const sessionToken = require('crypto').randomBytes(64).toString('hex');
         const expiresAt = new Date();
         expiresAt.setFullYear(expiresAt.getFullYear() + 1); // 1 ano de validade
-        
+
         // Criar registro de sessão
         await client.query(
-            `INSERT INTO user_sessions 
-             (user_id, session_token, device_info, expires_at, is_active) 
+            `INSERT INTO user_sessions
+             (user_id, session_token, device_info, expires_at, is_active)
              VALUES ($1, $2, $3, $4, true)`,
             [userId, sessionToken, JSON.stringify(deviceInfo), expiresAt]
         );
-        
+
         // Atualizar usuário com token de sessão
         await client.query(
-            `UPDATE users SET 
-             session_token = $1, 
+            `UPDATE users SET
+             session_token = $1,
              session_expiry = $2,
              last_login = NOW(),
-             is_online = true 
+             is_online = true
              WHERE id = $3`,
             [sessionToken, expiresAt, userId]
         );
-        
+
         await client.query('COMMIT');
-        
+
         return {
             session_token: sessionToken,
             expires_at: expiresAt
@@ -608,21 +612,21 @@ async function createPersistentSession(userId, deviceInfo = {}) {
 async function validateSession(sessionToken) {
     try {
         const result = await pool.query(
-            `SELECT u.* FROM users u 
-             JOIN user_sessions s ON u.id = s.user_id 
-             WHERE s.session_token = $1 
-             AND s.is_active = true 
+            `SELECT u.* FROM users u
+             JOIN user_sessions s ON u.id = s.user_id
+             WHERE s.session_token = $1
+             AND s.is_active = true
              AND (s.expires_at IS NULL OR s.expires_at > NOW())`,
             [sessionToken]
         );
-        
+
         if (result.rows.length > 0) {
             // Atualizar última atividade
             await pool.query(
                 'UPDATE user_sessions SET last_activity = NOW() WHERE session_token = $1',
                 [sessionToken]
             );
-            
+
             return result.rows[0];
         }
         return null;
@@ -652,7 +656,7 @@ app.get('/', (req, res) => res.status(200).json({
 // --- AUTH: LOGIN ---
 app.post('/api/auth/login', async (req, res) => {
     const { email, password, device_info, fcm_token } = req.body;
-    
+
     if (!email || !password) {
         return res.status(400).json({ error: "Email e senha são obrigatórios." });
     }
@@ -662,13 +666,13 @@ app.post('/api/auth/login', async (req, res) => {
             'SELECT * FROM users WHERE email = $1',
             [email.toLowerCase().trim()]
         );
-        
+
         if (result.rows.length === 0) {
             return res.status(401).json({ error: "Credenciais incorretas." });
         }
 
         const user = result.rows[0];
-        
+
         // Verificar senha (em produção, usar bcrypt.compare)
         if (user.password !== password) {
             return res.status(401).json({ error: "Credenciais incorretas." });
@@ -680,7 +684,7 @@ app.post('/api/auth/login', async (req, res) => {
 
         // Criar sessão persistente
         const session = await createPersistentSession(user.id, device_info || {});
-        
+
         // Atualizar FCM token se fornecido
         if (fcm_token) {
             await pool.query(
@@ -695,7 +699,7 @@ app.post('/api/auth/login', async (req, res) => {
             'SELECT * FROM wallet_transactions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 5',
             [user.id]
         );
-        
+
         // Remover senha do objeto de resposta
         delete user.password;
         user.transactions = tx.rows;
@@ -741,18 +745,18 @@ app.post('/api/auth/signup', async (req, res) => {
 
         const result = await pool.query(
             `INSERT INTO users (name, email, phone, password, role, photo, vehicle_details, balance, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, 0.00, NOW()) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7, 0.00, NOW())
              RETURNING id, name, email, phone, role, photo, vehicle_details, balance, created_at`,
             [name, email.toLowerCase().trim(), phone, hashedPassword, role, photo, vehicleDetails]
         );
 
         const newUser = result.rows[0];
-        
+
         // Criar sessão automática
         const session = await createPersistentSession(newUser.id, req.body.device_info || {});
 
         logSystem('SIGNUP', `Novo usuário cadastrado: ${name} (${role})`);
-        
+
         newUser.session = session;
         res.status(201).json(newUser);
 
@@ -766,14 +770,14 @@ app.post('/api/auth/signup', async (req, res) => {
 app.post('/api/auth/logout', authenticateToken, async (req, res) => {
     try {
         const sessionToken = req.headers['x-session-token'];
-        
+
         if (sessionToken) {
             await pool.query(
                 'UPDATE user_sessions SET is_active = false WHERE session_token = $1',
                 [sessionToken]
             );
         }
-        
+
         await pool.query(
             'UPDATE users SET is_online = false, session_token = NULL WHERE id = $1',
             [req.user.id]
@@ -788,32 +792,50 @@ app.post('/api/auth/logout', authenticateToken, async (req, res) => {
 });
 
 // --- AUTH: VERIFICAR SESSÃO ---
+// --- ROTA DE SESSÃO REPARADA E ATUALIZADA ---
 app.get('/api/auth/session', async (req, res) => {
     const sessionToken = req.headers['x-session-token'];
-    
+
+    // Verifica se o token foi enviado no cabeçalho
     if (!sessionToken) {
-        return res.status(401).json({ error: 'Sessão não fornecida' });
+        return res.status(401).json({ error: 'Sessão não fornecida ou token ausente' });
     }
 
     try {
+        // Valida se o token existe no banco/cache e se não expirou
         const user = await validateSession(sessionToken);
-        
+
         if (!user) {
             return res.status(401).json({ error: 'Sessão inválida ou expirada' });
         }
 
-        // Buscar dados atualizados
+        // Busca os detalhes completos e atualizados do usuário (Saldo, Status, etc)
         const fullUser = await getUserFullDetails(user.id);
-        delete fullUser.password;
 
+        if (!fullUser) {
+            return res.status(404).json({ error: 'Usuário não encontrado na base de dados' });
+        }
+
+        // Segurança: Remove a senha antes de enviar para o cliente
+        if (fullUser.password) {
+            delete fullUser.password;
+        }
+
+        // Resposta bem-sucedida com dados completos e metadados da sessão
         res.json({
             user: fullUser,
             session_valid: true,
-            expires_at: user.session_expiry
+            expires_at: user.session_expiry // Mantido da sua versão atual
         });
+
     } catch (e) {
-        logError('SESSION_CHECK', e);
-        res.status(500).json({ error: 'Erro ao verificar sessão' });
+        // Log de erro detalhado para monitoramento do servidor
+        console.error('❌ [SESSION_CHECK] ERRO CRÍTICO:', e.message);
+
+        // Se você tiver uma função de log específica como logError, pode usá-la aqui:
+        // logError('SESSION_CHECK', e);
+
+        res.status(500).json({ error: 'Erro interno ao processar verificação de sessão' });
     }
 });
 
@@ -827,7 +849,7 @@ app.get('/api/profile', authenticateToken, async (req, res) => {
 
         // Buscar estatísticas
         const stats = await pool.query(`
-            SELECT 
+            SELECT
                 COUNT(CASE WHEN passenger_id = $1 AND status = 'completed' THEN 1 END) as total_rides_as_passenger,
                 COUNT(CASE WHEN driver_id = $1 AND status = 'completed' THEN 1 END) as total_rides_as_driver,
                 COALESCE(AVG(CASE WHEN passenger_id = $1 THEN rating END), 0) as avg_rating_as_passenger,
@@ -849,7 +871,7 @@ app.get('/api/profile', authenticateToken, async (req, res) => {
 // --- PERFIL: ATUALIZAR PERFIL ---
 app.put('/api/profile', authenticateToken, async (req, res) => {
     const { name, phone, photo, vehicle_details } = req.body;
-    
+
     try {
         const updates = [];
         const values = [];
@@ -887,7 +909,7 @@ app.put('/api/profile', authenticateToken, async (req, res) => {
         values.push(req.user.id);
 
         const query = `UPDATE users SET ${updates.join(', ')} WHERE id = $${paramCount} RETURNING *`;
-        
+
         const result = await pool.query(query, values);
         const updatedUser = result.rows[0];
         delete updatedUser.password;
@@ -908,17 +930,17 @@ app.post('/api/profile/photo', authenticateToken, upload.single('photo'), async 
         }
 
         const photoUrl = `/uploads/${req.file.filename}`;
-        
+
         await pool.query(
             'UPDATE users SET photo = $1, updated_at = NOW() WHERE id = $2',
             [photoUrl, req.user.id]
         );
 
         logSystem('PHOTO_UPLOAD', `Foto de perfil atualizada para usuário ${req.user.id}`);
-        res.json({ 
-            success: true, 
+        res.json({
+            success: true,
             photo_url: photoUrl,
-            message: "Foto de perfil atualizada com sucesso." 
+            message: "Foto de perfil atualizada com sucesso."
         });
     } catch (e) {
         logError('PHOTO_UPLOAD', e);
@@ -943,12 +965,12 @@ app.post('/api/profile/documents', authenticateToken, upload.fields([
             updates.push(`bi_front = $${paramCount}`);
             values.push(`/uploads/${req.files['bi_front'][0].filename}`);
             paramCount++;
-            
+
             // Registrar documento na tabela de documentos
             await pool.query(
                 `INSERT INTO user_documents (user_id, document_type, front_image, status)
                  VALUES ($1, 'bi', $2, 'pending')
-                 ON CONFLICT (user_id, document_type) 
+                 ON CONFLICT (user_id, document_type)
                  DO UPDATE SET front_image = $2, status = 'pending', updated_at = NOW()`,
                 [req.user.id, `/uploads/${req.files['bi_front'][0].filename}`]
             );
@@ -958,7 +980,7 @@ app.post('/api/profile/documents', authenticateToken, upload.fields([
             updates.push(`bi_back = $${paramCount}`);
             values.push(`/uploads/${req.files['bi_back'][0].filename}`);
             paramCount++;
-            
+
             await pool.query(
                 `UPDATE user_documents SET back_image = $1, updated_at = NOW()
                  WHERE user_id = $2 AND document_type = 'bi'`,
@@ -972,11 +994,11 @@ app.post('/api/profile/documents', authenticateToken, upload.fields([
                 updates.push(`driving_license_front = $${paramCount}`);
                 values.push(`/uploads/${req.files['driving_license_front'][0].filename}`);
                 paramCount++;
-                
+
                 await pool.query(
                     `INSERT INTO user_documents (user_id, document_type, front_image, status)
                      VALUES ($1, 'driving_license', $2, 'pending')
-                     ON CONFLICT (user_id, document_type) 
+                     ON CONFLICT (user_id, document_type)
                      DO UPDATE SET front_image = $2, status = 'pending', updated_at = NOW()`,
                     [req.user.id, `/uploads/${req.files['driving_license_front'][0].filename}`]
                 );
@@ -986,7 +1008,7 @@ app.post('/api/profile/documents', authenticateToken, upload.fields([
                 updates.push(`driving_license_back = $${paramCount}`);
                 values.push(`/uploads/${req.files['driving_license_back'][0].filename}`);
                 paramCount++;
-                
+
                 await pool.query(
                     `UPDATE user_documents SET back_image = $1, updated_at = NOW()
                      WHERE user_id = $2 AND document_type = 'driving_license'`,
@@ -1004,12 +1026,12 @@ app.post('/api/profile/documents', authenticateToken, upload.fields([
         // Se todos documentos necessários foram enviados, marcar como pendente de verificação
         if (req.user.role === 'driver') {
             const docCount = await pool.query(
-                `SELECT COUNT(*) FROM user_documents 
+                `SELECT COUNT(*) FROM user_documents
                  WHERE user_id = $1 AND document_type IN ('bi', 'driving_license')
                  AND front_image IS NOT NULL`,
                 [req.user.id]
             );
-            
+
             if (docCount.rows[0].count == 2) {
                 await pool.query(
                     'UPDATE users SET is_verified = false WHERE id = $1',
@@ -1019,9 +1041,9 @@ app.post('/api/profile/documents', authenticateToken, upload.fields([
         }
 
         logSystem('DOCUMENTS_UPLOAD', `Documentos atualizados para usuário ${req.user.id}`);
-        res.json({ 
-            success: true, 
-            message: "Documentos enviados com sucesso. Aguarde verificação." 
+        res.json({
+            success: true,
+            message: "Documentos enviados com sucesso. Aguarde verificação."
         });
     } catch (e) {
         logError('DOCUMENTS_UPLOAD', e);
@@ -1032,7 +1054,7 @@ app.post('/api/profile/documents', authenticateToken, upload.fields([
 // --- PERFIL: ATUALIZAR CONFIGURAÇÕES ---
 app.put('/api/profile/settings', authenticateToken, async (req, res) => {
     const { settings, privacy_settings, notification_preferences } = req.body;
-    
+
     try {
         const updates = [];
         const values = [];
@@ -1067,9 +1089,9 @@ app.put('/api/profile/settings', authenticateToken, async (req, res) => {
         await pool.query(query, values);
 
         logSystem('SETTINGS_UPDATE', `Configurações atualizadas para usuário ${req.user.id}`);
-        res.json({ 
-            success: true, 
-            message: "Configurações atualizadas com sucesso." 
+        res.json({
+            success: true,
+            message: "Configurações atualizadas com sucesso."
         });
     } catch (e) {
         logError('SETTINGS_UPDATE', e);
@@ -1080,7 +1102,7 @@ app.put('/api/profile/settings', authenticateToken, async (req, res) => {
 // --- PERFIL: ALTERAR SENHA ---
 app.post('/api/profile/change-password', authenticateToken, async (req, res) => {
     const { current_password, new_password } = req.body;
-    
+
     if (!current_password || !new_password) {
         return res.status(400).json({ error: "Senha atual e nova senha são obrigatórias." });
     }
@@ -1088,7 +1110,7 @@ app.post('/api/profile/change-password', authenticateToken, async (req, res) => 
     try {
         // Verificar senha atual
         const user = await pool.query('SELECT password FROM users WHERE id = $1', [req.user.id]);
-        
+
         if (user.rows.length === 0) {
             return res.status(404).json({ error: "Usuário não encontrado." });
         }
@@ -1106,9 +1128,9 @@ app.post('/api/profile/change-password', authenticateToken, async (req, res) => 
         );
 
         logSystem('PASSWORD_CHANGE', `Senha alterada para usuário ${req.user.id}`);
-        res.json({ 
-            success: true, 
-            message: "Senha alterada com sucesso." 
+        res.json({
+            success: true,
+            message: "Senha alterada com sucesso."
         });
     } catch (e) {
         logError('PASSWORD_CHANGE', e);
@@ -1118,11 +1140,11 @@ app.post('/api/profile/change-password', authenticateToken, async (req, res) => 
 
 // --- RIDES: SOLICITAR CORRIDA ---
 app.post('/api/rides/request', authenticateToken, async (req, res) => {
-    const { 
+    const {
         origin_lat, origin_lng, dest_lat, dest_lng,
-        origin_name, dest_name, ride_type, distance_km 
+        origin_name, dest_name, ride_type, distance_km
     } = req.body;
-    
+
     if (!origin_lat || !origin_lng || !dest_lat || !dest_lng || !origin_name || !dest_name) {
         return res.status(400).json({ error: "Dados de origem e destino são obrigatórios." });
     }
@@ -1132,7 +1154,7 @@ app.post('/api/rides/request', authenticateToken, async (req, res) => {
         const priceConfig = await pool.query(
             "SELECT value FROM app_settings WHERE key = 'ride_prices'"
         );
-        
+
         const prices = priceConfig.rows[0]?.value || {
             base_price: 600,
             km_rate: 300,
@@ -1158,7 +1180,7 @@ app.post('/api/rides/request', authenticateToken, async (req, res) => {
         const result = await pool.query(
             `INSERT INTO rides (
                 passenger_id, origin_lat, origin_lng, dest_lat, dest_lng,
-                origin_name, dest_name, initial_price, final_price, 
+                origin_name, dest_name, initial_price, final_price,
                 ride_type, distance_km, status, created_at
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9, $10, 'searching', NOW())
             RETURNING *`,
@@ -1169,16 +1191,16 @@ app.post('/api/rides/request', authenticateToken, async (req, res) => {
         );
 
         const ride = result.rows[0];
-        
+
         // Notificar via socket
         io.emit('new_ride_request', ride);
-        
+
         // Buscar motoristas próximos
         const driversRes = await pool.query(`
             SELECT dp.*, u.name, u.photo, u.rating, u.vehicle_details
             FROM driver_positions dp
             JOIN users u ON dp.driver_id = u.id
-            WHERE u.is_online = true 
+            WHERE u.is_online = true
             AND u.role = 'driver'
             AND u.is_blocked = false
             AND dp.last_update > NOW() - INTERVAL '30 minutes'
@@ -1208,7 +1230,7 @@ app.post('/api/rides/request', authenticateToken, async (req, res) => {
 // --- RIDES: ACEITAR CORRIDA ---
 app.post('/api/rides/accept', authenticateToken, async (req, res) => {
     const { ride_id, final_price } = req.body;
-    
+
     if (!ride_id) {
         return res.status(400).json({ error: "ID da corrida é obrigatório." });
     }
@@ -1234,7 +1256,7 @@ app.post('/api/rides/accept', authenticateToken, async (req, res) => {
 
         if (ride.status !== 'searching') {
             await client.query('ROLLBACK');
-            return res.status(400).json({ 
+            return res.status(400).json({
                 error: "Esta corrida já foi aceita ou está em andamento.",
                 current_status: ride.status
             });
@@ -1242,8 +1264,8 @@ app.post('/api/rides/accept', authenticateToken, async (req, res) => {
 
         // Atualizar corrida
         const updateQuery = `
-            UPDATE rides SET 
-                driver_id = $1, 
+            UPDATE rides SET
+                driver_id = $1,
                 final_price = COALESCE($2, initial_price),
                 status = 'accepted',
                 accepted_at = NOW()
@@ -1252,7 +1274,7 @@ app.post('/api/rides/accept', authenticateToken, async (req, res) => {
         `;
 
         const updateRes = await client.query(updateQuery, [
-            req.user.id, 
+            req.user.id,
             final_price || ride.initial_price,
             ride_id
         ]);
@@ -1283,14 +1305,14 @@ app.post('/api/rides/accept', authenticateToken, async (req, res) => {
 // --- RIDES: INICIAR CORRIDA ---
 app.post('/api/rides/start', authenticateToken, async (req, res) => {
     const { ride_id } = req.body;
-    
+
     if (!ride_id) {
         return res.status(400).json({ error: "ID da corrida é obrigatório." });
     }
 
     try {
         const result = await pool.query(
-            `UPDATE rides SET 
+            `UPDATE rides SET
                 status = 'ongoing',
                 started_at = NOW()
              WHERE id = $1 AND (driver_id = $2 OR passenger_id = $2)
@@ -1316,19 +1338,22 @@ app.post('/api/rides/start', authenticateToken, async (req, res) => {
     }
 });
 
-// --- RIDES: FINALIZAR CORRIDA ---
+// --- RIDES: FINALIZAR CORRIDA (HÍBRIDO / ROBUSTO) ---
 app.post('/api/rides/complete', authenticateToken, async (req, res) => {
     const { ride_id, rating, feedback, payment_method } = req.body;
-    
+
+    // Validação básica
     if (!ride_id) {
         return res.status(400).json({ error: "ID da corrida é obrigatório." });
     }
 
     const client = await pool.connect();
+
     try {
         await client.query('BEGIN');
 
-        // Buscar corrida
+        // 1. Buscar corrida com trava de banco de dados (FOR UPDATE)
+        // Isso impede que duas requisições tentem finalizar a mesma corrida ao mesmo tempo
         const rideRes = await client.query(
             `SELECT * FROM rides WHERE id = $1 FOR UPDATE`,
             [ride_id]
@@ -1341,17 +1366,41 @@ app.post('/api/rides/complete', authenticateToken, async (req, res) => {
 
         const ride = rideRes.rows[0];
 
+        // 2. Verificação Híbrida de Status (Idempotência)
+        // Se já estiver finalizada, apenas retorna os dados sem processar pagamento de novo.
+        // Isso salva o app se a internet falhar e ele tentar enviar de novo.
+        if (ride.status === 'completed') {
+            await client.query('COMMIT'); // Libera a trava
+
+            const existingData = await getFullRideDetails(ride_id);
+            // Re-emite o evento para garantir que o front atualize
+            io.to(`ride_${ride_id}`).emit('ride_completed', existingData);
+
+            return res.json({
+                success: true,
+                message: "Corrida já foi finalizada anteriormente.",
+                ...existingData
+            });
+        }
+
+        // Se não for 'ongoing' e nem 'completed', é erro (ex: cancelled)
         if (ride.status !== 'ongoing') {
             await client.query('ROLLBACK');
-            return res.status(400).json({ 
-                error: "Corrida não está em andamento.",
+            return res.status(400).json({
+                error: "Corrida não está em andamento para ser finalizada.",
                 current_status: ride.status
             });
         }
 
-        // Atualizar corrida
-        const updateQuery = `
-            UPDATE rides SET 
+        // 3. Definição de Valores
+        const driverEarnings = ride.final_price || ride.initial_price;
+        const finalRating = rating || 5;
+        const finalFeedback = feedback || '';
+        const finalPaymentMethod = payment_method || 'cash';
+
+        // 4. Atualizar status da corrida
+        await client.query(`
+            UPDATE rides SET
                 status = 'completed',
                 rating = $1,
                 feedback = $2,
@@ -1359,42 +1408,38 @@ app.post('/api/rides/complete', authenticateToken, async (req, res) => {
                 payment_status = 'paid',
                 completed_at = NOW()
             WHERE id = $4
-            RETURNING *
-        `;
+        `, [finalRating, finalFeedback, finalPaymentMethod, ride_id]);
 
-        await client.query(updateQuery, [
-            rating || 5,
-            feedback || '',
-            payment_method || 'cash',
-            ride_id
-        ]);
+        // 5. Processamento Financeiro (Motorista)
+        // O motorista recebe o crédito no saldo virtual independente do método (lógica de app tipo Uber)
+        // Se for dinheiro, ele fica com o dinheiro na mão, mas o sistema registra como ganho.
 
-        // Processar pagamento para o motorista
-        const driverEarnings = ride.final_price || ride.initial_price;
-        
-        // Adicionar à carteira do motorista
+        // Histórico do Motorista
         await client.query(
-            `INSERT INTO wallet_transactions 
+            `INSERT INTO wallet_transactions
              (user_id, amount, type, description, reference_id, status)
              VALUES ($1, $2, 'earnings', 'Corrida finalizada', $3, 'completed')`,
             [ride.driver_id, driverEarnings, ride_id]
         );
 
-        // Atualizar saldo do motorista
+        // Atualiza Saldo do Motorista
         await client.query(
             'UPDATE users SET balance = balance + $1 WHERE id = $2',
             [driverEarnings, ride.driver_id]
         );
 
-        // Se foi pago com saldo, debitar do passageiro
-        if (payment_method === 'wallet') {
+        // 6. Processamento Financeiro (Passageiro)
+        // Só debita do passageiro se for via Carteira (Wallet)
+        if (finalPaymentMethod === 'wallet') {
+            // Histórico do Passageiro
             await client.query(
-                `INSERT INTO wallet_transactions 
+                `INSERT INTO wallet_transactions
                  (user_id, amount, type, description, reference_id, status)
                  VALUES ($1, $2, 'payment', 'Pagamento de corrida', $3, 'completed')`,
                 [ride.passenger_id, -driverEarnings, ride_id]
             );
 
+            // Debita Saldo do Passageiro
             await client.query(
                 'UPDATE users SET balance = balance - $1 WHERE id = $2',
                 [driverEarnings, ride.passenger_id]
@@ -1403,18 +1448,24 @@ app.post('/api/rides/complete', authenticateToken, async (req, res) => {
 
         await client.query('COMMIT');
 
-        // Buscar dados atualizados
+        // 7. Retorno e Notificações (Socket.io)
         const fullData = await getFullRideDetails(ride_id);
 
-        // Notificar via socket
+        // Notifica a sala da corrida (Motorista e Passageiro que estão na tela da corrida)
         io.to(`ride_${ride_id}`).emit('ride_completed', fullData);
 
-        logSystem('RIDE_COMPLETE', `Corrida ${ride_id} finalizada por ${req.user.id}`);
+        // Notifica especificamente os usuários (caso tenham saído da tela da corrida)
+        io.to(`user_${ride.passenger_id}`).emit('ride_completed', fullData);
+        io.to(`user_${ride.driver_id}`).emit('ride_completed', fullData);
+
+        logSystem('RIDE_COMPLETE', `Corrida ${ride_id} finalizada com sucesso. Método: ${finalPaymentMethod}`);
         res.json(fullData);
+
     } catch (e) {
         await client.query('ROLLBACK');
         logError('RIDE_COMPLETE', e);
-        res.status(500).json({ error: "Erro ao finalizar corrida." });
+        // Retorna erro genérico mas loga o detalhe
+        res.status(500).json({ error: "Erro ao processar finalização da corrida.", details: e.message });
     } finally {
         client.release();
     }
@@ -1423,14 +1474,14 @@ app.post('/api/rides/complete', authenticateToken, async (req, res) => {
 // --- RIDES: CANCELAR CORRIDA ---
 app.post('/api/rides/cancel', authenticateToken, async (req, res) => {
     const { ride_id, reason } = req.body;
-    
+
     if (!ride_id) {
         return res.status(400).json({ error: "ID da corrida é obrigatório." });
     }
 
     try {
         const result = await pool.query(
-            `UPDATE rides SET 
+            `UPDATE rides SET
                 status = 'cancelled',
                 cancelled_at = NOW(),
                 cancelled_by = $1,
@@ -1455,8 +1506,8 @@ app.post('/api/rides/cancel', authenticateToken, async (req, res) => {
         });
 
         logSystem('RIDE_CANCEL', `Corrida ${ride_id} cancelada por ${req.user.id}`);
-        res.json({ 
-            success: true, 
+        res.json({
+            success: true,
             message: "Corrida cancelada com sucesso.",
             ride: ride
         });
@@ -1469,28 +1520,28 @@ app.post('/api/rides/cancel', authenticateToken, async (req, res) => {
 // --- RIDES: HISTÓRICO ---
 app.get('/api/rides/history', authenticateToken, async (req, res) => {
     const { limit = 50, offset = 0, status } = req.query;
-    
+
     try {
         let query = `
             SELECT r.*,
-                   CASE 
-                     WHEN r.passenger_id = $1 THEN d.name 
-                     ELSE p.name 
+                   CASE
+                     WHEN r.passenger_id = $1 THEN d.name
+                     ELSE p.name
                    END as counterpart_name,
-                   CASE 
-                     WHEN r.passenger_id = $1 THEN d.photo 
-                     ELSE p.photo 
+                   CASE
+                     WHEN r.passenger_id = $1 THEN d.photo
+                     ELSE p.photo
                    END as counterpart_photo,
-                   CASE 
-                     WHEN r.passenger_id = $1 THEN 'driver' 
-                     ELSE 'passenger' 
+                   CASE
+                     WHEN r.passenger_id = $1 THEN 'driver'
+                     ELSE 'passenger'
                    END as counterpart_role
             FROM rides r
             LEFT JOIN users d ON r.driver_id = d.id
             LEFT JOIN users p ON r.passenger_id = p.id
             WHERE (r.passenger_id = $1 OR r.driver_id = $1)
         `;
-        
+
         const params = [req.user.id];
         let paramCount = 2;
 
@@ -1515,7 +1566,7 @@ app.get('/api/rides/history', authenticateToken, async (req, res) => {
 app.get('/api/rides/:id', authenticateToken, async (req, res) => {
     try {
         const data = await getFullRideDetails(req.params.id);
-        
+
         if (!data) {
             return res.status(404).json({ error: "Corrida não encontrada" });
         }
@@ -1545,9 +1596,9 @@ app.get('/api/wallet', authenticateToken, async (req, res) => {
         }
 
         const txRes = await pool.query(
-            `SELECT * FROM wallet_transactions 
-             WHERE user_id = $1 
-             ORDER BY created_at DESC 
+            `SELECT * FROM wallet_transactions
+             WHERE user_id = $1
+             ORDER BY created_at DESC
              LIMIT 30`,
             [req.user.id]
         );
@@ -1566,7 +1617,7 @@ app.get('/api/wallet', authenticateToken, async (req, res) => {
 // --- CARTEIRA: ADICIONAR SALDO ---
 app.post('/api/wallet/topup', authenticateToken, async (req, res) => {
     const { amount, payment_method, transaction_id } = req.body;
-    
+
     if (!amount || amount <= 0) {
         return res.status(400).json({ error: "Valor inválido." });
     }
@@ -1577,12 +1628,12 @@ app.post('/api/wallet/topup', authenticateToken, async (req, res) => {
 
         // Registrar transação
         await client.query(
-            `INSERT INTO wallet_transactions 
+            `INSERT INTO wallet_transactions
              (user_id, amount, type, description, reference_id, status, metadata)
              VALUES ($1, $2, 'topup', 'Recarga de saldo', $3, 'completed', $4)`,
             [
-                req.user.id, 
-                amount, 
+                req.user.id,
+                amount,
                 transaction_id || generateCode(12),
                 JSON.stringify({
                     payment_method: payment_method || 'unknown',
@@ -1623,7 +1674,7 @@ app.post('/api/wallet/topup', authenticateToken, async (req, res) => {
 // --- CARTEIRA: SOLICITAR SAQUE ---
 app.post('/api/wallet/withdraw', authenticateToken, async (req, res) => {
     const { amount, bank_details } = req.body;
-    
+
     if (!amount || amount <= 0) {
         return res.status(400).json({ error: "Valor inválido." });
     }
@@ -1643,7 +1694,7 @@ app.post('/api/wallet/withdraw', authenticateToken, async (req, res) => {
         );
 
         const currentBalance = parseFloat(balanceRes.rows[0].balance);
-        
+
         if (currentBalance < amount) {
             await client.query('ROLLBACK');
             return res.status(400).json({ error: "Saldo insuficiente." });
@@ -1651,11 +1702,11 @@ app.post('/api/wallet/withdraw', authenticateToken, async (req, res) => {
 
         // Registrar transação de saque
         await client.query(
-            `INSERT INTO wallet_transactions 
+            `INSERT INTO wallet_transactions
              (user_id, amount, type, description, status, metadata)
              VALUES ($1, $2, 'withdrawal', 'Solicitação de saque', 'pending', $3)`,
             [
-                req.user.id, 
+                req.user.id,
                 -amount,
                 JSON.stringify({
                     bank_details: bank_details,
@@ -1720,7 +1771,7 @@ app.get('/api/chat/:ride_id', authenticateToken, async (req, res) => {
 app.get('/api/admin/stats', authenticateToken, requireAdmin, async (req, res) => {
     try {
         const stats = await pool.query(`
-            SELECT 
+            SELECT
                 (SELECT COUNT(*) FROM users) as total_users,
                 (SELECT COUNT(*) FROM users WHERE role = 'driver') as total_drivers,
                 (SELECT COUNT(*) FROM users WHERE role = 'passenger') as total_passengers,
@@ -1763,16 +1814,16 @@ app.get('/api/admin/stats', authenticateToken, requireAdmin, async (req, res) =>
 // --- ADMIN: LISTAR USUÁRIOS ---
 app.get('/api/admin/users', authenticateToken, requireAdmin, async (req, res) => {
     const { role, is_online, is_blocked, search, limit = 50, offset = 0 } = req.query;
-    
+
     try {
         let query = `
-            SELECT id, name, email, phone, role, photo, 
-                   balance, is_online, rating, is_blocked, 
+            SELECT id, name, email, phone, role, photo,
+                   balance, is_online, rating, is_blocked,
                    is_verified, created_at, last_login
             FROM users
             WHERE 1=1
         `;
-        
+
         const params = [];
         let paramCount = 1;
 
@@ -1804,11 +1855,11 @@ app.get('/api/admin/users', authenticateToken, requireAdmin, async (req, res) =>
         params.push(parseInt(limit), parseInt(offset));
 
         const result = await pool.query(query, params);
-        
+
         // Contar total para paginação
         const countQuery = query.replace(/SELECT.*FROM/, 'SELECT COUNT(*) FROM').split('ORDER BY')[0];
         const countResult = await pool.query(countQuery, params.slice(0, -2));
-        
+
         res.json({
             users: result.rows,
             total: parseInt(countResult.rows[0].count),
@@ -1825,36 +1876,36 @@ app.get('/api/admin/users', authenticateToken, requireAdmin, async (req, res) =>
 app.get('/api/admin/users/:id', authenticateToken, requireAdmin, async (req, res) => {
     try {
         const user = await getUserFullDetails(req.params.id);
-        
+
         if (!user) {
             return res.status(404).json({ error: "Usuário não encontrado." });
         }
 
         // Buscar histórico de corridas
         const rides = await pool.query(`
-            SELECT * FROM rides 
-            WHERE passenger_id = $1 OR driver_id = $1 
-            ORDER BY created_at DESC 
+            SELECT * FROM rides
+            WHERE passenger_id = $1 OR driver_id = $1
+            ORDER BY created_at DESC
             LIMIT 20
         `, [req.params.id]);
 
         // Buscar transações da carteira
         const transactions = await pool.query(`
-            SELECT * FROM wallet_transactions 
-            WHERE user_id = $1 
-            ORDER BY created_at DESC 
+            SELECT * FROM wallet_transactions
+            WHERE user_id = $1
+            ORDER BY created_at DESC
             LIMIT 20
         `, [req.params.id]);
 
         // Buscar documentos
         const documents = await pool.query(`
-            SELECT * FROM user_documents 
-            WHERE user_id = $1 
+            SELECT * FROM user_documents
+            WHERE user_id = $1
             ORDER BY created_at DESC
         `, [req.params.id]);
 
         delete user.password;
-        
+
         res.json({
             user: user,
             rides: rides.rows,
@@ -1870,7 +1921,7 @@ app.get('/api/admin/users/:id', authenticateToken, requireAdmin, async (req, res
 // --- ADMIN: ATUALIZAR USUÁRIO ---
 app.put('/api/admin/users/:id', authenticateToken, requireAdmin, async (req, res) => {
     const { is_blocked, is_verified, role, balance, vehicle_details } = req.body;
-    
+
     try {
         const updates = [];
         const values = [];
@@ -1914,7 +1965,7 @@ app.put('/api/admin/users/:id', authenticateToken, requireAdmin, async (req, res
         values.push(req.params.id);
 
         const query = `UPDATE users SET ${updates.join(', ')} WHERE id = $${paramCount} RETURNING *`;
-        
+
         const result = await pool.query(query, values);
         const updatedUser = result.rows[0];
         delete updatedUser.password;
@@ -1930,7 +1981,7 @@ app.put('/api/admin/users/:id', authenticateToken, requireAdmin, async (req, res
 // --- ADMIN: VERIFICAR DOCUMENTO ---
 app.post('/api/admin/documents/:id/verify', authenticateToken, requireAdmin, async (req, res) => {
     const { status, rejection_reason } = req.body;
-    
+
     if (!status || !['approved', 'rejected'].includes(status)) {
         return res.status(400).json({ error: "Status deve ser 'approved' ou 'rejected'." });
     }
@@ -1941,7 +1992,7 @@ app.post('/api/admin/documents/:id/verify', authenticateToken, requireAdmin, asy
 
     try {
         const result = await pool.query(
-            `UPDATE user_documents SET 
+            `UPDATE user_documents SET
                 status = $1,
                 verified_by = $2,
                 verified_at = NOW(),
@@ -1961,7 +2012,7 @@ app.post('/api/admin/documents/:id/verify', authenticateToken, requireAdmin, asy
         // Se documento foi aprovado, verificar se todos documentos do usuário estão aprovados
         if (status === 'approved') {
             const pendingDocs = await pool.query(
-                `SELECT COUNT(*) FROM user_documents 
+                `SELECT COUNT(*) FROM user_documents
                  WHERE user_id = $1 AND status != 'approved'`,
                 [document.user_id]
             );
@@ -1989,11 +2040,11 @@ app.post('/api/admin/documents/:id/verify', authenticateToken, requireAdmin, asy
 // --- ADMIN: LISTAR CORRIDAS ---
 app.get('/api/admin/rides', authenticateToken, requireAdmin, async (req, res) => {
     const { status, date_from, date_to, limit = 50, offset = 0 } = req.query;
-    
+
     try {
         let query = `
-            SELECT r.*, 
-                   p.name as passenger_name, 
+            SELECT r.*,
+                   p.name as passenger_name,
                    d.name as driver_name,
                    p.phone as passenger_phone,
                    d.phone as driver_phone
@@ -2002,7 +2053,7 @@ app.get('/api/admin/rides', authenticateToken, requireAdmin, async (req, res) =>
             LEFT JOIN users d ON r.driver_id = d.id
             WHERE 1=1
         `;
-        
+
         const params = [];
         let paramCount = 1;
 
@@ -2028,11 +2079,11 @@ app.get('/api/admin/rides', authenticateToken, requireAdmin, async (req, res) =>
         params.push(parseInt(limit), parseInt(offset));
 
         const result = await pool.query(query, params);
-        
+
         // Contar total
         const countQuery = query.replace(/SELECT.*FROM/, 'SELECT COUNT(*) FROM').split('ORDER BY')[0];
         const countResult = await pool.query(countQuery, params.slice(0, -2));
-        
+
         res.json({
             rides: result.rows,
             total: parseInt(countResult.rows[0].count),
@@ -2048,18 +2099,18 @@ app.get('/api/admin/rides', authenticateToken, requireAdmin, async (req, res) =>
 // --- ADMIN: GERAR RELATÓRIO ---
 app.post('/api/admin/reports', authenticateToken, requireAdmin, async (req, res) => {
     const { report_type, date_from, date_to } = req.body;
-    
+
     if (!report_type) {
         return res.status(400).json({ error: "Tipo de relatório é obrigatório." });
     }
 
     try {
         let reportData = {};
-        
+
         switch (report_type) {
             case 'financial':
                 const financialData = await pool.query(`
-                    SELECT 
+                    SELECT
                         DATE(created_at) as date,
                         COUNT(*) as total_rides,
                         SUM(final_price) as total_revenue,
@@ -2071,13 +2122,13 @@ app.post('/api/admin/reports', authenticateToken, requireAdmin, async (req, res)
                     GROUP BY DATE(created_at)
                     ORDER BY date DESC
                 `, [date_from || '1900-01-01', date_to || '2100-01-01']);
-                
+
                 reportData = financialData.rows;
                 break;
-                
+
             case 'user_activity':
                 const userActivity = await pool.query(`
-                    SELECT 
+                    SELECT
                         role,
                         COUNT(*) as total_users,
                         SUM(CASE WHEN is_online THEN 1 ELSE 0 END) as online_users,
@@ -2086,13 +2137,13 @@ app.post('/api/admin/reports', authenticateToken, requireAdmin, async (req, res)
                     FROM users
                     GROUP BY role
                 `);
-                
+
                 reportData = userActivity.rows;
                 break;
-                
+
             case 'ride_metrics':
                 const rideMetrics = await pool.query(`
-                    SELECT 
+                    SELECT
                         status,
                         COUNT(*) as count,
                         AVG(distance_km) as avg_distance,
@@ -2102,10 +2153,10 @@ app.post('/api/admin/reports', authenticateToken, requireAdmin, async (req, res)
                     WHERE created_at BETWEEN $1 AND $2
                     GROUP BY status
                 `, [date_from || '1900-01-01', date_to || '2100-01-01']);
-                
+
                 reportData = rideMetrics.rows;
                 break;
-                
+
             default:
                 return res.status(400).json({ error: "Tipo de relatório inválido." });
         }
@@ -2144,7 +2195,7 @@ app.get('/api/admin/settings', authenticateToken, requireAdmin, async (req, res)
 // --- ADMIN: ATUALIZAR CONFIGURAÇÃO ---
 app.put('/api/admin/settings/:key', authenticateToken, requireAdmin, async (req, res) => {
     const { value, description } = req.body;
-    
+
     if (!value) {
         return res.status(400).json({ error: "Valor é obrigatório." });
     }
@@ -2153,7 +2204,7 @@ app.put('/api/admin/settings/:key', authenticateToken, requireAdmin, async (req,
         const result = await pool.query(
             `INSERT INTO app_settings (key, value, description, updated_at)
              VALUES ($1, $2, $3, NOW())
-             ON CONFLICT (key) 
+             ON CONFLICT (key)
              DO UPDATE SET value = $2, description = $3, updated_at = NOW()
              RETURNING *`,
             [req.params.key, JSON.stringify(value), description || null]
@@ -2173,13 +2224,13 @@ app.put('/api/admin/settings/:key', authenticateToken, requireAdmin, async (req,
 // --- NOTIFICAÇÕES: LISTAR ---
 app.get('/api/notifications', authenticateToken, async (req, res) => {
     const { limit = 20, offset = 0, unread_only } = req.query;
-    
+
     try {
         let query = `
-            SELECT * FROM notifications 
+            SELECT * FROM notifications
             WHERE user_id = $1
         `;
-        
+
         const params = [req.user.id];
         let paramCount = 2;
 
@@ -2233,22 +2284,22 @@ app.use('/uploads', express.static(uploadDir));
 
 // --- SISTEMA: ROTA 404 ---
 app.use((req, res) => {
-    res.status(404).json({ 
+    res.status(404).json({
         error: "Rota não encontrada.",
         path: req.path,
-        method: req.method 
+        method: req.method
     });
 });
 
 // --- SISTEMA: MANIPULADOR DE ERROS GLOBAL ---
 app.use((err, req, res, next) => {
     logError('GLOBAL_ERROR', err);
-    
+
     if (err instanceof multer.MulterError) {
         return res.status(400).json({ error: `Erro no upload: ${err.message}` });
     }
-    
-    res.status(500).json({ 
+
+    res.status(500).json({
         error: "Erro interno do servidor.",
         message: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
@@ -2267,7 +2318,7 @@ io.on('connection', (socket) => {
      */
     socket.on('join_user', async (userId) => {
         if (!userId) return;
-        
+
         const roomName = `user_${userId}`;
         socket.join(roomName);
 
@@ -2277,26 +2328,26 @@ io.on('connection', (socket) => {
                 "UPDATE users SET is_online = true, last_login = NOW() WHERE id = $1",
                 [userId]
             );
-            
+
             // Se for motorista, criar/atualizar posição
             const userRes = await pool.query(
                 "SELECT role FROM users WHERE id = $1",
                 [userId]
             );
-            
+
             if (userRes.rows[0]?.role === 'driver') {
                 await pool.query(
                     `INSERT INTO driver_positions (driver_id, socket_id, last_update)
                      VALUES ($1, $2, NOW())
-                     ON CONFLICT (driver_id) 
+                     ON CONFLICT (driver_id)
                      DO UPDATE SET socket_id = $2, last_update = NOW()`,
                     [userId, socket.id]
                 );
             }
-            
+
             logSystem('ROOM', `Usuário ${userId} agora ONLINE na sala: ${roomName}`);
-        } catch (e) { 
-            logError('JOIN_USER', e); 
+        } catch (e) {
+            logError('JOIN_USER', e);
         }
     });
 
@@ -2319,19 +2370,19 @@ io.on('connection', (socket) => {
             await pool.query(
                 `INSERT INTO driver_positions (driver_id, lat, lng, heading, last_update, socket_id)
                  VALUES ($1, $2, $3, $4, NOW(), $5)
-                 ON CONFLICT (driver_id) DO UPDATE SET 
-                    lat = $2, 
-                    lng = $3, 
-                    heading = $4, 
-                    last_update = NOW(), 
+                 ON CONFLICT (driver_id) DO UPDATE SET
+                    lat = $2,
+                    lng = $3,
+                    heading = $4,
+                    last_update = NOW(),
                     socket_id = $5`,
                 [user_id, lat, lng, heading || 0, socket.id]
             );
 
             // 2. RADAR REVERSO: Procurar corridas pendentes
             const pendingRides = await pool.query(
-                `SELECT * FROM rides 
-                 WHERE status = 'searching' 
+                `SELECT * FROM rides
+                 WHERE status = 'searching'
                  AND created_at > NOW() - INTERVAL '10 minutes'`
             );
 
@@ -2356,29 +2407,29 @@ io.on('connection', (socket) => {
      * EVENTO: SOLICITAR CORRIDA
      */
     socket.on('request_ride', async (data) => {
-        const { 
-            passenger_id, origin_lat, origin_lng, 
-            dest_lat, dest_lng, origin_name, dest_name, 
-            initial_price, ride_type, distance_km 
+        const {
+            passenger_id, origin_lat, origin_lng,
+            dest_lat, dest_lng, origin_name, dest_name,
+            initial_price, ride_type, distance_km
         } = data;
-        
+
         logSystem('RIDE_REQUEST', `Passageiro ${passenger_id} solicitando corrida.`);
 
         try {
             const insertQuery = `
                 INSERT INTO rides (
                     passenger_id, origin_lat, origin_lng, dest_lat, dest_lng,
-                    origin_name, dest_name, initial_price, final_price, 
+                    origin_name, dest_name, initial_price, final_price,
                     ride_type, distance_km, status, created_at
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9, $10, 'searching', NOW())
                 RETURNING *
             `;
-            
+
             const result = await pool.query(insertQuery, [
-                passenger_id, origin_lat, origin_lng, dest_lat, dest_lng, 
+                passenger_id, origin_lat, origin_lng, dest_lat, dest_lng,
                 origin_name, dest_name, initial_price, ride_type, distance_km
             ]);
-            
+
             const ride = result.rows[0];
 
             socket.join(`ride_${ride.id}`);
@@ -2389,7 +2440,7 @@ io.on('connection', (socket) => {
                 SELECT dp.*, u.name, u.photo, u.rating, u.vehicle_details
                 FROM driver_positions dp
                 JOIN users u ON dp.driver_id = u.id
-                WHERE u.is_online = true 
+                WHERE u.is_online = true
                 AND u.role = 'driver'
                 AND u.is_blocked = false
                 AND dp.last_update > NOW() - INTERVAL '30 minutes'
@@ -2418,8 +2469,8 @@ io.on('connection', (socket) => {
 
         } catch (e) {
             logError('RIDE_REQUEST', e);
-            io.to(`user_${passenger_id}`).emit('error', { 
-                message: "Erro ao processar solicitação." 
+            io.to(`user_${passenger_id}`).emit('error', {
+                message: "Erro ao processar solicitação."
             });
         }
     });
@@ -2448,16 +2499,16 @@ io.on('connection', (socket) => {
 
             if (ride.status !== 'searching') {
                 await client.query('ROLLBACK');
-                return socket.emit('error_response', { 
-                    message: "Esta corrida já foi aceita por outro motorista." 
+                return socket.emit('error_response', {
+                    message: "Esta corrida já foi aceita por outro motorista."
                 });
             }
 
             // Atualizar corrida
             await client.query(
-                `UPDATE rides SET 
-                    driver_id = $1, 
-                    final_price = COALESCE($2, initial_price), 
+                `UPDATE rides SET
+                    driver_id = $1,
+                    final_price = COALESCE($2, initial_price),
                     status = 'accepted',
                     accepted_at = NOW()
                  WHERE id = $3`,
@@ -2487,80 +2538,110 @@ io.on('connection', (socket) => {
         } catch (e) {
             if (client) await client.query('ROLLBACK');
             logError('ACCEPT_CRITICAL', e);
-            socket.emit('error_response', { 
-                message: "Erro interno ao processar aceite." 
+            socket.emit('error_response', {
+                message: "Erro interno ao processar aceite."
             });
         } finally {
             client.release();
         }
     });
 
-    /**
-     * EVENTO: ENVIAR MENSAGEM NO CHAT
+/**
+     * EVENTO: ENVIAR MENSAGEM NO CHAT (VERSÃO HÍBRIDA FULL)
      */
     socket.on('send_message', async (data) => {
         const { ride_id, sender_id, text, file_data } = data;
-        
+
+        // Validação básica para evitar erros de query
+        if (!ride_id || !sender_id) {
+            return console.error("❌ CHAT: Dados incompletos recebidos", data);
+        }
+
         try {
+            // 1. Prepara o texto (Fallback: se vier vazio mas tiver foto, coloca texto padrão)
+            const finalText = text && text.trim() !== '' ? text : (file_data ? '📷 Foto enviada' : '');
+            
+            // 2. Inserir no Banco de Dados
             const res = await pool.query(
-                `INSERT INTO chat_messages (ride_id, sender_id, text, image_url, created_at) 
-                 VALUES ($1, $2, $3, $4, NOW()) 
+                `INSERT INTO chat_messages (ride_id, sender_id, text, image_url, created_at)
+                 VALUES ($1, $2, $3, $4, NOW())
                  RETURNING *`,
                 [
-                    ride_id, 
-                    sender_id, 
-                    text || (file_data ? '📷 Foto enviada' : ''), 
+                    ride_id,
+                    sender_id,
+                    finalText,
                     file_data || null
                 ]
             );
 
             const message = res.rows[0];
-            
-            // Buscar nome do remetente
+
+            // 3. Buscar dados do Remetente (Nome e Foto) para exibir no chat
+            // Isso evita que o frontend tenha que fazer outra requisição para saber quem mandou
             const senderRes = await pool.query(
                 'SELECT name, photo FROM users WHERE id = $1',
                 [sender_id]
             );
             
+            const senderData = senderRes.rows[0] || { name: 'Usuário', photo: null };
+
             const payload = {
                 ...message,
-                sender_name: senderRes.rows[0]?.name,
-                sender_photo: senderRes.rows[0]?.photo
+                sender_name: senderData.name,
+                sender_photo: senderData.photo
             };
-            
-            // Enviar para todos na sala da corrida
+
+            // 4. Enviar em Tempo Real (Socket)
+            // Envia para a "sala" da corrida. Quem estiver na tela da corrida recebe.
             io.to(`ride_${ride_id}`).emit('receive_message', payload);
-            
-            // Se o destinatário não estiver na sala, criar notificação
-            const rideRes = await pool.query(
-                'SELECT passenger_id, driver_id FROM rides WHERE id = $1',
-                [ride_id]
-            );
-            
-            if (rideRes.rows.length > 0) {
-                const ride = rideRes.rows[0];
-                const recipientId = sender_id === ride.passenger_id ? ride.driver_id : ride.passenger_id;
-                
-                // Verificar se destinatário está online
-                const recipientSocket = Array.from(io.sockets.sockets.values())
-                    .find(s => s.rooms.has(`user_${recipientId}`));
-                    
-                if (!recipientSocket) {
-                    // Criar notificação
-                    await pool.query(
-                        `INSERT INTO notifications (user_id, title, body, type, data)
-                         VALUES ($1, $2, $3, 'chat', $4)`,
-                        [
-                            recipientId,
-                            'Nova mensagem',
-                            text ? (text.length > 50 ? text.substring(0, 50) + '...' : text) : 'Imagem recebida',
-                            JSON.stringify({ ride_id, sender_id })
-                        ]
+
+            // 5. Lógica de Notificação (Executada em segundo plano para não travar o chat)
+            (async () => {
+                try {
+                    // Descobrir quem é o destinatário (Motorista ou Passageiro)
+                    const rideRes = await pool.query(
+                        'SELECT passenger_id, driver_id FROM rides WHERE id = $1',
+                        [ride_id]
                     );
+
+                    if (rideRes.rows.length > 0) {
+                        const ride = rideRes.rows[0];
+                        // Se quem mandou foi o passageiro, o destino é o motorista, e vice-versa
+                        const recipientId = (String(sender_id) === String(ride.passenger_id)) 
+                            ? ride.driver_id 
+                            : ride.passenger_id;
+
+                        if (recipientId) {
+                            // Verifica se o destinatário está na sala específica do socket dele (Online no app)
+                            // Nota: user_ID é uma sala que criamos ao logar
+                            const isRecipientOnline = io.sockets.adapter.rooms.has(`user_${recipientId}`);
+                            
+                            // Se não estivermos certeza que ele viu (ex: app em background), salvamos notificação
+                            // Ou simplesmente salvamos sempre para histórico
+                            await pool.query(
+                                `INSERT INTO notifications (user_id, title, body, type, data, created_at)
+                                 VALUES ($1, $2, $3, 'chat', $4, NOW())`,
+                                [
+                                    recipientId,
+                                    `Mensagem de ${senderData.name}`, // Título
+                                    finalText.length > 50 ? finalText.substring(0, 50) + '...' : finalText, // Corpo truncado
+                                    JSON.stringify({ ride_id, sender_id }) // Payload para abrir a tela certa ao clicar
+                                ]
+                            );
+                            
+                            // Opcional: Emitir evento de 'nova notificação' para atualizar o ícone de sino do usuário
+                            io.to(`user_${recipientId}`).emit('new_notification');
+                        }
+                    }
+                } catch (notifError) {
+                    console.error("⚠️ Erro ao gerar notificação de chat (mensagem foi enviada):", notifError.message);
                 }
-            }
-        } catch (e) { 
-            logError('CHAT', e); 
+            })();
+
+        } catch (e) {
+            console.error("❌ ERRO CRÍTICO NO CHAT:", e.message);
+            // Opcional: Avisar quem enviou que falhou
+            socket.emit('error_message', { error: "Erro ao enviar mensagem." });
         }
     });
 
@@ -2569,19 +2650,19 @@ io.on('connection', (socket) => {
      */
     socket.on('update_price_negotiation', async (data) => {
         const { ride_id, new_price } = data;
-        
+
         try {
             await pool.query(
                 "UPDATE rides SET final_price = $1 WHERE id = $2",
                 [new_price, ride_id]
             );
-            
-            io.to(`ride_${ride_id}`).emit('price_updated', { 
+
+            io.to(`ride_${ride_id}`).emit('price_updated', {
                 new_price,
                 updated_at: new Date().toISOString()
             });
-        } catch (e) { 
-            logError('PRICE', e); 
+        } catch (e) {
+            logError('PRICE', e);
         }
     });
 
@@ -2590,22 +2671,22 @@ io.on('connection', (socket) => {
      */
     socket.on('start_trip', async (data) => {
         const { ride_id } = data;
-        
+
         try {
             await pool.query(
                 "UPDATE rides SET status = 'ongoing', started_at = NOW() WHERE id = $1",
                 [ride_id]
             );
-            
+
             const fullData = await getFullRideDetails(ride_id);
-            
+
             io.to(`ride_${ride_id}`).emit('trip_started_now', {
                 full_details: fullData,
                 status: 'ongoing',
                 started_at: new Date().toISOString()
             });
-        } catch (e) { 
-            logError('START_TRIP', e); 
+        } catch (e) {
+            logError('START_TRIP', e);
         }
     });
 
@@ -2614,11 +2695,11 @@ io.on('connection', (socket) => {
      */
     socket.on('update_trip_gps', (data) => {
         const { ride_id, lat, lng, rotation } = data;
-        
+
         // Repassar posição para o passageiro
-        socket.to(`ride_${ride_id}`).emit('driver_location_update', { 
-            lat, 
-            lng, 
+        socket.to(`ride_${ride_id}`).emit('driver_location_update', {
+            lat,
+            lng,
             rotation,
             timestamp: new Date().toISOString()
         });
@@ -2633,17 +2714,17 @@ io.on('connection', (socket) => {
 
         try {
             await pool.query(
-                `UPDATE rides SET 
-                    status = 'cancelled', 
+                `UPDATE rides SET
+                    status = 'cancelled',
                     cancelled_at = NOW(),
                     cancelled_by = $1,
-                    cancellation_reason = $2 
+                    cancellation_reason = $2
                  WHERE id = $3`,
                 [role, reason || 'Cancelado pelo usuário', ride_id]
             );
-            
-            const message = role === 'driver' 
-                ? "O motorista cancelou a viagem." 
+
+            const message = role === 'driver'
+                ? "O motorista cancelou a viagem."
                 : "O passageiro cancelou a solicitação.";
 
             io.to(`ride_${ride_id}`).emit('ride_terminated', {
@@ -2656,19 +2737,19 @@ io.on('connection', (socket) => {
             // Notificar o outro participante individualmente
             const details = await getFullRideDetails(ride_id);
             if (details) {
-                const otherUserId = role === 'driver' 
-                    ? details.passenger_id 
+                const otherUserId = role === 'driver'
+                    ? details.passenger_id
                     : details.driver_id;
-                    
+
                 if (otherUserId) {
-                    io.to(`user_${otherUserId}`).emit('ride_terminated', { 
-                        reason: message, 
-                        origin: role 
+                    io.to(`user_${otherUserId}`).emit('ride_terminated', {
+                        reason: message,
+                        origin: role
                     });
                 }
             }
-        } catch (e) { 
-            logError('CANCEL', e); 
+        } catch (e) {
+            logError('CANCEL', e);
         }
     });
 
@@ -2677,31 +2758,31 @@ io.on('connection', (socket) => {
      */
     socket.on('disconnect', async () => {
         logSystem('SOCKET', `Conexão perdida: ${socket.id}`);
-        
+
         try {
             // Encontrar usuário associado a este socket
             const positionRes = await pool.query(
                 'SELECT driver_id FROM driver_positions WHERE socket_id = $1',
                 [socket.id]
             );
-            
+
             if (positionRes.rows.length > 0) {
                 const driverId = positionRes.rows[0].driver_id;
-                
+
                 // Marcar como offline após 5 minutos de inatividade
                 setTimeout(async () => {
                     const checkRes = await pool.query(
-                        `SELECT COUNT(*) FROM driver_positions 
+                        `SELECT COUNT(*) FROM driver_positions
                          WHERE driver_id = $1 AND socket_id = $2`,
                         [driverId, socket.id]
                     );
-                    
+
                     if (parseInt(checkRes.rows[0].count) === 0) {
                         await pool.query(
                             'UPDATE users SET is_online = false WHERE id = $1',
                             [driverId]
                         );
-                        
+
                         logSystem('OFFLINE', `Motorista ${driverId} marcado como offline.`);
                     }
                 }, 5 * 60 * 1000); // 5 minutos
