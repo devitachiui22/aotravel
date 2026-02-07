@@ -2547,103 +2547,114 @@ io.on('connection', (socket) => {
     });
 
 /**
-     * EVENTO: ENVIAR MENSAGEM NO CHAT (VERSÃO HÍBRIDA FULL)
-     */
-    socket.on('send_message', async (data) => {
-        const { ride_id, sender_id, text, file_data } = data;
+ * =================================================================================================
+ * 🛰️ EVENTO: ENVIAR MENSAGEM NO CHAT (VERSÃO HÍBRIDA FULL - TITANIUM BACKEND)
+ * =================================================================================================
+ *
+ * DESCRIÇÃO: Processa mensagens de texto e arquivos, persiste no DB,
+ *            identifica remetente, notifica destinatário e emite via Socket.
+ */
+socket.on('send_message', async (data) => {
+    const { ride_id, sender_id, text, file_data } = data;
 
-        // Validação básica para evitar erros de query
-        if (!ride_id || !sender_id) {
-            return console.error("❌ CHAT: Dados incompletos recebidos", data);
+    // 1. VALIDAÇÃO DE INTEGRIDADE (Prevenção de Crash)
+    if (!ride_id || !sender_id) {
+        return console.error("❌ CHAT: Tentativa de envio com dados incompletos", data);
+    }
+
+    try {
+        // 2. BUSCA DADOS DO REMETENTE (Nome e Foto para agilizar a UI do destinatário)
+        const userRes = await pool.query(
+            "SELECT name, photo FROM users WHERE id = $1",
+            [sender_id]
+        );
+        const sender = userRes.rows[0] || { name: "Usuário", photo: null };
+
+        // 3. TRATAMENTO DE CONTEÚDO (Fallback para arquivos sem legenda)
+        const finalText = text && text.trim() !== ''
+            ? text
+            : (file_data ? '📷 Foto enviada' : '');
+
+        // 4. PERSISTÊNCIA NO BANCO DE DADOS (ACID Compliant)
+        const res = await pool.query(
+            `INSERT INTO chat_messages (ride_id, sender_id, text, file_data, created_at)
+             VALUES ($1, $2, $3, $4, NOW())
+             RETURNING *`,
+            [ride_id, sender_id, finalText, file_data || null]
+        );
+
+        // 5. CONSTRUÇÃO DO PAYLOAD FULL (Mensagem + Dados do Remetente)
+        const fullMsg = {
+            ...res.rows[0],
+            sender_name: sender.name,
+            sender_photo: sender.photo
+        };
+
+        // 6. EMISSÃO EM TEMPO REAL (Para a sala específica da corrida)
+        io.to(`ride_${ride_id}`).emit('receive_message', fullMsg);
+
+        // Log de Auditoria
+        if (typeof logSystem === 'function') {
+            logSystem('CHAT', `Msg de ${sender.name} na Ride ${ride_id}`);
         }
 
-        try {
-            // 1. Prepara o texto (Fallback: se vier vazio mas tiver foto, coloca texto padrão)
-            const finalText = text && text.trim() !== '' ? text : (file_data ? '📷 Foto enviada' : '');
-            
-            // 2. Inserir no Banco de Dados
-            const res = await pool.query(
-                `INSERT INTO chat_messages (ride_id, sender_id, text, image_url, created_at)
-                 VALUES ($1, $2, $3, $4, NOW())
-                 RETURNING *`,
-                [
-                    ride_id,
-                    sender_id,
-                    finalText,
-                    file_data || null
-                ]
-            );
+        // 7. LÓGICA DE NOTIFICAÇÃO (Execução em Background para não atrasar o chat)
+        (async () => {
+            try {
+                // Descobrir quem deve receber a notificação
+                const rideRes = await pool.query(
+                    'SELECT passenger_id, driver_id FROM rides WHERE id = $1',
+                    [ride_id]
+                );
 
-            const message = res.rows[0];
+                if (rideRes.rows.length > 0) {
+                    const ride = rideRes.rows[0];
+                    const recipientId = (String(sender_id) === String(ride.passenger_id))
+                        ? ride.driver_id
+                        : ride.passenger_id;
 
-            // 3. Buscar dados do Remetente (Nome e Foto) para exibir no chat
-            // Isso evita que o frontend tenha que fazer outra requisição para saber quem mandou
-            const senderRes = await pool.query(
-                'SELECT name, photo FROM users WHERE id = $1',
-                [sender_id]
-            );
-            
-            const senderData = senderRes.rows[0] || { name: 'Usuário', photo: null };
+                    if (recipientId) {
+                        // Verifica se o destinatário está online para emitir alerta visual imediato
+                        const isRecipientOnline = io.sockets.adapter.rooms.has(`user_${recipientId}`);
 
-            const payload = {
-                ...message,
-                sender_name: senderData.name,
-                sender_photo: senderData.photo
-            };
+                        // Salva notificação no banco para histórico e push futuro
+                        await pool.query(
+                            `INSERT INTO notifications (user_id, title, body, type, data, created_at)
+                             VALUES ($1, $2, $3, 'chat', $4, NOW())`,
+                            [
+                                recipientId,
+                                `Nova mensagem de ${sender.name}`,
+                                finalText.length > 60 ? finalText.substring(0, 60) + '...' : finalText,
+                                JSON.stringify({ ride_id, sender_id, type: 'chat' })
+                            ]
+                        );
 
-            // 4. Enviar em Tempo Real (Socket)
-            // Envia para a "sala" da corrida. Quem estiver na tela da corrida recebe.
-            io.to(`ride_${ride_id}`).emit('receive_message', payload);
-
-            // 5. Lógica de Notificação (Executada em segundo plano para não travar o chat)
-            (async () => {
-                try {
-                    // Descobrir quem é o destinatário (Motorista ou Passageiro)
-                    const rideRes = await pool.query(
-                        'SELECT passenger_id, driver_id FROM rides WHERE id = $1',
-                        [ride_id]
-                    );
-
-                    if (rideRes.rows.length > 0) {
-                        const ride = rideRes.rows[0];
-                        // Se quem mandou foi o passageiro, o destino é o motorista, e vice-versa
-                        const recipientId = (String(sender_id) === String(ride.passenger_id)) 
-                            ? ride.driver_id 
-                            : ride.passenger_id;
-
-                        if (recipientId) {
-                            // Verifica se o destinatário está na sala específica do socket dele (Online no app)
-                            // Nota: user_ID é uma sala que criamos ao logar
-                            const isRecipientOnline = io.sockets.adapter.rooms.has(`user_${recipientId}`);
-                            
-                            // Se não estivermos certeza que ele viu (ex: app em background), salvamos notificação
-                            // Ou simplesmente salvamos sempre para histórico
-                            await pool.query(
-                                `INSERT INTO notifications (user_id, title, body, type, data, created_at)
-                                 VALUES ($1, $2, $3, 'chat', $4, NOW())`,
-                                [
-                                    recipientId,
-                                    `Mensagem de ${senderData.name}`, // Título
-                                    finalText.length > 50 ? finalText.substring(0, 50) + '...' : finalText, // Corpo truncado
-                                    JSON.stringify({ ride_id, sender_id }) // Payload para abrir a tela certa ao clicar
-                                ]
-                            );
-                            
-                            // Opcional: Emitir evento de 'nova notificação' para atualizar o ícone de sino do usuário
-                            io.to(`user_${recipientId}`).emit('new_notification');
+                        // Se o usuário estiver online, avisa o app para atualizar o "badge" (sininho)
+                        if (isRecipientOnline) {
+                            io.to(`user_${recipientId}`).emit('new_notification', {
+                                type: 'chat',
+                                ride_id: ride_id
+                            });
                         }
                     }
-                } catch (notifError) {
-                    console.error("⚠️ Erro ao gerar notificação de chat (mensagem foi enviada):", notifError.message);
                 }
-            })();
+            } catch (notifErr) {
+                console.error("⚠️ Erro ao processar notificação de chat:", notifErr.message);
+            }
+        })();
 
-        } catch (e) {
+    } catch (e) {
+        // 8. TRATAMENTO DE ERROS CRÍTICOS
+        if (typeof logError === 'function') {
+            logError('CHAT_CRITICAL', e);
+        } else {
             console.error("❌ ERRO CRÍTICO NO CHAT:", e.message);
-            // Opcional: Avisar quem enviou que falhou
-            socket.emit('error_message', { error: "Erro ao enviar mensagem." });
         }
-    });
+
+        // Avisa o remetente que a mensagem falhou
+        socket.emit('error_message', { error: "Erro ao processar sua mensagem." });
+    }
+});
 
     /**
      * EVENTO: ATUALIZAR PREÇO (NEGOCIAÇÃO)
@@ -2754,41 +2765,71 @@ io.on('connection', (socket) => {
     });
 
     /**
-     * EVENTO: DESCONEXÃO
+     * =================================================================================================
+     * 🛰️ EVENTO: DESCONEXÃO (CORREÇÃO SAFE DISCONNECT - TITANIUM BACKEND)
+     * =================================================================================================
+     *
+     * DESCRIÇÃO: Trata a queda de conexão. Se o motorista perder o sinal mas reconectar
+     *            dentro de 10 segundos (grace period), ele permanece online no sistema.
      */
     socket.on('disconnect', async () => {
-        logSystem('SOCKET', `Conexão perdida: ${socket.id}`);
+        logSystem('SOCKET', `Conexão sinalizada como encerrada: ${socket.id}`);
 
         try {
-            // Encontrar usuário associado a este socket
-            const positionRes = await pool.query(
-                'SELECT driver_id FROM driver_positions WHERE socket_id = $1',
+            // 1. LOCALIZAÇÃO: Encontrar quem era o dono deste socket que desconectou
+            const res = await pool.query(
+                "SELECT driver_id FROM driver_positions WHERE socket_id = $1",
                 [socket.id]
             );
 
-            if (positionRes.rows.length > 0) {
-                const driverId = positionRes.rows[0].driver_id;
+            if (res.rows.length > 0) {
+                const driverId = res.rows[0].driver_id;
 
-                // Marcar como offline após 5 minutos de inatividade
+                // 2. TIMER DE SEGURANÇA (10 Segundos de Tolerância)
+                // Essencial para evitar que motoristas saiam da fila de busca por oscilação de sinal.
                 setTimeout(async () => {
-                    const checkRes = await pool.query(
-                        `SELECT COUNT(*) FROM driver_positions
-                         WHERE driver_id = $1 AND socket_id = $2`,
-                        [driverId, socket.id]
-                    );
-
-                    if (parseInt(checkRes.rows[0].count) === 0) {
-                        await pool.query(
-                            'UPDATE users SET is_online = false WHERE id = $1',
+                    try {
+                        // 3. RE-VERIFICAÇÃO: Busca o socket_id atual para esse driver no banco
+                        const checkReconnection = await pool.query(
+                            "SELECT socket_id FROM driver_positions WHERE driver_id = $1",
                             [driverId]
                         );
 
-                        logSystem('OFFLINE', `Motorista ${driverId} marcado como offline.`);
+                        /**
+                         * LÓGICA DE PERSISTÊNCIA:
+                         * Se o socket_id no banco ainda for o mesmo que desconectou,
+                         * significa que ele NÃO reconectou com um novo socket.
+                         */
+                        if (
+                            checkReconnection.rows.length > 0 &&
+                            checkReconnection.rows[0].socket_id === socket.id
+                        ) {
+                            // 4. OFFLINE DEFINITIVO: Atualiza o status do usuário no banco principal
+                            await pool.query(
+                                "UPDATE users SET is_online = false WHERE id = $1",
+                                [driverId]
+                            );
+
+                            // Opcional: Remover da tabela de posições ativas se necessário
+                            // await pool.query("DELETE FROM driver_positions WHERE driver_id = $1", [driverId]);
+
+                            logSystem('OFFLINE', `Motorista ${driverId} realmente desconectado (Tempo de tolerância expirado).`);
+                        } else {
+                            // O motorista reconectou com um novo socket_id antes dos 10 segundos expirarem
+                            logSystem('SOCKET', `Motorista ${driverId} reconectou com sucesso. Status ONLINE preservado.`);
+                        }
+                    } catch (innerError) {
+                        logError('DISCONNECT_TIMEOUT_CRITICAL', innerError);
                     }
-                }, 5 * 60 * 1000); // 5 minutos
+                }, 20000); // 20 segundos (Ideal para redes móveis instáveis)
             }
         } catch (e) {
-            logError('DISCONNECT', e);
+            // 5. TRATAMENTO DE ERROS DE HANDLER
+            if (typeof logError === 'function') {
+                logError('DISCONNECT_HANDLER_FAILURE', e);
+            } else {
+                console.error("❌ ERRO AO PROCESSAR DESCONEXÃO:", e.message);
+            }
         }
     });
 });
