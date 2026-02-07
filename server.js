@@ -110,7 +110,7 @@ function logError(tag, error) {
 
 // Cálculo de Distância Geográfica (Fórmula de Haversine)
 function getDistance(lat1, lon1, lat2, lon2) {
-    if (!lat1 || !lon1 || !lat2 || !lon2) return 99999; 
+    if (!lat1 || !lon1 || !lat2 || !lon2) return 99999;
     if ((lat1 == lat2) && (lon1 == lon2)) return 0;
 
     const R = 6371; // Raio da Terra em KM
@@ -177,14 +177,14 @@ async function getFullRideDetails(rideId) {
     }
 }
 
-// --- 4. BOOTSTRAP: INICIALIZAÇÃO E MIGRAÇÃO DO BANCO ---
+// --- 4. BOOTSTRAP: INICIALIZAÇÃO E MIGRAÇÃO COMPLETA DO BANCO ---
 async function bootstrapDatabase() {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
         logSystem('BOOTSTRAP', 'Verificando integridade das tabelas e aplicando migrações...');
 
-        // 1. USUÁRIOS
+        // 1. TABELA DE USUÁRIOS
         await client.query(`
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
@@ -206,7 +206,7 @@ async function bootstrapDatabase() {
             );
         `);
 
-        // 2. CORRIDAS (RIDES)
+        // 2. TABELA DE CORRIDAS (RIDES)
         await client.query(`
             CREATE TABLE IF NOT EXISTS rides (
                 id SERIAL PRIMARY KEY,
@@ -228,20 +228,20 @@ async function bootstrapDatabase() {
             );
         `);
 
-        // 3. CHAT
+        // 3. TABELA DE CHAT
         await client.query(`
             CREATE TABLE IF NOT EXISTS chat_messages (
                 id SERIAL PRIMARY KEY,
                 ride_id INTEGER REFERENCES rides(id) ON DELETE CASCADE,
                 sender_id INTEGER REFERENCES users(id),
                 text TEXT,
-                image_url TEXT, 
+                image_url TEXT,
                 is_read BOOLEAN DEFAULT false,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         `);
 
-        // 4. CARTEIRA (WALLET TRANSACTIONS)
+        // 4. TABELA DE CARTEIRA (WALLET TRANSACTIONS)
         await client.query(`
             CREATE TABLE IF NOT EXISTS wallet_transactions (
                 id SERIAL PRIMARY KEY,
@@ -254,7 +254,7 @@ async function bootstrapDatabase() {
             );
         `);
 
-        // 5. POSIÇÕES DOS MOTORISTAS (RADAR)
+        // 5. TABELA DE POSIÇÕES DOS MOTORISTAS (RADAR)
         await client.query(`
             CREATE TABLE IF NOT EXISTS driver_positions (
                 driver_id INTEGER PRIMARY KEY REFERENCES users(id),
@@ -267,13 +267,20 @@ async function bootstrapDatabase() {
             );
         `);
 
-        // --- MIGRAÇÃO DE REPARO (CORREÇÃO DE COLUNAS FALTANTES) ---
+        // --- MIGRAÇÃO DE REPARO (ADIÇÃO FORÇADA DE COLUNAS FALTANTES) ---
+        // Garante que campos de finalização e socket existam mesmo em bancos já criados
+        await client.query(`ALTER TABLE rides ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP;`);
+        await client.query(`ALTER TABLE rides ADD COLUMN IF NOT EXISTS feedback TEXT;`);
+        await client.query(`ALTER TABLE rides ADD COLUMN IF NOT EXISTS rating INTEGER DEFAULT 0;`);
+
         await client.query(`ALTER TABLE driver_positions ADD COLUMN IF NOT EXISTS socket_id TEXT;`);
         await client.query(`ALTER TABLE driver_positions ADD COLUMN IF NOT EXISTS heading DOUBLE PRECISION DEFAULT 0;`);
+
         await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_online BOOLEAN DEFAULT false;`);
+        await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS photo TEXT;`);
 
         await client.query('COMMIT');
-        logSystem('BOOTSTRAP', '✅ Banco de Dados Sincronizado e Reparado.');
+        logSystem('BOOTSTRAP', '✅ Banco de Dados Sincronizado e Reparado (Colunas de finalização criadas).');
 
     } catch (err) {
         await client.query('ROLLBACK');
@@ -299,7 +306,7 @@ io.on('connection', (socket) => {
         if (!userId) return;
         const roomName = `user_${userId}`;
         socket.join(roomName);
-        
+
         // Marca o usuário como online no Banco de Dados imediatamente
         try {
             await pool.query("UPDATE users SET is_online = true WHERE id = $1", [userId]);
@@ -375,7 +382,7 @@ io.on('connection', (socket) => {
 
             // Busca motoristas ativos nos últimos 30 minutos
             const driversRes = await pool.query(`SELECT * FROM driver_positions WHERE last_update > NOW() - INTERVAL '30 minutes'`);
-            
+
             const nearbyDrivers = driversRes.rows.filter(d => {
                 const dist = getDistance(origin_lat, origin_lng, d.lat, d.lng);
                 return dist <= 15.0; // Raio inicial de 15KM
@@ -401,45 +408,68 @@ io.on('connection', (socket) => {
      * - Garante atomicidade (um motorista por vez).
      * - Dispara match sincronizado com Payload Rico.
      */
+    // --- 5. LÓGICA DE ACEITE DE CORRIDA (FORCE SYNC & TRANSACTIONAL) ---
     socket.on('accept_ride', async (data) => {
         const { ride_id, driver_id, final_price } = data;
-        logSystem('ACCEPT', `Motorista ${driver_id} aceitando Ride ${ride_id}`);
+        logSystem('ACCEPT', `Motorista ${driver_id} tentando aceitar Ride ${ride_id}`);
 
         const client = await pool.connect();
         try {
             await client.query('BEGIN');
 
-            // Verifica status com bloqueio de linha (FOR UPDATE)
-            const checkQuery = "SELECT status FROM rides WHERE id = $1 FOR UPDATE";
+            // 1. VERIFICAÇÃO COM BLOQUEIO DE LINHA (Previne Race Condition)
+            // O "FOR UPDATE" impede que outra transação altere esta corrida simultaneamente
+            const checkQuery = "SELECT status, passenger_id FROM rides WHERE id = $1 FOR UPDATE";
             const checkRes = await client.query(checkQuery, [ride_id]);
 
-            if (checkRes.rows.length === 0 || checkRes.rows[0].status !== 'searching') {
+            if (checkRes.rows.length === 0) {
                 await client.query('ROLLBACK');
-                socket.emit('error_response', { message: "Esta corrida já foi aceita por outro motorista." });
-                return;
+                return socket.emit('error_response', { message: "Corrida não encontrada." });
             }
 
-            // Atualiza corrida
+            if (checkRes.rows[0].status !== 'searching') {
+                await client.query('ROLLBACK');
+                return socket.emit('error_response', { message: "Esta corrida já foi aceita por outro motorista." });
+            }
+
+            const passengerId = checkRes.rows[0].passenger_id;
+
+            // 2. ATUALIZAÇÃO DA CORRIDA
+            // Definimos o motorista, o preço final negociado e mudamos o status para 'accepted'
             await client.query(
                 "UPDATE rides SET driver_id = $1, final_price = $2, status = 'accepted' WHERE id = $3",
                 [driver_id, final_price, ride_id]
             );
 
             await client.query('COMMIT');
+            logSystem('MATCH', `Corrida ${ride_id} confirmada no DB. Sincronizando dispositivos...`);
 
-            // Busca todos os dados (nomes, fotos, veiculo)
+            // 3. BUSCA DETALHES COMPLETOS (Nomes, Fotos, Veículo, etc)
+            // Função auxiliar que você deve ter definida para popular o objeto de retorno
             const fullData = await getFullRideDetails(ride_id);
 
-            // Sincronia Total
+            // 4. EMISSÃO REDUNDANTE E SINCRONIZAÇÃO DE SALAS (FORCE SYNC)
+            // Coloca o socket atual na sala privada da corrida
             socket.join(`ride_${ride_id}`);
-            io.to(`user_${fullData.passenger_id}`).emit('match_found', fullData);
+
+            // Notifica o Passageiro (Para ele sair do estado de busca no Flutter)
+            io.to(`user_${passengerId}`).emit('match_found', fullData);
+
+            // Notifica o Motorista (Confirmação de sucesso no app dele)
             io.to(`user_${driver_id}`).emit('match_found', fullData);
+
+            // Notifica qualquer outro dispositivo na sala da corrida
             io.to(`ride_${ride_id}`).emit('match_found', fullData);
 
+            // Evento legado por segurança (Caso o front antigo ainda use este nome)
+            io.to(`user_${passengerId}`).emit('ride_accepted_by_driver', fullData);
+
+            logSystem('SUCCESS', `Match Finalizado: Passageiro ${passengerId} <-> Motorista ${driver_id}`);
+
         } catch (e) {
-            await client.query('ROLLBACK');
-            logError('ACCEPT', e);
-            socket.emit('error_response', { message: "Erro crítico ao aceitar corrida." });
+            if (client) await client.query('ROLLBACK');
+            logError('ACCEPT_CRITICAL', e);
+            socket.emit('error_response', { message: "Erro interno ao processar aceite." });
         } finally {
             client.release();
         }
@@ -456,7 +486,7 @@ io.on('connection', (socket) => {
                 [ride_id, sender_id, text || (file_data ? '📷 Foto enviada' : '')]
             );
 
-            const payload = { ...res.rows[0], file_data }; 
+            const payload = { ...res.rows[0], file_data };
             socket.to(`ride_${ride_id}`).emit('receive_message', payload);
         } catch (e) { logError('CHAT', e); }
     });
@@ -526,10 +556,10 @@ io.on('connection', (socket) => {
  */
 
 // HEALTH CHECK
-app.get('/', (req, res) => res.status(200).json({ 
-    status: "AOTRAVEL SERVER ULTIMATE ONLINE", 
+app.get('/', (req, res) => res.status(200).json({
+    status: "AOTRAVEL SERVER ULTIMATE ONLINE",
     version: "2026.02.10",
-    db: "Connected" 
+    db: "Connected"
 }));
 
 // --- AUTH: LOGIN ---
@@ -540,7 +570,7 @@ app.post('/api/auth/login', async (req, res) => {
         if (result.rows.length === 0) return res.status(401).json({ error: "Credenciais incorretas." });
 
         const user = result.rows[0];
-        
+
         // Atualiza status online
         await pool.query('UPDATE users SET is_online = true WHERE id = $1', [user.id]);
 
@@ -591,7 +621,7 @@ app.post('/api/rides/complete', async (req, res) => {
 
     const client = await pool.connect();
     try {
-        await client.query('BEGIN'); 
+        await client.query('BEGIN');
 
         const valAmount = parseFloat(amount || 0);
 
@@ -615,7 +645,7 @@ app.post('/api/rides/complete', async (req, res) => {
             [valAmount, user_id]
         );
 
-        await client.query('COMMIT'); 
+        await client.query('COMMIT');
 
         logSystem('FINANCE', `Corrida ${ride_id} finalizada. Valor creditado: ${valAmount}`);
 
@@ -628,7 +658,7 @@ app.post('/api/rides/complete', async (req, res) => {
         res.json({ success: true });
 
     } catch (e) {
-        await client.query('ROLLBACK'); 
+        await client.query('ROLLBACK');
         logError('RIDE_COMPLETE', e);
         res.status(500).json({ error: "Falha ao processar pagamento." });
     } finally {
