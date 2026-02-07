@@ -72,19 +72,34 @@ app.use(cors({
 const server = http.createServer(app);
 
 /**
- * CONFIGURAÇÃO DO SOCKET.IO (MOTOR REAL-TIME)
- * Ajustado com Ping/Pong agressivo para manter conexão em redes móveis instáveis (3G/4G).
+ * =================================================================================================
+ * 🔌 CONFIGURAÇÃO DO MOTOR REAL-TIME (SOCKET.IO) - VERSÃO TITANIUM MERGED
+ * =================================================================================================
+ *
+ * Ajustado para resiliência extrema em redes 3G/4G e compatibilidade com Flutter/Web.
  */
 const io = new Server(server, {
     cors: {
-        origin: "*",
+        origin: "*",                // Em produção, restringir ao domínio do frontend
         methods: ["GET", "POST"],
         credentials: true
     },
-    pingTimeout: 20000,    // Aguarda 20s antes de considerar desconectado
-    pingInterval: 25000,   // Envia pacote de vida a cada 25s
-    transports: ['websocket', 'polling'] // Tenta WebSocket, falha para Polling se necessário
+    // --- TIMEOUTS DE RESILIÊNCIA (REDE ANGOLA 3G/4G) ---
+    pingTimeout: 20000,             // 20s: Tempo máximo para o servidor esperar resposta do cliente
+    pingInterval: 25000,            // 25s: Frequência de envio de batimentos cardíacos (Keep-alive)
+
+    // --- PROTOCOLO DE TRANSPORTE ---
+    transports: ['websocket', 'polling'], // Prioriza WebSocket (Velocidade), falha para Polling (Estabilidade)
+
+    // --- COMPATIBILIDADE ---
+    allowEIO3: true,                // Garante suporte a clientes que usam Engine.IO v3 (Motores mais antigos)
+
+    // Configurações adicionais de segurança e buffer
+    maxHttpBufferSize: 1e8,         // 100MB (Mesmo limite do BodyParser para fotos no chat)
+    connectTimeout: 45000           // 45s de tempo limite para estabelecer a conexão inicial
 });
+
+logSystem('SOCKET', 'Motor Real-time inicializado com configurações híbridas de alta performance.');
 
 // --- 2. CONFIGURAÇÃO DO BANCO DE DADOS (NEON POSTGRESQL) ---
 const pool = new Pool({
@@ -2351,11 +2366,51 @@ io.on('connection', (socket) => {
         }
     });
 
-    socket.on('join_ride', (rideId) => {
-        if (!rideId) return;
-        const roomName = `ride_${rideId}`;
-        socket.join(roomName);
-        logSystem('ROOM', `Socket ${socket.id} entrou na sala da corrida: ${roomName}`);
+/**
+     * =================================================================================================
+     * 🛰️ GESTÃO DE SALA DE MISSÃO (JOIN_RIDE) - VERSÃO TITANIUM SINCRO
+     * =================================================================================================
+     *
+     * Objetivo: Vincular o socket à sala da corrida e limpar conexões residuais.
+     * Resolve: Mensagens duplicadas, "Ghost" updates de GPS e vazamento de dados entre viagens.
+     */
+    socket.on('join_ride', (ride_id) => {
+        if (!ride_id) {
+            logError('ROOM_JOIN', 'Tentativa de ingresso negada: ID da corrida é nulo ou inválido.');
+            return;
+        }
+
+        const roomName = `ride_${ride_id}`;
+
+        try {
+            // --- LÓGICA DE LIMPEZA DE "GHOST" ROOMS ---
+            // Percorremos todas as salas onde este socket está atualmente.
+            // Se ele estiver em qualquer sala que comece com 'ride_' mas não seja a atual, ele sai.
+            // Isso garante que o motorista/passageiro receba apenas dados da missão ATIVA.
+            socket.rooms.forEach((room) => {
+                if (room.startsWith('ride_') && room !== roomName) {
+                    socket.leave(room);
+                    logSystem('ROOM_CLEAN', `Socket ${socket.id} removido da sala residual: ${room}`);
+                }
+            });
+
+            // --- INGRESSO NA MISSÃO ATUAL ---
+            socket.join(roomName);
+
+            // Log corporativo para auditoria de conexões
+            logSystem('ROOM', `Socket ${socket.id} estabeleceu link seguro na sala: ${roomName}`);
+
+            // Emitimos uma confirmação para o Frontend garantir que o túnel está aberto
+            socket.emit('ride_room_confirmed', {
+                ride_id: ride_id,
+                status: 'connected',
+                timestamp: new Date().toISOString()
+            });
+
+        } catch (e) {
+            logError('ROOM_JOIN_CRITICAL', e);
+            socket.emit('error_response', { message: "Erro ao sincronizar com a sala da missão." });
+        }
     });
 
     /**
