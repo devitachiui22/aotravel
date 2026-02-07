@@ -480,17 +480,39 @@ io.on('connection', (socket) => {
         socket.to(`ride_${ride_id}`).emit('driver_location_update', { lat, lng, rotation });
     });
 
-    // Atualização de posição global (para o Radar da Home)
+// --- ATUALIZAÇÃO DE GPS + RADAR REVERSO (CORREÇÃO DE SINCRONIA) ---
     socket.on('update_location', async (data) => {
         const { user_id, lat, lng, heading } = data;
+
         try {
+            // 1. Atualiza Posição do Motorista
             await pool.query(
                 `INSERT INTO driver_positions (driver_id, lat, lng, heading, last_update, socket_id)
                  VALUES ($1, $2, $3, $4, NOW(), $5)
                  ON CONFLICT (driver_id) DO UPDATE SET lat=$2, lng=$3, heading=$4, last_update=NOW(), socket_id=$5`,
                 [user_id, lat, lng, heading || 0, socket.id]
             );
-        } catch (e) { /* Silencia erros de concorrência */ }
+
+            // 2. RADAR REVERSO: Verifica se há passageiros ESPERANDO (status='searching') nas redondezas
+            // Isso garante que se o motorista ficar online DEPOIS do pedido, ele recebe o alerta agora.
+            const pendingRides = await pool.query(
+                `SELECT * FROM rides WHERE status = 'searching' AND created_at > NOW() - INTERVAL '10 minutes'`
+            );
+
+            if (pendingRides.rows.length > 0) {
+                pendingRides.rows.forEach(ride => {
+                    const dist = getDistance(lat, lng, ride.origin_lat, ride.origin_lng);
+                    if (dist <= 10.0) { // Raio de 10km
+                        // Envia APENAS para este motorista que acabou de atualizar o GPS
+                        socket.emit('ride_opportunity', ride);
+                        logSystem('RADAR_REVERSO', `Notificando motorista ${user_id} sobre corrida pendente ${ride.id}`);
+                    }
+                });
+            }
+
+        } catch (e) {
+            console.error("Erro no update_location:", e.message);
+        }
     });
 
     /**
