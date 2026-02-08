@@ -6,25 +6,19 @@
 const { Pool } = require('pg');
 require('dotenv').config();
 
-// Configuração robusta para o cluster Neon com SSL obrigatório
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: {
-        rejectUnauthorized: false
+    ssl: { 
+        rejectUnauthorized: false 
     },
-    max: 20,                       // Máximo de conexões simultâneas
-    idleTimeoutMillis: 30000,      // Fecha conexões inativas após 30s
-    connectionTimeoutMillis: 10000, // Limite de 10s para estabelecer conexão
-});
-
-// Monitor de Conexão
-pool.on('connect', () => {
-    // Conexão estabelecida com sucesso
+    max: 20,                       
+    idleTimeoutMillis: 30000,      
+    connectionTimeoutMillis: 10000, 
 });
 
 pool.on('error', (err) => {
     console.error('❌ [DATABASE] Erro fatal no pool de conexões:', err.message);
 });
 
-// Exportação como objeto para manter consistência modular
+// Exportação obrigatória para desestruturação: const { pool } = require(...)
 module.exports = { pool };
