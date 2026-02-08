@@ -1,4 +1,4 @@
-const pool = require('../config/db');
+const { pool } = require('../config/db');
 const { logSystem, logError } = require('../utils/logger');
 const { getDistance } = require('../utils/helpers');
 const { getFullRideDetails } = require('../utils/queries');
@@ -239,6 +239,7 @@ exports.cancelRide = async (req, res) => {
 exports.getHistory = async (req, res) => {
     const { limit = 20, offset = 0 } = req.query;
     try {
+        const userId = req.user.id; // Vem do middleware de auth
         const result = await pool.query(
             `SELECT r.*, u.name as counterpart_name, u.photo as counterpart_photo
              FROM rides r
