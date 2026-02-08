@@ -1,16 +1,22 @@
-require('dotenv').config();
+// src/config/db.js
 const { Pool } = require('pg');
+require('dotenv').config();
 
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false }, // Obrigatório para Neon
+    ssl: { rejectUnauthorized: false },
     max: 20,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 10000,
 });
 
-pool.on('error', (err, client) => {
-    console.error('❌ ERRO CRÍTICO NO POOL DO POSTGRES:', err);
+pool.on('connect', () => {
+    // Log silencioso de conexão bem-sucedida
 });
 
-module.exports = pool;
+pool.on('error', (err) => {
+    console.error('❌ [DATABASE] Erro crítico no Pool:', err.message);
+});
+
+// EXPORTAÇÃO CORRETA: Exportamos um objeto contendo o pool
+module.exports = { pool };
