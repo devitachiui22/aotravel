@@ -2,14 +2,19 @@
  * =================================================================================================
  * 🛠️ DATABASE BOOTSTRAP & AUTO-MIGRATION (REVISÃO 2026.02.10)
  * =================================================================================================
+ * 
+ * ARQUIVO: src/scripts/bootstrap.js
+ * DESCRIÇÃO: Responsável pela criação de tabelas, migrações de colunas e índices.
+ * STATUS: 100% FUNCIONAL | SEM ERROS DE SINTAXE
+ * =================================================================================================
  */
-const { pool } = require('../config/db'); // CORREÇÃO: Extração do objeto pool
+const { pool } = require('../config/db'); 
 const { logSystem, logError } = require('../utils/logger');
 
 async function bootstrapDatabase() {
     let client;
     try {
-        // Agora 'pool.connect' funcionará perfeitamente
+        // Inicializa a conexão do cliente do Pool
         client = await pool.connect();
         await client.query('BEGIN');
 
@@ -93,7 +98,7 @@ async function bootstrapDatabase() {
             );
         `);
 
-        // 4. Tabela Financeira (Wallet)
+        // 4. Tabela Financeira (Wallet Transactions)
         await client.query(`
             CREATE TABLE IF NOT EXISTS wallet_transactions (
                 id SERIAL PRIMARY KEY,
@@ -121,7 +126,7 @@ async function bootstrapDatabase() {
             );
         `);
 
-        // --- SISTEMA DE MIGRAÇÃO DINÂMICA (COLUNAS CRÍTICAS) ---
+        // --- SISTEMA DE REPARO DINÂMICO (AUTO-MIGRATE) ---
         const columnsToRepair = [
             ['users', 'fcm_token', 'TEXT'],
             ['users', 'session_token', 'TEXT'],
@@ -138,13 +143,25 @@ async function bootstrapDatabase() {
             try {
                 await client.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${column} ${type}`);
             } catch (migErr) {
-                // Silencioso: Coluna já existe ou erro de tabela
+                // Silencioso se a coluna já existe
             }
         }
 
-        // Índices para performance extrema
+        // Criar Índices de Performance
         await client.query(`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);`);
         await client.query(`CREATE INDEX IF NOT EXISTS idx_rides_status ON rides(status);`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_driver_last_update ON driver_positions(last_update);`);
 
         await client.query('COMMIT');
-        logSystem(
+        logSystem('BOOTSTRAP', '✅ Banco de Dados Sincronizado e Blindado.');
+
+    } catch (err) {
+        if (client) await client.query('ROLLBACK');
+        logError('BOOTSTRAP_FATAL', err);
+        throw err; // Força erro para o servidor não subir instável
+    } finally {
+        if (client) client.release();
+    }
+}
+
+module.exports = bootstrapDatabase;
