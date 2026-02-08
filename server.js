@@ -2530,76 +2530,76 @@ io.on('connection', (socket) => {
         }
     });
 
-    /**
-     * EVENTO: ACEITAR CORRIDA
-     */
-    socket.on('accept_ride', async (data) => {
-        const { ride_id, driver_id, final_price } = data;
-        logSystem('ACCEPT', `Motorista ${driver_id} tentando aceitar Ride ${ride_id}`);
+/**
+ * EVENTO: ACEITAR CORRIDA (SINCRO TOTAL)
+ * Este evento gerencia o bloqueio no DB, atualização de status e sincronização das salas Socket.io.
+ */
+socket.on('accept_ride', async (data) => {
+    const { ride_id, driver_id, final_price } = data;
+    logSystem('ACCEPT', `Motorista ${driver_id} tentando aceitar Ride ${ride_id}`);
 
-        const client = await pool.connect();
-        try {
-            await client.query('BEGIN');
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
 
-            // Verificação com bloqueio de linha
-            const checkQuery = "SELECT * FROM rides WHERE id = $1 FOR UPDATE";
-            const checkRes = await client.query(checkQuery, [ride_id]);
+        // 1. LOCK DE SEGURANÇA: Bloqueia a linha para evitar Race Conditions (múltiplos aceites)
+        const checkQuery = "SELECT * FROM rides WHERE id = $1 FOR UPDATE";
+        const checkRes = await client.query(checkQuery, [ride_id]);
+        const ride = checkRes.rows[0];
 
-            if (checkRes.rows.length === 0) {
-                await client.query('ROLLBACK');
-                return socket.emit('error_response', { message: "Corrida não encontrada." });
-            }
-
-            const ride = checkRes.rows[0];
-
-            if (ride.status !== 'searching') {
-                await client.query('ROLLBACK');
-                return socket.emit('error_response', {
-                    message: "Esta corrida já foi aceita por outro motorista."
-                });
-            }
-
-            // Atualizar corrida
-            await client.query(
-                `UPDATE rides SET
-                    driver_id = $1,
-                    final_price = COALESCE($2, initial_price),
-                    status = 'accepted',
-                    accepted_at = NOW()
-                 WHERE id = $3`,
-                [driver_id, final_price, ride_id]
-            );
-
-            await client.query('COMMIT');
-            logSystem('MATCH', `Corrida ${ride_id} confirmada no DB.`);
-
-            // Buscar detalhes completos
-            const fullData = await getFullRideDetails(ride_id);
-
-            // Entrar na sala da corrida
-            socket.join(`ride_${ride_id}`);
-
-            // Notificar passageiro
-            io.to(`user_${ride.passenger_id}`).emit('match_found', fullData);
-
-            // Notificar motorista
-            io.to(`user_${driver_id}`).emit('match_found', fullData);
-
-            // Notificar sala da corrida
-            io.to(`ride_${ride_id}`).emit('match_found', fullData);
-
-            logSystem('SUCCESS', `Match Finalizado: Passageiro ${ride.passenger_id} <-> Motorista ${driver_id}`);
-
-        } catch (e) {
-            if (client) await client.query('ROLLBACK');
-            logError('ACCEPT_CRITICAL', e);
-            socket.emit('error_response', {
-                message: "Erro interno ao processar aceite."
+        // 2. VALIDAÇÃO DE DISPONIBILIDADE
+        if (!ride || ride.status !== 'searching') {
+            await client.query('ROLLBACK');
+            logSystem('ACCEPT_DENIED', `Ride ${ride_id} indisponível ou já aceita.`);
+            return socket.emit('error_response', { 
+                message: "Esta corrida já não está mais disponível." 
             });
-        } finally {
-            client.release();
         }
-    });
+
+        // 3. ATUALIZAÇÃO ATÔMICA
+        // Usamos COALESCE para garantir que, se o final_price vier nulo, mantemos o preço inicial
+        await client.query(
+            `UPDATE rides SET 
+                driver_id = $1, 
+                final_price = COALESCE($2, initial_price), 
+                status = 'accepted', 
+                accepted_at = NOW() 
+             WHERE id = $3`,
+            [driver_id, final_price, ride_id]
+        );
+
+        await client.query('COMMIT');
+        logSystem('MATCH_DB', `Corrida ${ride_id} confirmada no banco de dados.`);
+
+        // 4. PAYLOAD RICO: Busca todos os detalhes necessários (Driver, Passenger, Veículo)
+        const fullData = await getFullRideDetails(ride_id);
+
+        // 5. SINCRONIZAÇÃO DE SALAS (SYNC ROOMS)
+        // O motorista entra na sala específica desta corrida para comunicações futuras
+        socket.join(`ride_${ride_id}`);
+
+        // 6. DISPARO EM TEMPO REAL (VELOCIDADE MÁXIMA)
+        // Notifica todos na sala da corrida (Passageiro + Motorista logado em outros dispositivos)
+        io.to(`ride_${ride_id}`).emit('match_found', fullData);
+
+        // Backup: Garante que o passageiro receba pelo canal individual, caso não esteja na sala
+        io.to(`user_${ride.passenger_id}`).emit('match_found', fullData);
+
+        // Confirmação direta para o motorista que disparou o evento
+        socket.emit('match_found', fullData);
+
+        logSystem('SUCCESS', `Match Finalizado: Passageiro ${ride.passenger_id} <-> Motorista ${driver_id}`);
+
+    } catch (e) {
+        if (client) await client.query('ROLLBACK');
+        logError('ACCEPT_CRITICAL', e);
+        socket.emit('error_response', {
+            message: "Erro interno ao processar aceite da corrida."
+        });
+    } finally {
+        client.release();
+    }
+});
 
 /**
  * =================================================================================================
