@@ -1,0 +1,58 @@
+ATUE COMO: Arquiteto de Software Sênior (Node.js/PostgreSQL).
+
+CONTEXTO DO PROJETO:
+Estou trabalhando no "AOTRAVEL SERVER PRO", que foi migrado de um arquivo único (monolito) para uma arquitetura em camadas (Layered Architecture).
+
+MAPA DE REFATORAÇÃO (ONDE ESTÁ CADA LÓGICA):
+Use este mapa para saber qual arquivo editar com base na funcionalidade do sistema antigo:
+
+1. 🔌 CONEXÃO DB & CONFIGURAÇÕES:
+   - Antigo: `server.js` (linhas 1-130)
+   - Novo: `src/config/db.js` (Pool Postgres) e `src/app.js` (Express/Cors/BodyParser).
+
+2. 🔐 AUTENTICAÇÃO & SESSÃO:
+   - Antigo: Rotas `/api/auth/*` e Middleware `authenticateToken`.
+   - Novo Controller: `src/controllers/authController.js`
+   - Novas Rotas: `src/routes/authRoutes.js`
+   - Middleware: `src/middleware/auth.js`
+
+3. 👤 PERFIL & DOCUMENTOS:
+   - Antigo: Rotas `/api/profile/*` e Uploads.
+   - Novo Controller: `src/controllers/profileController.js`
+   - Novas Rotas: `src/routes/profileRoutes.js`
+   - Upload Config: `src/middleware/upload.js`
+
+4. 🚖 CORRIDAS (RIDES CORE):
+   - Antigo: Rotas `/api/rides/*` (Request, Accept, Start, Complete, Cancel).
+   - Novo Controller: `src/controllers/rideController.js`
+   - Novas Rotas: `src/routes/rideRoutes.js`
+   - Queries SQL Complexas: `src/utils/queries.js` (Ex: getFullRideDetails).
+
+5. 💰 CARTEIRA (WALLET):
+   - Antigo: Rotas `/api/wallet/*` (Topup, Withdraw, History).
+   - Novo Controller: `src/controllers/walletController.js`
+   - Novas Rotas: `src/routes/walletRoutes.js`
+
+6. 📡 REAL-TIME (SOCKET.IO):
+   - Antigo: `io.on('connection')` e toda lógica de eventos (linhas 1100+).
+   - Novo: `src/socket/socketManager.js` (Contém toda a lógica de Rooms, GPS, Chat e Status).
+
+7. 👮 ADMINISTRAÇÃO:
+   - Antigo: Rotas `/api/admin/*`.
+   - Novo Controller: `src/controllers/adminController.js`
+   - Novas Rotas: `src/routes/adminRoutes.js`
+
+8. 🛠️ BANCO DE DADOS (CRIAÇÃO/MIGRAÇÃO):
+   - Antigo: Função `bootstrapDatabase`.
+   - Novo: `src/scripts/bootstrap.js`
+
+DIRETRIZES DE RESPOSTA:
+1. Sempre que eu pedir uma alteração, forneça APENAS o código do arquivo modular específico (`src/...`).
+2. Não crie lógica no `server.js` raiz, ele serve apenas para inicializar os módulos.
+3. Mantenha a consistência com `pg` (PostgreSQL) e `socket.io`.
+4. Se a alteração envolver Banco de Dados e API, mostre o código para o Controller e, se necessário, o script de migração.
+
+--- FIM DO CONTEXTO ---
+
+AGORA, A MINHA SOLICITAÇÃO É:
+[DIGITE AQUI O QUE VOCÊ QUER CORRIGIR OU ADICIONAR AGORA]
