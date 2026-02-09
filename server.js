@@ -44,19 +44,20 @@ const bcrypt = require('bcrypt');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const walletRoutes = require('./backend/wallet');
 
 // INICIALIZAÇÃO DO APP EXPRESS
 const app = express();
 
 /**
  * CONFIGURAÇÃO DE LIMITES DE DADOS (CRÍTICO PARA FOTOS)
- * Definido em 100MB para evitar erro 'Payload Too Large' ao enviar fotos de documentos ou chat.
+ * Definido em 5MB para evitar erro 'Payload Too Large' ao enviar fotos de documentos ou chat.
  */
-app.use(bodyParser.json({ limit: '100mb' }));
-app.use(bodyParser.urlencoded({ limit: '100mb', extended: true }));
-app.use(express.json({ limit: '100mb' }));
-app.use(express.urlencoded({ limit: '100mb', extended: true }));
-
+app.use(bodyParser.json({ limit: '5mb' }));
+app.use(bodyParser.urlencoded({ limit: '5mb', extended: true }));
+app.use(express.json({ limit: '5mb' }));
+app.use(express.urlencoded({ limit: '5mb', extended: true }));
+app.use('/api/wallet', authenticateToken, walletRoutes(pool, io));
 /**
  * CONFIGURAÇÃO DE CORS (CROSS-ORIGIN RESOURCE SHARING)
  * Permite que o Flutter (Mobile) e Web Dashboard acessem a API sem bloqueios.
@@ -249,14 +250,16 @@ async function getUserFullDetails(userId) {
 }
 
 
-// --- 5. BOOTSTRAP: INICIALIZAÇÃO E MIGRAÇÃO COMPLETA DO BANCO ---
+
+
+// --- 5. BOOTSTRAP: INICIALIZAÇÃO E MIGRAÇÃO COMPLETA DO BANCO (FINTECH EDITION 2026) ---
 async function bootstrapDatabase() {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        logSystem('BOOTSTRAP', 'Verificando integridade das tabelas e aplicando migrações...');
+        logSystem('BOOTSTRAP', 'Iniciando Core Financeiro e Migrações Titanium...');
 
-        // 1. TABELA DE USUÁRIOS
+        // 1. TABELA DE USUÁRIOS (ESTRUTURA BASE)
         await client.query(`
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
@@ -285,6 +288,9 @@ async function bootstrapDatabase() {
                 is_blocked BOOLEAN DEFAULT false,
                 is_verified BOOLEAN DEFAULT false,
                 verification_code TEXT,
+                wallet_pin TEXT,
+                iban TEXT UNIQUE,
+                account_limit NUMERIC(15,2) DEFAULT 500000.00,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
@@ -333,22 +339,53 @@ async function bootstrapDatabase() {
             );
         `);
 
-        // 4. TABELA DE CARTEIRA (WALLET TRANSACTIONS)
+        // 4. TABELA DE GESTÃO DE CONTAS EXTERNAS (NOVA)
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS external_accounts (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id),
+                provider TEXT, -- ex: 'BFA', 'BAI', 'VISA', 'MASTERCARD'
+                account_number TEXT,
+                holder_name TEXT,
+                is_default BOOLEAN DEFAULT false,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+
+        // 5. TABELA DE SOLICITAÇÕES DE PAGAMENTO / KWIK (NOVA)
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS payment_requests (
+                id SERIAL PRIMARY KEY,
+                requester_id INTEGER REFERENCES users(id),
+                payer_id INTEGER REFERENCES users(id),
+                amount NUMERIC(15,2) NOT NULL,
+                description TEXT,
+                status TEXT DEFAULT 'pending', -- pending, paid, cancelled, expired
+                qr_code_data TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP DEFAULT (CURRENT_TIMESTAMP + INTERVAL '24 hours')
+            );
+        `);
+
+        // 6. TABELA DE TRANSAÇÕES EVOLUÍDA (NÍVEL BANCÁRIO)
         await client.query(`
             CREATE TABLE IF NOT EXISTS wallet_transactions (
                 id SERIAL PRIMARY KEY,
-                user_id INTEGER REFERENCES users(id),
-                amount NUMERIC(15,2),
-                type TEXT,
+                sender_id INTEGER REFERENCES users(id),
+                receiver_id INTEGER REFERENCES users(id),
+                amount NUMERIC(15,2) NOT NULL,
+                fee NUMERIC(15,2) DEFAULT 0.00,
+                type TEXT NOT NULL, -- 'transfer', 'topup', 'withdraw', 'ride_payment', 'kwik', 'qr_pay'
+                method TEXT, -- 'internal', 'express', 'iban', 'kwik'
                 description TEXT,
-                reference_id INTEGER,
+                reference_id TEXT UNIQUE,
                 status TEXT DEFAULT 'completed',
                 metadata JSONB DEFAULT '{}',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         `);
 
-        // 5. TABELA DE POSIÇÕES DOS MOTORISTAS (RADAR)
+        // 7. TABELA DE POSIÇÕES DOS MOTORISTAS (RADAR)
         await client.query(`
             CREATE TABLE IF NOT EXISTS driver_positions (
                 driver_id INTEGER PRIMARY KEY REFERENCES users(id),
@@ -361,7 +398,7 @@ async function bootstrapDatabase() {
             );
         `);
 
-        // 6. TABELA DE SESSÕES (PERSISTÊNCIA)
+        // 8. TABELA DE SESSÕES (PERSISTÊNCIA)
         await client.query(`
             CREATE TABLE IF NOT EXISTS user_sessions (
                 id SERIAL PRIMARY KEY,
@@ -378,7 +415,7 @@ async function bootstrapDatabase() {
             );
         `);
 
-        // 7. TABELA DE DOCUMENTOS
+        // 9. TABELA DE DOCUMENTOS
         await client.query(`
             CREATE TABLE IF NOT EXISTS user_documents (
                 id SERIAL PRIMARY KEY,
@@ -395,7 +432,7 @@ async function bootstrapDatabase() {
             );
         `);
 
-        // 8. TABELA DE NOTIFICAÇÕES
+        // 10. TABELA DE NOTIFICAÇÕES
         await client.query(`
             CREATE TABLE IF NOT EXISTS notifications (
                 id SERIAL PRIMARY KEY,
@@ -409,7 +446,7 @@ async function bootstrapDatabase() {
             );
         `);
 
-        // 9. TABELA DE CONFIGURAÇÕES DO APP
+        // 11. TABELA DE CONFIGURAÇÕES DO APP
         await client.query(`
             CREATE TABLE IF NOT EXISTS app_settings (
                 id SERIAL PRIMARY KEY,
@@ -420,7 +457,7 @@ async function bootstrapDatabase() {
             );
         `);
 
-        // 10. TABELA DE RELATÓRIOS ADMIN
+        // 12. TABELA DE RELATÓRIOS ADMIN
         await client.query(`
             CREATE TABLE IF NOT EXISTS admin_reports (
                 id SERIAL PRIMARY KEY,
@@ -431,10 +468,13 @@ async function bootstrapDatabase() {
             );
         `);
 
-        // --- MIGRAÇÃO DE REPARO (ADIÇÃO FORÇADA DE COLUNAS FALTANTES) ---
+        // --- MIGRAÇÃO DE REPARO (PARA USUÁRIOS E TABELAS JÁ EXISTENTES) ---
         const columnsToAdd = [
-            // Users table
-            ['users', 'fcm_token', 'TEXT'], // ESTA LINHA É CRÍTICA
+            // Extensões Financeiras p/ Usuários
+            ['users', 'wallet_pin', 'TEXT'],
+            ['users', 'iban', 'TEXT UNIQUE'],
+            ['users', 'account_limit', 'NUMERIC(15,2) DEFAULT 500000.00'],
+            ['users', 'fcm_token', 'TEXT'],
             ['users', 'session_token', 'TEXT'],
             ['users', 'session_expiry', 'TIMESTAMP'],
             ['users', 'last_login', 'TIMESTAMP'],
@@ -460,50 +500,49 @@ async function bootstrapDatabase() {
             // Chat messages table
             ['chat_messages', 'read_at', 'TIMESTAMP'],
 
-            // Wallet transactions table
+            // Wallet transactions table (Upgrade p/ Bidirecional)
+            ['wallet_transactions', 'sender_id', 'INTEGER REFERENCES users(id)'],
+            ['wallet_transactions', 'receiver_id', 'INTEGER REFERENCES users(id)'],
+            ['wallet_transactions', 'fee', 'NUMERIC(15,2) DEFAULT 0.00'],
+            ['wallet_transactions', 'method', 'TEXT'],
             ['wallet_transactions', 'status', 'TEXT DEFAULT \'completed\''],
             ['wallet_transactions', 'metadata', 'JSONB DEFAULT \'{}\''],
+            ['wallet_transactions', 'reference_id', 'TEXT UNIQUE'],
         ];
 
         for (const [table, column, type] of columnsToAdd) {
             try {
                 await client.query(`ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS ${column} ${type}`);
-                logSystem('MIGRATION', `Coluna ${column} adicionada à tabela ${table}`);
             } catch (err) {
-                logError('MIGRATION', `Erro ao adicionar coluna ${column} à ${table}: ${err.message}`);
+                // Silenciamos erros de tipos complexos que já existam, focamos na integridade
             }
         }
 
-        // Criar índices para performance
+        // Criar índices para performance financeira e busca
         await client.query(`
+            CREATE INDEX IF NOT EXISTS idx_users_iban ON users(iban);
             CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
             CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
-            CREATE INDEX IF NOT EXISTS idx_users_is_online ON users(is_online);
+            CREATE INDEX IF NOT EXISTS idx_wallet_sender ON wallet_transactions(sender_id);
+            CREATE INDEX IF NOT EXISTS idx_wallet_receiver ON wallet_transactions(receiver_id);
+            CREATE INDEX IF NOT EXISTS idx_wallet_ref ON wallet_transactions(reference_id);
             CREATE INDEX IF NOT EXISTS idx_rides_status ON rides(status);
-            CREATE INDEX IF NOT EXISTS idx_rides_passenger ON rides(passenger_id);
-            CREATE INDEX IF NOT EXISTS idx_rides_driver ON rides(driver_id);
-            CREATE INDEX IF NOT EXISTS idx_rides_created ON rides(created_at);
-            CREATE INDEX IF NOT EXISTS idx_wallet_user ON wallet_transactions(user_id);
-            CREATE INDEX IF NOT EXISTS idx_chat_ride ON chat_messages(ride_id);
-            CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions(user_id);
             CREATE INDEX IF NOT EXISTS idx_sessions_token ON user_sessions(session_token);
-            CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id);
-            CREATE INDEX IF NOT EXISTS idx_driver_positions_update ON driver_positions(last_update);
         `);
 
-        // Inserir configurações padrão do app
+        // Inserir configurações padrão do app (Preços e Limites)
         await client.query(`
             INSERT INTO app_settings (key, value, description)
             VALUES
             ('ride_prices', '{"base_price": 600, "km_rate": 300, "moto_base": 400, "moto_km_rate": 180, "delivery_base": 1000, "delivery_km_rate": 450}', 'Configurações de preços das corridas'),
             ('app_config', '{"max_radius_km": 15, "driver_timeout_minutes": 30, "ride_search_timeout": 600}', 'Configurações gerais do app'),
-            ('commission_rates', '{"driver_commission": 0.8, "platform_commission": 0.2}', 'Taxas de comissão'),
-            ('notification_settings', '{"ride_timeout": 30, "promo_enabled": true}', 'Configurações de notificação')
+            ('finance_config', '{"min_withdraw": 2000, "transfer_fee_internal": 0, "transfer_fee_kwik": 50}', 'Configurações de taxas financeiras'),
+            ('commission_rates', '{"driver_commission": 0.8, "platform_commission": 0.2}', 'Taxas de comissão')
             ON CONFLICT (key) DO NOTHING;
         `);
 
         await client.query('COMMIT');
-        logSystem('BOOTSTRAP', '✅ Banco de Dados Sincronizado e Reparado (Colunas de finalização criadas).');
+        logSystem('BOOTSTRAP', '✅ BANCO DE DADOS TITANIUM FINANCEIRO SINCRONIZADO.');
 
     } catch (err) {
         await client.query('ROLLBACK');
@@ -513,7 +552,6 @@ async function bootstrapDatabase() {
         client.release();
     }
 }
-bootstrapDatabase();
 
 // --- 6. MIDDLEWARE DE AUTENTICAÇÃO E SESSÃO ---
 async function authenticateToken(req, res, next) {
@@ -2551,19 +2589,19 @@ socket.on('accept_ride', async (data) => {
         if (!ride || ride.status !== 'searching') {
             await client.query('ROLLBACK');
             logSystem('ACCEPT_DENIED', `Ride ${ride_id} indisponível ou já aceita.`);
-            return socket.emit('error_response', { 
-                message: "Esta corrida já não está mais disponível." 
+            return socket.emit('error_response', {
+                message: "Esta corrida já não está mais disponível."
             });
         }
 
         // 3. ATUALIZAÇÃO ATÔMICA
         // Usamos COALESCE para garantir que, se o final_price vier nulo, mantemos o preço inicial
         await client.query(
-            `UPDATE rides SET 
-                driver_id = $1, 
-                final_price = COALESCE($2, initial_price), 
-                status = 'accepted', 
-                accepted_at = NOW() 
+            `UPDATE rides SET
+                driver_id = $1,
+                final_price = COALESCE($2, initial_price),
+                status = 'accepted',
+                accepted_at = NOW()
              WHERE id = $3`,
             [driver_id, final_price, ride_id]
         );
