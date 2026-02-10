@@ -44,7 +44,7 @@ const bcrypt = require('bcrypt');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const walletRoutes = require('./backend/wallet');
+const walletRoutes = require('./wallet');
 
 // INICIALIZAÇÃO DO APP EXPRESS
 const app = express();
@@ -2949,3 +2949,4 @@ server.listen(PORT, '0.0.0.0', () => {
     ============================================================
     `);
 });
+
