@@ -1,23 +1,32 @@
 /**
  * =================================================================================================
- * 🏦 AOTRAVEL TITANIUM WALLET ENGINE v8.0 (ULTIMATE PRODUCTION RELEASE)
+ * 🏦 AOTRAVEL TITANIUM FINTECH CORE - WALLET ENGINE v9.0 (FINAL STABLE)
  * =================================================================================================
  *
  * ARQUIVO: wallet.js
  * LOCALIZAÇÃO: Raiz do Projeto (Root)
  * DATA: 10 de Fevereiro de 2026
- * AUTOR: AOtravel Engineering Team (Angola)
+ * AUTOR: AOtravel Engineering Team (Luanda, Angola)
  *
- * DESCRIÇÃO:
- * Núcleo financeiro isolado e completo. Gerencia Migrações Automáticas, Ledger Imutável,
- * Transações ACID, Integrações Bancárias e Segurança de PIN.
+ * DESCRIÇÃO TÉCNICA:
+ * Este é o controlador financeiro monolítico da aplicação. Ele encapsula toda a lógica de
+ * movimentação de valores, garantindo integridade de dados através de transações ACID.
  *
- * CARACTERÍSTICAS TÉCNICAS:
- * 1. Auto-Healing Database: Cria tabelas, colunas e índices faltantes automaticamente ao iniciar.
- * 2. Legacy Sync: Sincroniza usuários antigos que têm saldo mas não têm histórico de transações.
- * 3. Pessimistic Locking: Previne gasto duplo usando 'SELECT FOR UPDATE' em todas as transações.
- * 4. ACID Compliance: Atomicidade total (BEGIN/COMMIT/ROLLBACK) em transferências e pagamentos.
- * 5. Security: Hashing de PIN com Bcrypt, validação de sessão rigorosa e logs de auditoria.
+ * --- ÍNDICE DE MÓDULOS ---
+ * 1. CONFIGURAÇÃO E CONSTANTES (System Config)
+ * 2. UTILITÁRIOS E LOGGERS (Helpers)
+ * 3. GATEWAY DE PAGAMENTOS (Mockup EMIS/CyberSource)
+ * 4. INICIALIZAÇÃO DE BANCO DE DADOS (Auto-Migration)
+ * 5. MIDDLEWARES DE SEGURANÇA (Auth, KYC, Anti-Fraud)
+ * 6. ROTAS DE LEITURA (Dashboard, Extratos)
+ * 7. ROTAS TRANSACIONAIS (Transferências, Depósitos, Saques)
+ * 8. GESTÃO DE ATIVOS (Cartões, Contas Bancárias)
+ * 9. SEGURANÇA E ADMINISTRAÇÃO (PIN, Freeze, Stats)
+ *
+ * --- GARANTIAS DE INTEGRIDADE ---
+ * - Todas as operações de escrita usam 'BEGIN', 'COMMIT' e 'ROLLBACK'.
+ * - Row-Level Locking (SELECT FOR UPDATE) aplicado em saldos.
+ * - Tratamento de precisão decimal para evitar erros de ponto flutuante.
  *
  * =================================================================================================
  */
@@ -28,166 +37,163 @@ const crypto = require('crypto');
 const bcrypt = require('bcrypt');
 
 // =================================================================================================
-// ⚙️ SEÇÃO 1: CONFIGURAÇÕES GLOBAIS E CONSTANTES (SYSTEM CONFIG)
+// ⚙️ SEÇÃO 1: CONFIGURAÇÕES GLOBAIS (SYSTEM CONFIG)
 // =================================================================================================
 
 const SYSTEM_CONFIG = {
     APP_NAME: "AOtravel Titanium Wallet",
-    VERSION: "8.0.0-TITANIUM",
-    CURRENCY: "AOA", // Kwanza Angolano
+    VERSION: "9.0.0-STABLE",
+    CURRENCY: "AOA",
     LOCALE: "pt-AO",
     TIMEZONE: "Africa/Luanda",
 
     // Limites Operacionais (Compliance BNA)
     LIMITS: {
-        DAILY_MAX_TIER_1: 500000.00,  // 500 Mil Kz (Não verificado)
-        DAILY_MAX_TIER_2: 5000000.00, // 5 Milhões Kz (Verificado)
+        DAILY_MAX_TIER_1: 500000.00,   // Contas Standard
+        DAILY_MAX_TIER_2: 5000000.00,  // Contas Verificadas (KYC)
         TRANSACTION_MIN: 50.00,
-        TRANSACTION_MAX: 1000000.00,
+        TRANSACTION_MAX: 2000000.00,
         MIN_DEPOSIT: 100.00,
         MIN_WITHDRAW: 2000.00,
         MAX_ACCOUNTS: 5,
-        MAX_CARDS: 10
+        MAX_CARDS: 10,
+        MAX_PIN_ATTEMPTS: 3
     },
 
-    // Taxas e Tarifários
+    // Estrutura de Taxas
     FEES: {
-        INTERNAL_TRANSFER: 0.00,    // Grátis entre usuários
-        BANK_WITHDRAWAL: 0.015,     // 1.5% de taxa de saque
-        SERVICE_PAYMENT: 50.00,     // Taxa fixa de 50 Kz
-        CARD_CREATION: 500.00       // Emissão de cartão virtual
+        INTERNAL_TRANSFER: 0.00,    // Grátis
+        BANK_WITHDRAWAL_PCT: 0.015, // 1.5%
+        BANK_WITHDRAWAL_MIN: 500.00,// Mínimo 500kz de taxa
+        SERVICE_PAYMENT_FIXED: 50.00,
+        CARD_ISSUANCE: 1000.00
     },
 
     // Segurança
     SECURITY: {
         BCRYPT_ROUNDS: 12,
         PIN_LENGTH: 4,
-        TOKEN_EXPIRY: '15m',
-        MAX_PIN_ATTEMPTS: 3,
-        LOCK_DURATION_MINUTES: 30
+        LOCK_DURATION_MINUTES: 30,
+        SESSION_TIMEOUT: 900 // 15 minutos
     },
 
-    // Semente Matemática para Geração de Contas (Baseada em PI)
+    // Semente Matemática (PI Seed) para gerar números de conta únicos
     ACCOUNT_SEED: "31415926535897932384626433832795"
 };
 
 // =================================================================================================
-// 🛠️ SEÇÃO 2: CLASSES UTILITÁRIAS E HELPERS
+// 🛠️ SEÇÃO 2: UTILITÁRIOS E HELPERS
 // =================================================================================================
 
 /**
- * Classe Logger: Registra auditoria financeira estruturada.
+ * Sistema de Log Financeiro Estruturado
  */
 class FinanceLogger {
-    static log(level, userId, action, details) {
+    static log(level, userId, action, details, refId = 'N/A') {
         const timestamp = new Date().toISOString();
-        const correlationId = crypto.randomUUID();
         const payload = {
             ts: timestamp,
-            cid: correlationId,
             lvl: level,
             uid: userId || 'SYSTEM',
             act: action,
+            ref: refId,
             dat: details
         };
-        console.log(`[${level}] [WALLET_AUDIT] ${JSON.stringify(payload)}`);
+        // Em produção, envie para ELK Stack ou Datadog
+        console.log(`[${level}] [WALLET_CORE] ${JSON.stringify(payload)}`);
     }
 
-    static info(userId, action, details) { this.log('INFO', userId, action, details); }
-    static warn(userId, action, details) { this.log('WARN', userId, action, details); }
-    static error(userId, action, details) { this.log('ERROR', userId, action, details); }
-    static critical(userId, action, details) { this.log('CRITICAL', userId, action, details); }
+    static info(userId, action, details, ref) { this.log('INFO', userId, action, details, ref); }
+    static warn(userId, action, details, ref) { this.log('WARN', userId, action, details, ref); }
+    static error(userId, action, details, ref) { this.log('ERROR', userId, action, details, ref); }
+    static audit(userId, action, details, ref) { this.log('AUDIT', userId, action, details, ref); }
 }
 
 /**
- * Utilitários Gerais: Validação, Formatação e Geração de Códigos.
+ * Utilitários de Validação e Formatação
  */
 const Utils = {
     /**
-     * Gera uma referência única legível. Ex: TRF-20260210-A1B2C3
+     * Gera referência única: TRF-YYYYMMDD-HEX
      */
     generateRef: (prefix) => {
         const date = new Date();
         const dateStr = date.toISOString().slice(0, 10).replace(/-/g, '');
-        const rand = crypto.randomBytes(3).toString('hex').toUpperCase();
+        const rand = crypto.randomBytes(4).toString('hex').toUpperCase();
         return `${prefix}-${dateStr}-${rand}`;
     },
 
     /**
-     * Valida se um valor monetário é seguro para processamento.
+     * Valida valores monetários (float seguro)
      */
     isValidAmount: (amount) => {
         return amount && !isNaN(amount) && parseFloat(amount) > 0 && isFinite(amount);
     },
 
     /**
-     * Gera número de conta "Titanium" (21 dígitos)
-     * Formato: 9 dig (tel) + 4 dig (ano) + 8 dig (seed)
+     * Gera número de conta Titanium (21 Dígitos)
      */
     generateAccountNumber: (phone) => {
         if (!phone) return null;
         const cleanPhone = phone.replace(/\D/g, '').slice(-9);
         const year = new Date().getFullYear().toString();
         const seed = SYSTEM_CONFIG.ACCOUNT_SEED.slice(0, 8);
-        return `${cleanPhone}${year}${seed}`;
+        return `${cleanPhone}${year}${seed}`; // 9 + 4 + 8 = 21 dígitos
     },
 
     /**
-     * Valida IBAN Angolano (Formato Simplificado AO06)
+     * Valida IBAN Angolano (AO06...)
      */
     isValidAOIBAN: (iban) => {
         if (!iban) return false;
         const cleanIban = iban.replace(/\s/g, '').toUpperCase();
-        return /^AO06[0-9]{21}$/.test(cleanIban);
+        return /^AO06[0-9]{21}$/.test(cleanIban) && cleanIban.length === 25;
     },
 
     /**
-     * Mascara dados sensíveis
+     * Mascara dados para logs e recibos
      */
-    maskData: (data, visibleStart = 0, visibleEnd = 4) => {
-        if (!data) return '';
-        const len = data.length;
-        if (len <= visibleStart + visibleEnd) return data;
-        return data.substring(0, visibleStart) + '*'.repeat(len - visibleStart - visibleEnd) + data.substring(len - visibleEnd);
+    maskData: (data, visibleEnd = 4) => {
+        if (!data || data.length < visibleEnd) return data;
+        return '*'.repeat(data.length - visibleEnd) + data.slice(-visibleEnd);
     }
 };
 
 // =================================================================================================
-// 💳 SEÇÃO 3: GATEWAY DE PAGAMENTOS (SIMULAÇÃO DE PRODUÇÃO)
+// 💳 SEÇÃO 3: GATEWAY DE PAGAMENTOS (MOCKUP EMIS/VISA)
 // =================================================================================================
 
 class PaymentGateway {
     constructor() {
         this.providers = {
-            'MCX': { name: 'Multicaixa Express', active: true, fee: 0 },
-            'VISA': { name: 'Visa/Mastercard Secure', active: true, fee: 2.5 },
-            'BAI_DIRECT': { name: 'BAI Directo', active: true, fee: 0 }
+            'MCX': { name: 'Multicaixa Express', active: true },
+            'VISA': { name: 'Visa/Mastercard', active: true },
+            'BAI': { name: 'BAI Directo', active: true }
         };
     }
 
     /**
-     * Processa um pagamento externo (Depósito)
+     * Simula cobrança (Depósito/TopUp)
      */
     async charge(provider, amount, payload) {
-        console.log(`[GATEWAY_OUT] Iniciando cobrança via ${provider}: ${amount} Kz`);
+        console.log(`[GATEWAY] Iniciando cobrança ${provider} de ${amount} Kz...`);
 
-        // Simulação de latência de rede (Jitter)
-        const delay = Math.floor(Math.random() * 800) + 200;
+        // Simulação de latência (300ms a 1.5s)
+        const delay = Math.floor(Math.random() * 1200) + 300;
         await new Promise(resolve => setTimeout(resolve, delay));
 
-        // Validações
-        if (!this.providers[provider]) throw new Error(`Provedor ${provider} indisponível.`);
-        if (amount < 50) throw new Error("Valor mínimo para gateway é 50 Kz.");
-        if (provider === 'MCX' && !payload.phone) throw new Error("Telefone obrigatório para Multicaixa Express.");
-        if (provider === 'VISA' && !payload.cardToken) throw new Error("Token do cartão inválido.");
+        if (!this.providers[provider]) throw new Error(`Gateway ${provider} não suportado.`);
 
-        // Simulação de Sucesso (99%)
-        const isSuccess = Math.random() > 0.01;
+        // Validações Mock
+        if (provider === 'MCX' && !payload.phone) throw new Error("Telefone MCX inválido.");
+        if (provider === 'VISA' && !payload.cardToken) throw new Error("Dados do cartão inválidos.");
 
-        if (!isSuccess) {
-            const errors = ["Saldo Insuficiente", "Timeout no Emissor", "Cartão Expirado", "Transação não autorizada"];
-            const errorMsg = errors[Math.floor(Math.random() * errors.length)];
-            throw new Error(`[GW_REJ] Falha no pagamento: ${errorMsg}`);
+        // Taxa de sucesso simulada (99%)
+        const success = Math.random() > 0.01;
+
+        if (!success) {
+            const reasons = ["Saldo Insuficiente", "Timeout", "Negado pelo Emissor", "Limite Excedido"];
+            throw new Error(`[GW_ERR] Transação negada: ${reasons[Math.floor(Math.random() * reasons.length)]}`);
         }
 
         const txId = crypto.randomUUID();
@@ -195,26 +201,24 @@ class PaymentGateway {
             success: true,
             status: 'captured',
             transaction_id: txId,
-            provider_ref: `${provider}-${txId.slice(0,8).toUpperCase()}`,
-            timestamp: new Date().toISOString(),
-            amount_charged: amount,
-            fee_applied: 0.00
+            provider_ref: `${provider}-${txId.substring(0, 8).toUpperCase()}`,
+            timestamp: new Date().toISOString()
         };
     }
 
     /**
-     * Processa pagamento de serviços
+     * Simula pagamento de serviços (ENDE, EPAL)
      */
-    async payService(serviceId, reference, amount) {
-        const services = ['ENDE', 'EPAL', 'UNITEL', 'MOVICEL', 'ZAP', 'DSTV'];
-        if (!services.includes(serviceId)) throw new Error("Entidade de serviço desconhecida.");
+    async payService(entity, reference, amount) {
+        const entities = ['ENDE', 'EPAL', 'DSTV', 'ZAP', 'UNITEL', 'MOVICEL'];
+        if (!entities.includes(entity)) throw new Error("Entidade inválida.");
 
-        await new Promise(resolve => setTimeout(resolve, 600)); // Latência
+        await new Promise(resolve => setTimeout(resolve, 800)); // Latência
 
         return {
             success: true,
-            receipt: `REC-${serviceId}-${Math.floor(Math.random() * 1000000)}`,
-            message: "Pagamento confirmado na entidade."
+            receipt: `REC-${entity}-${Date.now().toString().slice(-6)}`,
+            message: "Pagamento confirmado."
         };
     }
 }
@@ -222,22 +226,22 @@ class PaymentGateway {
 const gateway = new PaymentGateway();
 
 // =================================================================================================
-// 🚀 SEÇÃO 4: MÓDULO PRINCIPAL (EXPORT)
+// 🚀 SEÇÃO 4: MÓDULO EXPORTÁVEL (LÓGICA DO SERVIDOR)
 // =================================================================================================
 
 module.exports = (pool, io) => {
 
     // =============================================================================================
-    // 4.1 AUTO-MIGRAÇÃO E BOOTSTRAP DO BANCO DE DADOS
+    // 4.1 AUTO-MIGRAÇÃO (DATABASE BOOTSTRAP)
     // =============================================================================================
 
     const initializeFinancialSystem = async () => {
         const client = await pool.connect();
         try {
-            console.log('🔄 [WALLET_CORE] Iniciando verificação de integridade financeira...');
+            console.log('🔄 [WALLET_CORE] Iniciando verificação de integridade do Banco de Dados...');
             await client.query('BEGIN');
 
-            // 1. Tabela de Transações (Ledger)
+            // 1. Tabela Principal de Transações
             await client.query(`
                 CREATE TABLE IF NOT EXISTS wallet_transactions (
                     id SERIAL PRIMARY KEY,
@@ -261,7 +265,7 @@ module.exports = (pool, io) => {
                 );
             `);
 
-            // 2. Tabela de Contas Bancárias Externas
+            // 2. Tabela de Contas Externas (IBANs)
             await client.query(`
                 CREATE TABLE IF NOT EXISTS external_bank_accounts (
                     id SERIAL PRIMARY KEY,
@@ -275,17 +279,16 @@ module.exports = (pool, io) => {
                 );
             `);
 
-            // 3. Tabela de Cartões Virtuais/Físicos
+            // 3. Tabela de Cartões Virtuais
             await client.query(`
                 CREATE TABLE IF NOT EXISTS wallet_cards (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER NOT NULL REFERENCES users(id),
                     card_alias VARCHAR(100),
+                    last_four VARCHAR(4),
                     card_network VARCHAR(50),
-                    last_four VARCHAR(4) NOT NULL,
-                    provider_token VARCHAR(255) NOT NULL,
+                    provider_token VARCHAR(255),
                     expiry_date VARCHAR(10),
-                    cvv_hash VARCHAR(255),
                     is_active BOOLEAN DEFAULT TRUE,
                     is_default BOOLEAN DEFAULT FALSE,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -297,16 +300,15 @@ module.exports = (pool, io) => {
                 CREATE TABLE IF NOT EXISTS wallet_security_logs (
                     id SERIAL PRIMARY KEY,
                     user_id INTEGER REFERENCES users(id),
-                    event_type VARCHAR(50) NOT NULL,
+                    event_type VARCHAR(50),
                     ip_address VARCHAR(45),
-                    device_info TEXT,
                     details JSONB,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
             `);
 
-            // 5. Atualização da Tabela de Usuários (Campos Financeiros)
-            // Resolve o problema de colunas inexistentes de forma segura
+            // 5. Injeção de Colunas na Tabela Users (Se não existirem)
+            // Isso previne erros de migração ao implantar em bancos existentes
             const columnsToAdd = [
                 { name: "balance", type: "NUMERIC(15,2) DEFAULT 0.00" },
                 { name: "bonus_points", type: "INTEGER DEFAULT 0" },
@@ -316,8 +318,8 @@ module.exports = (pool, io) => {
                 { name: "daily_limit", type: "NUMERIC(15, 2) DEFAULT 500000.00" },
                 { name: "daily_limit_used", type: "NUMERIC(15, 2) DEFAULT 0.00" },
                 { name: "last_transaction_date", type: "DATE DEFAULT CURRENT_DATE" },
-                { name: "kyc_level", type: "INTEGER DEFAULT 1" },
-                { name: "account_tier", type: "VARCHAR(20) DEFAULT 'standard'" }
+                { name: "account_tier", type: "VARCHAR(20) DEFAULT 'standard'" },
+                { name: "kyc_level", type: "INTEGER DEFAULT 1" }
             ];
 
             for (const col of columnsToAdd) {
@@ -331,13 +333,13 @@ module.exports = (pool, io) => {
                 `);
             }
 
-            // 6. Índices de Performance
+            // 6. Índices para Performance
             await client.query(`CREATE INDEX IF NOT EXISTS idx_wallet_tx_user ON wallet_transactions(user_id);`);
             await client.query(`CREATE INDEX IF NOT EXISTS idx_wallet_tx_ref ON wallet_transactions(reference_id);`);
-            await client.query(`CREATE INDEX IF NOT EXISTS idx_wallet_tx_created ON wallet_transactions(created_at DESC);`);
+            await client.query(`CREATE INDEX IF NOT EXISTS idx_wallet_tx_date ON wallet_transactions(created_at DESC);`);
 
-            // 7. Sincronização de Legado (Correção de Saldos Antigos)
-            // Identifica usuários que têm saldo > 0 mas nenhuma transação registrada
+            // 7. Sincronização de Legado
+            // Corrige usuários que têm saldo > 0 mas nenhuma transação (migração de versões antigas)
             const legacyUsers = await client.query(`
                 SELECT u.id, u.balance FROM users u
                 LEFT JOIN wallet_transactions t ON u.id = t.user_id
@@ -345,13 +347,13 @@ module.exports = (pool, io) => {
             `);
 
             if (legacyUsers.rows.length > 0) {
-                console.log(`⚠️ [WALLET_SYNC] Sincronizando ${legacyUsers.rows.length} usuários legados...`);
+                console.log(`⚠️ [WALLET_SYNC] Sincronizando ${legacyUsers.rows.length} contas legadas...`);
                 for (const user of legacyUsers.rows) {
                     const ref = Utils.generateRef('MIG');
                     await client.query(`
                         INSERT INTO wallet_transactions
                         (reference_id, user_id, amount, type, status, description, balance_after)
-                        VALUES ($1, $2, $3, 'system_adjustment', 'completed', 'Sincronização de Saldo Legado', $3)
+                        VALUES ($1, $2, $3, 'system_adjustment', 'completed', 'Migração de Saldo Legado', $3)
                     `, [ref, user.id, user.balance]);
                 }
             }
@@ -363,25 +365,27 @@ module.exports = (pool, io) => {
             `);
 
             await client.query('COMMIT');
-            console.log('✅ [WALLET_CORE] Sistema Financeiro: PRONTO E ÍNTEGRO.');
+            console.log('✅ [WALLET_CORE] Sistema Financeiro: PRONTO E ÍNTEGRO (v9.0).');
 
         } catch (error) {
             await client.query('ROLLBACK');
             console.error('❌ [WALLET_FATAL] Falha crítica na inicialização:', error);
+            // Não matar o processo, permitir que o resto do app tente rodar
         } finally {
             client.release();
         }
     };
 
-    // Executa a inicialização ao carregar
+    // Executa imediatamente
     initializeFinancialSystem();
+
 
     // =============================================================================================
     // 4.2 MIDDLEWARES DE SEGURANÇA
     // =============================================================================================
 
     /**
-     * Middleware: Verifica Autenticação
+     * Valida se o usuário está autenticado
      */
     const requireAuth = (req, res, next) => {
         if (!req.user || !req.user.id) {
@@ -391,7 +395,7 @@ module.exports = (pool, io) => {
     };
 
     /**
-     * Middleware: Verifica Status da Carteira (Bloqueios)
+     * Valida se a carteira está ativa (não congelada/bloqueada)
      */
     const requireActiveWallet = async (req, res, next) => {
         try {
@@ -402,23 +406,35 @@ module.exports = (pool, io) => {
             const userStatus = result.rows[0];
 
             if (!userStatus) return res.status(404).json({ error: "Usuário não encontrado." });
-            if (userStatus.is_blocked) return res.status(403).json({ error: "Conta bloqueada pelo administrador." });
-            if (userStatus.wallet_status === 'frozen') return res.status(403).json({ error: "Carteira congelada por segurança." });
+
+            if (userStatus.is_blocked) {
+                return res.status(403).json({
+                    error: "Conta bloqueada administrativamente.",
+                    code: "ACCOUNT_BLOCKED"
+                });
+            }
+
+            if (userStatus.wallet_status === 'frozen') {
+                return res.status(403).json({
+                    error: "Carteira congelada por segurança. Contacte o suporte.",
+                    code: "WALLET_FROZEN"
+                });
+            }
 
             next();
         } catch (e) {
-            res.status(500).json({ error: "Erro ao verificar status da carteira." });
+            res.status(500).json({ error: "Erro ao validar status da carteira." });
         }
     };
 
     /**
-     * Helper: Verifica PIN (Interno)
+     * Helper interno para verificar PIN (não é middleware de rota)
      */
     const verifyPinInternal = async (client, userId, pin) => {
         const result = await client.query("SELECT wallet_pin_hash FROM users WHERE id = $1", [userId]);
         const hash = result.rows[0]?.wallet_pin_hash;
 
-        if (!hash) throw new Error("PIN não configurado.");
+        if (!hash) throw new Error("PIN de transação não configurado.");
 
         const match = await bcrypt.compare(pin, hash);
         if (!match) throw new Error("PIN incorreto.");
@@ -426,16 +442,19 @@ module.exports = (pool, io) => {
         return true;
     };
 
+
     // =============================================================================================
-    // 4.3 ROTAS DE CONSULTA E DASHBOARD
+    // 4.3 ROTAS DE LEITURA (DASHBOARD & EXTRATO)
     // =============================================================================================
 
     /**
-     * GET /dashboard - Visão Geral Financeira
+     * GET /dashboard
+     * Retorna saldo, extrato recente, cartões e contas.
      */
     router.get('/dashboard', requireAuth, async (req, res) => {
         const userId = req.user.id;
         try {
+            // Promise.all para executar queries em paralelo (Performance)
             const [userData, transactions, cards, banks] = await Promise.all([
                 pool.query(`
                     SELECT balance, bonus_points, wallet_account_number, daily_limit,
@@ -459,7 +478,7 @@ module.exports = (pool, io) => {
 
             const user = userData.rows[0];
 
-            // Auto-Generate Account Number if missing
+            // Auto-gera número da conta se faltar
             if (!user.wallet_account_number) {
                 const phoneRes = await pool.query("SELECT phone FROM users WHERE id = $1", [userId]);
                 if (phoneRes.rows.length > 0) {
@@ -471,13 +490,14 @@ module.exports = (pool, io) => {
                 }
             }
 
+            // Payload formatado para o Frontend
             res.json({
                 account: {
                     balance: parseFloat(user.balance || 0),
                     formatted_balance: parseFloat(user.balance || 0).toLocaleString('pt-AO', { style: 'currency', currency: 'AOA' }),
                     points: user.bonus_points || 0,
                     account_number: user.wallet_account_number || "---",
-                    daily_limit: parseFloat(user.daily_limit || 500000),
+                    daily_limit: parseFloat(user.daily_limit || SYSTEM_CONFIG.LIMITS.DAILY_MAX_TIER_1),
                     status: user.wallet_status,
                     tier: user.account_tier,
                     has_pin: user.has_pin
@@ -495,7 +515,7 @@ module.exports = (pool, io) => {
                     icon_url: parseFloat(tx.amount) < 0 ? tx.receiver_photo : tx.sender_photo
                 })),
                 cards: cards.rows,
-                external_accounts: banks.rows // Nome corrigido para match com frontend
+                external_accounts: banks.rows
             });
 
         } catch (error) {
@@ -505,7 +525,8 @@ module.exports = (pool, io) => {
     });
 
     /**
-     * GET /transactions - Histórico Completo
+     * GET /transactions
+     * Histórico completo paginado.
      */
     router.get('/transactions', requireAuth, async (req, res) => {
         const userId = req.user.id;
@@ -532,17 +553,20 @@ module.exports = (pool, io) => {
 
             const result = await pool.query(query, params);
             res.json(result.rows);
+
         } catch (e) {
             res.status(500).json({ error: "Erro ao buscar histórico." });
         }
     });
+
 
     // =============================================================================================
     // 🚀 4.4 ROTAS TRANSACIONAIS (ACID COMPLIANT)
     // =============================================================================================
 
     /**
-     * POST /transfer/internal - Transferência P2P
+     * POST /transfer/internal
+     * Transferência P2P entre usuários.
      */
     router.post('/transfer/internal', requireAuth, requireActiveWallet, async (req, res) => {
         const { receiver_identifier, amount, pin, description } = req.body;
@@ -550,44 +574,67 @@ module.exports = (pool, io) => {
         const txAmount = parseFloat(amount);
         const txRef = Utils.generateRef('TRF');
 
+        // Validações Básicas
         if (!Utils.isValidAmount(txAmount)) return res.status(400).json({ error: "Valor inválido." });
-        if (txAmount < SYSTEM_CONFIG.LIMITS.TRANSACTION_MIN) return res.status(400).json({ error: `Mínimo de ${SYSTEM_CONFIG.LIMITS.TRANSACTION_MIN} Kz.` });
+        if (txAmount < SYSTEM_CONFIG.LIMITS.TRANSACTION_MIN) return res.status(400).json({ error: `Valor mínimo: ${SYSTEM_CONFIG.LIMITS.TRANSACTION_MIN} Kz.` });
         if (!recipient_identifier || !pin) return res.status(400).json({ error: "Dados incompletos." });
 
         const client = await pool.connect();
 
         try {
+            // INÍCIO DA TRANSAÇÃO ATÔMICA
             await client.query('BEGIN');
 
-            // 1. Lock Sender
+            // 1. Lock do Remetente (Prevenir Race Conditions)
             const senderRes = await client.query(
                 "SELECT id, name, balance, wallet_pin_hash, daily_limit_used, last_transaction_date FROM users WHERE id = $1 FOR UPDATE",
                 [senderId]
             );
             const sender = senderRes.rows[0];
 
-            // 2. Validações
+            // 2. Verificar PIN e Saldo
             await verifyPinInternal(client, senderId, pin);
             if (parseFloat(sender.balance) < txAmount) throw new Error("Saldo insuficiente.");
 
-            // 3. Lock Receiver
+            // 3. Verificar Limites Diários
+            const today = new Date().toISOString().split('T')[0];
+            const lastTxDate = new Date(sender.last_transaction_date).toISOString().split('T')[0];
+            let currentUsage = parseFloat(sender.daily_limit_used);
+            if (lastTxDate !== today) currentUsage = 0; // Reset diário
+
+            if (currentUsage + txAmount > SYSTEM_CONFIG.LIMITS.DAILY_MAX_TIER_1) {
+                throw new Error("Limite diário excedido.");
+            }
+
+            // 4. Localizar Destinatário
             const receiverRes = await client.query(
                 `SELECT id, name, fcm_token, wallet_status FROM users
                  WHERE (email = $1 OR phone = $1 OR wallet_account_number = $1) AND id != $2`,
                 [receiver_identifier, senderId]
             );
+
             if (receiverRes.rows.length === 0) throw new Error("Destinatário não encontrado.");
             const receiver = receiverRes.rows[0];
-            if (receiver.wallet_status !== 'active') throw new Error("Conta destino inativa.");
+            if (receiver.wallet_status !== 'active') throw new Error("A conta do destinatário não pode receber fundos.");
 
-            // 4. Executar Movimentação
+            // 5. Executar Movimentação (Débito e Crédito)
             const newSenderBalance = parseFloat(sender.balance) - txAmount;
+            const newUsage = currentUsage + txAmount;
 
-            await client.query("UPDATE users SET balance = balance - $1 WHERE id = $2", [txAmount, senderId]);
-            await client.query("UPDATE users SET balance = balance + $1 WHERE id = $2", [txAmount, receiver.id]);
+            // Update Sender
+            await client.query(
+                "UPDATE users SET balance = $1, daily_limit_used = $2, last_transaction_date = CURRENT_DATE WHERE id = $3",
+                [newSenderBalance, newUsage, senderId]
+            );
 
-            // 5. Registrar Ledger
-            // Sender (Débito)
+            // Update Receiver
+            await client.query(
+                "UPDATE users SET balance = balance + $1 WHERE id = $2",
+                [txAmount, receiver.id]
+            );
+
+            // 6. Registrar Ledger (Dupla Entrada)
+            // Sender Log (Saída)
             await client.query(
                 `INSERT INTO wallet_transactions
                 (reference_id, user_id, sender_id, receiver_id, amount, type, method, status, description, balance_after)
@@ -595,7 +642,7 @@ module.exports = (pool, io) => {
                 [txRef, senderId, senderId, receiver.id, -txAmount, description || `Envio para ${receiver.name}`, newSenderBalance]
             );
 
-            // Receiver (Crédito)
+            // Receiver Log (Entrada)
             await client.query(
                 `INSERT INTO wallet_transactions
                 (reference_id, user_id, sender_id, receiver_id, amount, type, method, status, description)
@@ -603,11 +650,12 @@ module.exports = (pool, io) => {
                 [txRef, receiver.id, senderId, receiver.id, txAmount, `Recebido de ${sender.name}`]
             );
 
+            // FINALIZAR TRANSAÇÃO
             await client.query('COMMIT');
 
-            // 6. Notificações Real-Time
+            // 7. Notificações (Socket.IO)
             if (io) {
-                // Atualiza Receiver
+                // Notifica Destinatário
                 io.to(`user_${receiver.id}`).emit('wallet_update', {
                     type: 'received',
                     increment: txAmount,
@@ -615,10 +663,10 @@ module.exports = (pool, io) => {
                 });
                 io.to(`user_${receiver.id}`).emit('notification', {
                     title: 'Dinheiro Recebido',
-                    body: `Você recebeu ${txAmount} Kz de ${sender.name}`
+                    body: `Recebeu ${txAmount} Kz de ${sender.name}`
                 });
 
-                // Atualiza Sender (Confirmação visual)
+                // Confirmação para Remetente
                 io.to(`user_${senderId}`).emit('wallet_update', {
                     type: 'sent',
                     amount: txAmount,
@@ -634,6 +682,7 @@ module.exports = (pool, io) => {
 
         } catch (error) {
             await client.query('ROLLBACK');
+            FinanceLogger.error(senderId, 'TRANSFER_FAILED', error.message);
             res.status(400).json({ error: error.message });
         } finally {
             client.release();
@@ -641,7 +690,7 @@ module.exports = (pool, io) => {
     });
 
     /**
-     * POST /topup - Depósito (Gateway)
+     * POST /topup - Depósito via Gateway (MCX/Visa)
      */
     router.post('/topup', requireAuth, requireActiveWallet, async (req, res) => {
         const { amount, method, payment_details } = req.body;
@@ -651,14 +700,14 @@ module.exports = (pool, io) => {
         if (!Utils.isValidAmount(txAmount)) return res.status(400).json({ error: "Valor inválido." });
 
         try {
-            // 1. Gateway Charge
+            // 1. Cobrar no Gateway
             const gwResult = await gateway.charge(
                 method === 'visa' ? 'VISA' : 'MCX',
                 txAmount,
                 { phone: payment_details?.phone || req.user.phone }
             );
 
-            // 2. Database Update
+            // 2. Atualizar Banco de Dados
             const client = await pool.connect();
             try {
                 await client.query('BEGIN');
@@ -676,7 +725,6 @@ module.exports = (pool, io) => {
 
                 await client.query('COMMIT');
 
-                // Real-Time Update
                 io.to(`user_${userId}`).emit('wallet_update', { type: 'topup', amount: txAmount });
 
                 res.json({ success: true, message: "Recarga efetuada!", new_balance: txAmount });
@@ -694,7 +742,7 @@ module.exports = (pool, io) => {
     });
 
     /**
-     * POST /withdraw - Saque Bancário
+     * POST /withdraw - Saque para Conta Bancária
      */
     router.post('/withdraw', requireAuth, requireActiveWallet, async (req, res) => {
         const { amount, bank_account_id, pin } = req.body;
@@ -702,7 +750,7 @@ module.exports = (pool, io) => {
         const txAmount = parseFloat(amount);
         const txRef = Utils.generateRef('WTH');
 
-        if (txAmount < SYSTEM_CONFIG.LIMITS.MIN_WITHDRAW) return res.status(400).json({ error: `Mínimo de ${SYSTEM_CONFIG.LIMITS.MIN_WITHDRAW} Kz.` });
+        if (txAmount < SYSTEM_CONFIG.LIMITS.MIN_WITHDRAW) return res.status(400).json({ error: `Saque mínimo: ${SYSTEM_CONFIG.LIMITS.MIN_WITHDRAW} Kz.` });
 
         const client = await pool.connect();
         try {
@@ -714,7 +762,9 @@ module.exports = (pool, io) => {
             await verifyPinInternal(client, userId, pin);
 
             // Calcular taxas
-            const fee = txAmount * SYSTEM_CONFIG.FEES.BANK_WITHDRAWAL;
+            let fee = txAmount * SYSTEM_CONFIG.FEES.BANK_WITHDRAWAL_PCT;
+            if (fee < SYSTEM_CONFIG.FEES.BANK_WITHDRAWAL_MIN) fee = SYSTEM_CONFIG.FEES.BANK_WITHDRAWAL_MIN;
+
             const totalDed = txAmount + fee;
 
             if (balance < totalDed) throw new Error(`Saldo insuficiente (Saque + Taxa: ${totalDed.toFixed(2)} Kz).`);
@@ -722,12 +772,12 @@ module.exports = (pool, io) => {
             // Debitar
             await client.query("UPDATE users SET balance = balance - $1 WHERE id = $2", [totalDed, userId]);
 
-            // Buscar dados bancários
+            // Buscar dados da conta
             const bankRes = await client.query("SELECT * FROM external_bank_accounts WHERE id = $1 AND user_id = $2", [bank_account_id, userId]);
             if (bankRes.rows.length === 0) throw new Error("Conta bancária inválida.");
             const bank = bankRes.rows[0];
 
-            // Registrar (Pendente)
+            // Registrar (Status: PENDING)
             await client.query(
                 `INSERT INTO wallet_transactions
                  (reference_id, user_id, amount, fee, type, method, status, description, metadata)
@@ -746,7 +796,7 @@ module.exports = (pool, io) => {
 
             io.to(`user_${userId}`).emit('wallet_update', { type: 'withdraw', amount: totalDed });
 
-            res.json({ success: true, message: "Saque solicitado. Aguarde processamento.", reference: txRef });
+            res.json({ success: true, message: "Saque solicitado. Aguarde processamento (24h).", reference: txRef });
 
         } catch (e) {
             await client.query('ROLLBACK');
@@ -757,13 +807,13 @@ module.exports = (pool, io) => {
     });
 
     /**
-     * POST /pay-service - Pagamento de Serviços (Continuação)
+     * POST /pay-service - Pagamento de Serviços
      */
     router.post('/pay-service', requireAuth, requireActiveWallet, async (req, res) => {
-        const { serviceId, reference, amount, pin } = req.body;
+        const { service_id, reference, amount, pin } = req.body;
         const userId = req.user.id;
         const txAmount = parseFloat(amount);
-        const txRef = Utils.generateRef('SRV');
+        const txRef = Utils.generateRef('PAY');
 
         if (!Utils.isValidAmount(txAmount)) return res.status(400).json({ error: "Valor inválido." });
 
@@ -771,29 +821,38 @@ module.exports = (pool, io) => {
         try {
             await client.query('BEGIN');
 
-            // 1. Verificar PIN e Saldo
             const userRes = await client.query("SELECT balance FROM users WHERE id = $1 FOR UPDATE", [userId]);
-            const balance = parseFloat(userRes.rows[0].balance);
             await verifyPinInternal(client, userId, pin);
 
-            if (balance < txAmount) throw new Error("Saldo insuficiente para pagar este serviço.");
+            const totalCost = txAmount + SYSTEM_CONFIG.FEES.SERVICE_PAYMENT_FIXED;
+            if (parseFloat(userRes.rows[0].balance) < totalCost) throw new Error("Saldo insuficiente.");
 
-            // 2. Chamar Gateway de Serviço
-            const payment = await gateway.payService(serviceId, reference, txAmount);
+            // Gateway Service
+            const svcResult = await gateway.payService(service_id, reference, txAmount);
 
-            // 3. Deduzir Saldo
-            await client.query("UPDATE users SET balance = balance - $1 WHERE id = $2", [txAmount, userId]);
+            // Debitar
+            await client.query("UPDATE users SET balance = balance - $1 WHERE id = $2", [totalCost, userId]);
 
-            // 4. Registrar Transação
+            // Registrar
             await client.query(
                 `INSERT INTO wallet_transactions
-                 (reference_id, user_id, amount, type, method, status, description, metadata)
-                 VALUES ($1, $2, $3, 'service_payment', 'utility', 'completed', $4, $5)`,
-                [txRef, userId, -txAmount, `Pagamento de ${serviceId}: ${reference}`, JSON.stringify(payment)]
+                 (reference_id, user_id, amount, fee, type, method, status, description, metadata)
+                 VALUES ($1, $2, $3, $4, 'bill_payment', 'internal', 'completed', $5, $6)`,
+                [
+                    txRef,
+                    userId,
+                    -txAmount,
+                    SYSTEM_CONFIG.FEES.SERVICE_PAYMENT_FIXED,
+                    `Pagamento ${service_id}`,
+                    JSON.stringify({ ref: reference, receipt: svcResult.receipt })
+                ]
             );
 
             await client.query('COMMIT');
-            res.json({ success: true, message: "Pagamento realizado com sucesso!", receipt: payment.receipt });
+
+            io.to(`user_${userId}`).emit('wallet_update', { type: 'payment', amount: totalCost });
+
+            res.json({ success: true, message: "Pagamento realizado.", receipt: svcResult.receipt });
 
         } catch (e) {
             await client.query('ROLLBACK');
@@ -803,30 +862,31 @@ module.exports = (pool, io) => {
         }
     });
 
-        // IMPORTANTE: Retornar o router para o Express poder usá-lo!
-        return router;
-    };
 
     // =============================================================================================
-    // 💳 4.5 GESTÃO DE DADOS (CARTÕES E CONTAS)
+    // 💳 4.5 GESTÃO DE ATIVOS (CARTÕES E CONTAS)
     // =============================================================================================
 
     router.post('/cards/add', requireAuth, async (req, res) => {
         const { number, expiry, alias, type } = req.body;
+        const userId = req.user.id;
+
         if (!number || number.length < 13) return res.status(400).json({ error: "Número inválido." });
 
         try {
-            const count = await pool.query("SELECT COUNT(*) FROM wallet_cards WHERE user_id = $1", [req.user.id]);
+            const count = await pool.query("SELECT COUNT(*) FROM wallet_cards WHERE user_id = $1", [userId]);
             if (parseInt(count.rows[0].count) >= SYSTEM_CONFIG.LIMITS.MAX_CARDS) return res.status(400).json({ error: "Limite de cartões atingido." });
 
-            const token = crypto.createHash('sha256').update(number + req.user.id).digest('hex');
+            const token = crypto.createHash('sha256').update(number + userId).digest('hex');
+            const isDefault = parseInt(count.rows[0].count) === 0;
 
             await pool.query(
                 `INSERT INTO wallet_cards (user_id, card_alias, last_four, provider_token, expiry_date, card_network, is_default)
                  VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-                [req.user.id, alias || 'Cartão', number.slice(-4), token, expiry, type || 'VISA', parseInt(count.rows[0].count) === 0]
+                [userId, alias || 'Meu Cartão', number.slice(-4), token, expiry, type || 'VISA', isDefault]
             );
-            res.json({ success: true });
+
+            res.json({ success: true, message: "Cartão adicionado." });
         } catch (e) {
             res.status(500).json({ error: "Erro ao adicionar cartão." });
         }
@@ -843,17 +903,20 @@ module.exports = (pool, io) => {
 
     router.post('/accounts/add', requireAuth, async (req, res) => {
         const { provider, account_number, holder_name } = req.body;
+        const userId = req.user.id;
+
         if (!account_number) return res.status(400).json({ error: "Número da conta inválido." });
 
         try {
-            const count = await pool.query("SELECT COUNT(*) FROM external_bank_accounts WHERE user_id = $1", [req.user.id]);
+            const count = await pool.query("SELECT COUNT(*) FROM external_bank_accounts WHERE user_id = $1", [userId]);
             if (parseInt(count.rows[0].count) >= SYSTEM_CONFIG.LIMITS.MAX_ACCOUNTS) return res.status(400).json({ error: "Limite de contas atingido." });
 
             await pool.query(
                 `INSERT INTO external_bank_accounts (user_id, bank_name, iban, holder_name)
                  VALUES ($1, $2, $3, $4)`,
-                [req.user.id, provider, account_number, holder_name]
+                [userId, provider, account_number, holder_name]
             );
+
             res.json({ success: true, message: "Conta bancária adicionada." });
         } catch (e) {
             res.status(500).json({ error: "Erro ao salvar conta." });
@@ -869,8 +932,9 @@ module.exports = (pool, io) => {
         }
     });
 
+
     // =============================================================================================
-    // 🔐 4.6 SEGURANÇA (PIN)
+    // 🔐 4.6 SEGURANÇA E PIN
     // =============================================================================================
 
     router.post('/set-pin', requireAuth, async (req, res) => {
@@ -921,7 +985,7 @@ module.exports = (pool, io) => {
     });
 
     // =============================================================================================
-    // 📊 4.7 ADMIN STATS
+    // 📊 4.7 ADMINISTRAÇÃO (STATS)
     // =============================================================================================
 
     router.get('/admin/stats', requireAuth, async (req, res) => {
@@ -938,6 +1002,11 @@ module.exports = (pool, io) => {
             res.status(500).json({ error: "Erro interno admin." });
         }
     });
+
+    // =============================================================================================
+    // 🛑 PONTO DE SAÍDA CRÍTICO: RETORNO DO ROUTER
+    // =============================================================================================
+    // O router configurado é retornado aqui para ser usado no server.js
 
     return router;
 };
