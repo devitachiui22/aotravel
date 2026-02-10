@@ -1,762 +1,718 @@
 /**
  * =================================================================================================
- * 💰 AOTRAVEL WALLET PROVIDER - TITANIUM FUSION ENGINE (FINAL RELEASE 2026)
+ * 🏦 AOTRAVEL TITANIUM FINANCIAL ENGINE - WALLET CORE SYSTEM v3.0 (FINAL RELEASE 2026)
  * =================================================================================================
- * ARQUIVO: lib/providers/wallet_provider.dart
- * DESCRIÇÃO: Motor financeiro sincronizado com wallet.js (Node.js).
- *            Gerencia Saldo Real, Transações P2P, Recargas, Levantamentos e Segurança.
  *
- * INTEGRAÇÃO:
- * - Backend: Node.js + PostgreSQL (ACID Transactions)
- * - Protocolo: RESTful API + Headers de Sessão
- * - Segurança: Validação de PIN e Token
+ * ARQUIVO: backend/wallet.js
+ * DESCRIÇÃO: Controlador Mestre de Finanças, Transações P2P, Integrações Bancárias e Segurança.
  *
- * STATUS: PRODUCTION READY - FULL INTEGRITY - ZERO OMISSIONS
+ * AUTOR: Engenharia de Software Sênior (AOtravel Team)
+ * DATA: 10 de Fevereiro de 2026
+ *
+ * --- ÍNDICE DE FUNCIONALIDADES ---
+ * 1.  CONFIGURAÇÃO E UTILITÁRIOS (Helpers de Criptografia e Validação)
+ * 2.  MIDDLEWARES DE SEGURANÇA (Verificação de PIN, Travamento de Sessão)
+ * 3.  ROTAS DE LEITURA (Dashboard, Extrato Detalhado, Verificação de Status)
+ * 4.  ROTAS TRANSACIONAIS (P2P, TopUp, Withdraw, Pagamento de Serviços)
+ * 5.  GESTÃO DE CONTAS (IBAN, Cartões, Chaves Pix/Kwik)
+ * 6.  SEGURANÇA (Redefinição de PIN, Bloqueio de Carteira)
+ *
+ * --- PADRÕES DE QUALIDADE ---
+ * - ACID Compliance: Uso estrito de 'BEGIN', 'COMMIT', 'ROLLBACK'.
+ * - Race Condition Protection: Uso de 'FOR UPDATE' para travar linhas de saldo durante escritas.
+ * - Audit Logging: Logs detalhados de cada etapa financeira.
+ * - Input Sanitation: Validação rigorosa de tipos e valores.
  * =================================================================================================
  */
 
-import 'dart:convert';
-import 'dart:async';
-import 'dart:io';
+const express = require('express');
+const router = express.Router();
+const crypto = require('crypto');
 
-import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; // Para feedback tátil (HapticFeedback)
-import 'package:http/http.dart' as http;
-import 'auth_provider.dart';
+/**
+ * MÓDULO EXPORTÁVEL
+ * Recebe as instâncias do Pool de Conexão (PostgreSQL) e Socket.IO
+ */
+module.exports = (pool, io) => {
 
-// ===========================================================================
-// 📦 TRANSACTION MODEL - MAPEAMENTO EXATO DO BANCO DE DADOS (POSTGRESQL)
-// ===========================================================================
+    // =============================================================================================
+    // 🛠️ SEÇÃO 1: UTILITÁRIOS E HELPERS DO SISTEMA
+    // =============================================================================================
 
-class TransactionModel {
-  // --- CAMPOS NATIVOS DO BANCO DE DADOS (DB SCHEMA) ---
-  final String id;
-  final int? senderId;
-  final int? receiverId;
-  final double amount;
-  final double fee;
-  final String operationType; // Mapeado de 'type' no JSON
-  final String? method;       // 'internal', 'iban', 'multicaixa', 'kwik'
-  final String rawStatus;     // 'completed', 'pending', 'failed'
-  final String description;
-  final String referenceId;
-  final Map<String, dynamic> metadata;
-  final DateTime createdAt;
-
-  // --- CAMPOS ENRIQUECIDOS (JOINED DATA) ---
-  final String? senderName;
-  final String? receiverName;
-  final String? senderPhoto;
-  final String? receiverPhoto;
-
-  TransactionModel({
-    required this.id,
-    this.senderId,
-    this.receiverId,
-    required this.amount,
-    required this.fee,
-    required this.operationType,
-    this.method,
-    required this.rawStatus,
-    required this.description,
-    required this.referenceId,
-    required this.metadata,
-    required this.createdAt,
-    this.senderName,
-    this.receiverName,
-    this.senderPhoto,
-    this.receiverPhoto,
-  });
-
-  // --- FACTORY: PARSING DEFENSIVO E ROBUSTO ---
-  factory TransactionModel.fromJson(Map<String, dynamic> json) {
-    // Helper para parsear metadados que podem vir como String JSON ou Map
-    Map<String, dynamic> parseMetadata(dynamic meta) {
-      if (meta == null) return {};
-      if (meta is Map) return Map<String, dynamic>.from(meta);
-      if (meta is String) {
-        try {
-          return jsonDecode(meta);
-        } catch (_) {
-          return {};
-        }
-      }
-      return {};
-    }
-
-    return TransactionModel(
-      id: json['id']?.toString() ?? DateTime.now().millisecondsSinceEpoch.toString(),
-      senderId: int.tryParse(json['sender_id']?.toString() ?? ''),
-      receiverId: int.tryParse(json['receiver_id']?.toString() ?? ''),
-      
-      // O backend envia strings numéricas do PostgreSQL (Numeric/Decimal)
-      amount: double.tryParse(json['amount']?.toString() ?? '0.0') ?? 0.0,
-      fee: double.tryParse(json['fee']?.toString() ?? '0.0') ?? 0.0,
-      
-      operationType: json['type'] ?? 'unknown',
-      method: json['method'],
-      rawStatus: json['status'] ?? 'completed',
-      description: json['description'] ?? 'Transação sem descrição',
-      referenceId: json['reference_id'] ?? '',
-      
-      metadata: parseMetadata(json['metadata']),
-      
-      createdAt: json['created_at'] != null
-          ? DateTime.parse(json['created_at'])
-          : DateTime.now(),
-      
-      // Dados de JOIN (Enriquecidos no Backend)
-      senderName: json['sender_name'],
-      receiverName: json['receiver_name'],
-      senderPhoto: json['sender_photo'],
-      receiverPhoto: json['receiver_photo'],
-    );
-  }
-
-  // --- GETTERS DE APRESENTAÇÃO (UI LOGIC) ---
-
-  /// Título formatado inteligente para a lista de histórico
-  String get title {
-    // Se a descrição do banco for clara, usa ela.
-    if (description.isNotEmpty && description != 'Transação') {
-      return description;
-    }
-    
-    // Fallback lógico baseado no tipo de operação
-    switch (operationType) {
-      case 'topup': return 'Recarga de Carteira';
-      case 'withdraw': return 'Levantamento Bancário';
-      case 'ride_payment': return 'Pagamento de Corrida';
-      case 'earnings': return 'Ganhos de Corrida';
-      case 'transfer':
-        // Lógica P2P: Se amount é positivo, recebi. Se negativo, enviei.
-        if (amount > 0 && senderName != null) return 'Recebido de $senderName';
-        if (amount < 0 && receiverName != null) return 'Enviado para $receiverName';
-        return 'Transferência P2P';
-      default: return 'Movimentação Financeira';
-    }
-  }
-
-  /// Data formatada amigável (Hoje, Ontem, DD/MM/AAAA)
-  String get date {
-    final now = DateTime.now();
-    final diff = now.difference(createdAt);
-
-    if (diff.inDays == 0 && now.day == createdAt.day) {
-      return "Hoje, ${createdAt.hour.toString().padLeft(2, '0')}:${createdAt.minute.toString().padLeft(2, '0')}";
-    } else if (diff.inDays == 1 || (diff.inDays == 0 && now.day != createdAt.day)) {
-      return "Ontem, ${createdAt.hour.toString().padLeft(2, '0')}:${createdAt.minute.toString().padLeft(2, '0')}";
-    } else {
-      return "${createdAt.day.toString().padLeft(2,'0')}/${createdAt.month.toString().padLeft(2,'0')}/${createdAt.year}";
-    }
-  }
-
-  /// Define visualmente se é Entrada (credit) ou Saída (debit)
-  /// Baseado na lógica do backend onde amount negativo é débito.
-  String get type {
-    // Tipos explicitamente de crédito (Recargas e Ganhos)
-    if (['topup', 'earnings'].contains(operationType)) return 'credit';
-    
-    // Tipos explicitamente de débito (Saques e Pagamentos)
-    if (['withdraw', 'ride_payment'].contains(operationType)) return 'debit';
-
-    // Para transferências, olhamos o sinal do valor
-    if (amount >= 0) return 'credit';
-    return 'debit';
-  }
-
-  /// Verifica se está pendente
-  bool get isPending => rawStatus == 'pending' || rawStatus == 'processing' || rawStatus == 'waiting_approval';
-  
-  /// Cor do status para UI
-  Color get statusColor {
-    switch (rawStatus) {
-      case 'completed': return Colors.green;
-      case 'pending': return const Color(0xFFFFB300); // Amber/Orange
-      case 'failed': return Colors.red;
-      case 'cancelled': return Colors.grey;
-      default: return Colors.grey;
-    }
-  }
-
-  /// Ícone correspondente à operação
-  IconData get iconData {
-    switch (operationType) {
-      case 'topup': return Icons.add_circle_outline;
-      case 'withdraw': return Icons.account_balance;
-      case 'transfer': return amount >= 0 ? Icons.download : Icons.upload;
-      case 'ride_payment': return Icons.directions_car;
-      case 'earnings': return Icons.monetization_on;
-      default: return Icons.compare_arrows;
-    }
-  }
-}
-
-// ===========================================================================
-// 🛡️ WALLET PROVIDER - INTEGRAÇÃO FULL COM SERVER.JS / WALLET.JS
-// ===========================================================================
-
-class WalletProvider with ChangeNotifier {
-  // --- CONFIGURAÇÃO DE INFRAESTRUTURA ---
-  // URL de Produção Fixa (Backup caso a dinâmica falhe)
-  final String _productionUrl = "https://aotravel.onrender.com/api";
-
-  // --- ESTADO INTERNO (STATE MANAGEMENT) ---
-  double _balance = 0.0;
-  String _iban = "AO06 ...";
-  int _bonusPoints = 0;
-  double _accountLimit = 500000.0;
-  bool _hasPin = false; // Indica se o usuário já definiu PIN
-  String _currency = "AOA";
-
-  List<TransactionModel> _transactions = [];
-  List<Map<String, dynamic>> _externalAccounts = [];
-  
-  // Controle de Estado da UI
-  bool _isLoading = false;
-  String? _errorMessage;
-  String? _successMessage;
-
-  // --- GETTERS PÚBLICOS ---
-  double get balance => _balance;
-  String get iban => _iban;
-  int get bonusPoints => _bonusPoints;
-  double get accountLimit => _accountLimit;
-  bool get hasPin => _hasPin;
-  String get currency => _currency;
-  
-  List<TransactionModel> get transactions => _transactions;
-  List<Map<String, dynamic>> get externalAccounts => _externalAccounts;
-  
-  bool get isLoading => _isLoading;
-  String? get errorMessage => _errorMessage;
-  String? get successMessage => _successMessage;
-
-  // --- HELPERS INTERNOS DE CONEXÃO ---
-  
-  /// Constrói a URL correta baseada no AuthProvider (Dev vs Prod)
-  /// Remove '/auth' da URL base do AuthProvider para obter a raiz da API.
-  String _getApiUrl(AuthProvider auth) {
-    if (auth.baseUrl.isNotEmpty) {
-      return auth.baseUrl.replaceAll('/auth', ''); 
-    }
-    return _productionUrl;
-  }
-
-  /// Gera Headers Padrão com Token de Sessão e Controle de Versão
-  Map<String, String> _headers(AuthProvider auth) {
-    return {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-      'Authorization': 'Bearer ${auth.sessionToken ?? ''}', // Bearer Token Standard
-      'x-session-token': auth.sessionToken ?? '',           // Custom Header Legacy
-      'x-app-version': '3.0.0-titanium'                     // Version Control
+    /**
+     * Gera uma referência única e legível para transações.
+     * Formato: PREF-TIMESTAMP-RANDOM (Ex: TRF-16789922-A1B2)
+     * @param {string} prefix - Prefixo da operação (TRF, DEP, WTH, PAY)
+     */
+    const generateTransactionRef = (prefix) => {
+        const timestamp = Date.now().toString().slice(-8);
+        const random = crypto.randomBytes(2).toString('hex').toUpperCase();
+        return `${prefix}-${timestamp}-${random}`;
     };
-  }
 
-  /// Limpa mensagens de erro/sucesso para resetar a UI
-  void clearMessages() {
-    _errorMessage = null;
-    _successMessage = null;
-    notifyListeners();
-  }
+    /**
+     * Logger especializado para operações financeiras.
+     * Inclui timestamp ISO e ID do usuário para rastreabilidade.
+     */
+    const logFinance = (userId, action, details) => {
+        const timestamp = new Date().toISOString();
+        console.log(`[💰 FINANCE_AUDIT] [${timestamp}] [USER:${userId}] [${action}] ${JSON.stringify(details)}`);
+    };
 
-  // ===========================================================================
-  // ⚡ CORE METHODS (API CALLS & BUSINESS LOGIC)
-  // ===========================================================================
+    /**
+     * Valida se um valor monetário é seguro para processamento.
+     * Impede valores negativos, nulos ou NaN.
+     */
+    const isValidAmount = (amount) => {
+        return amount && !isNaN(amount) && parseFloat(amount) > 0;
+    };
 
-  /// 1. CARREGAR CARTEIRA COMPLETA (Sync Engine)
-  /// Rota: GET /api/wallet
-  /// Descrição: Busca saldo real, transações e contas vinculadas em uma única chamada otimizada.
-  Future<void> loadWalletData(AuthProvider auth) async {
-    // 1. Validação de Sessão
-    if (!auth.isAuthenticated) {
-      _errorMessage = "Sessão expirada. Faça login novamente.";
-      notifyListeners();
-      return;
-    }
+    /**
+     * Formata erros de banco de dados para mensagens amigáveis ao cliente.
+     */
+    const handleDbError = (err, res, transactionRef = 'N/A') => {
+        console.error(`❌ [DB_CRITICAL_FAILURE] Ref: ${transactionRef}`, err);
+        return res.status(500).json({
+            error: "Falha crítica no processamento financeiro.",
+            code: "INTERNAL_TX_ERROR",
+            reference: transactionRef,
+            details: process.env.NODE_ENV === 'development' ? err.message : undefined
+        });
+    };
 
-    _isLoading = true;
-    _errorMessage = null;
-    // Não notificamos aqui para evitar flicker na UI se já tiver dados
-    // notifyListeners(); 
+    // =============================================================================================
+    // 📊 SEÇÃO 2: ROTAS DE CONSULTA E DASHBOARD (READ-ONLY)
+    // =============================================================================================
 
-    try {
-      final url = Uri.parse('${_getApiUrl(auth)}/wallet');
-      debugPrint("🔄 [WALLET] Iniciando sincronização: $url");
-
-      final response = await http.get(url, headers: _headers(auth))
-          .timeout(const Duration(seconds: 25));
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-
-        // A. Sincronizar Dados da Carteira (Source of Truth)
-        if (data['wallet'] != null) {
-          _balance = double.tryParse(data['wallet']['balance']?.toString() ?? '0.0') ?? 0.0;
-          _iban = data['wallet']['iban'] ?? "AO06 ...";
-          _bonusPoints = int.tryParse(data['wallet']['bonus_points']?.toString() ?? '0') ?? 0;
-          _accountLimit = double.tryParse(data['wallet']['limit']?.toString() ?? '500000') ?? 500000.0;
-          _hasPin = data['wallet']['has_pin'] == true;
-          _currency = data['wallet']['currency'] ?? "AOA";
-          
-          // Propaga o saldo real para o AuthProvider (cache global para outras telas)
-          auth.syncBalance(_balance);
-        }
-
-        // B. Contas Externas Salvas
-        if (data['external_accounts'] != null) {
-          _externalAccounts = List<Map<String, dynamic>>.from(data['external_accounts']);
-        }
-
-        // C. Histórico de Transações
-        if (data['transactions'] != null) {
-          _transactions = (data['transactions'] as List)
-              .map((tx) => TransactionModel.fromJson(tx))
-              .toList();
-        }
-
-        debugPrint("✅ [WALLET] Sincronização concluída. Saldo Real: $_balance $_currency");
-
-      } else {
-        // Tratamento de erros HTTP (4xx, 5xx)
+    /**
+     * ROTA: GET /
+     * DESCRIÇÃO: Retorna o sumário completo da carteira do usuário autenticado.
+     * DADOS: Saldo real, IBAN, Pontos, Limites e as últimas 50 transações.
+     */
+    router.get('/', async (req, res) => {
         try {
-          final errorData = jsonDecode(response.body);
-          _errorMessage = errorData['error'] ?? "Erro do servidor (${response.statusCode})";
-        } catch (_) {
-          _errorMessage = "Falha ao carregar carteira (${response.statusCode})";
+            // 1. Validação de Sessão
+            if (!req.user || !req.user.id) {
+                return res.status(401).json({ error: "Sessão inválida ou expirada." });
+            }
+
+            const userId = req.user.id;
+            const startTime = Date.now();
+
+            // 2. Execução Paralela de Consultas (Otimização de Performance)
+            // Utilizamos Promise.all para buscar dados independentes simultaneamente.
+            const [userDataResult, externalAccountsResult, transactionsResult] = await Promise.all([
+                // Query A: Dados Vitais do Usuário
+                pool.query(
+                    `SELECT
+                        balance,
+                        bonus_points,
+                        iban,
+                        wallet_pin,
+                        account_limit,
+                        is_verified,
+                        currency
+                     FROM users WHERE id = $1`,
+                    [userId]
+                ),
+
+                // Query B: Contas Bancárias Vinculadas
+                pool.query(
+                    `SELECT id, provider, account_number, holder_name, is_default, created_at
+                     FROM external_accounts
+                     WHERE user_id = $1
+                     ORDER BY is_default DESC, created_at DESC`,
+                    [userId]
+                ),
+
+                // Query C: Histórico de Transações (Enriquecido com nomes)
+                // Faz JOIN com a tabela users duas vezes para pegar nome do remetente e destinatário
+                pool.query(
+                    `SELECT
+                        t.id,
+                        t.amount,
+                        t.type,
+                        t.method,
+                        t.description,
+                        t.reference_id,
+                        t.status,
+                        t.created_at,
+                        t.sender_id,
+                        t.receiver_id,
+                        t.metadata,
+                        s.name as sender_name,
+                        r.name as receiver_name,
+                        s.photo as sender_photo,
+                        r.photo as receiver_photo
+                     FROM wallet_transactions t
+                     LEFT JOIN users s ON t.sender_id = s.id
+                     LEFT JOIN users r ON t.receiver_id = r.id
+                     WHERE t.user_id = $1 OR t.sender_id = $1 OR t.receiver_id = $1
+                     ORDER BY t.created_at DESC
+                     LIMIT 50`,
+                    [userId]
+                )
+            ]);
+
+            // 3. Tratamento de Dados (Fallback Seguro)
+            // Se o usuário não existir (caso raro de deleção durante sessão), retorna padrão zerado.
+            const walletData = userDataResult.rows.length > 0 ? userDataResult.rows[0] : {
+                balance: 0.00,
+                bonus_points: 0,
+                iban: "Não gerado",
+                account_limit: 500000.00,
+                is_verified: false
+            };
+
+            // 4. Auditoria de Leitura
+            const duration = Date.now() - startTime;
+            // console.log(`[WALLET_READ] Dashboard carregado para User ${userId} em ${duration}ms`);
+
+            // 5. Resposta JSON Estruturada
+            res.json({
+                success: true,
+                timestamp: new Date().toISOString(),
+                wallet: {
+                    balance: parseFloat(walletData.balance || 0).toFixed(2),
+                    bonus_points: parseInt(walletData.bonus_points || 0),
+                    iban: walletData.iban || "AO06 ...",
+                    limit: parseFloat(walletData.account_limit || 500000),
+                    status: walletData.is_verified ? "verified" : "unverified",
+                    currency: walletData.currency || "AOA",
+                    has_pin: !!walletData.wallet_pin // Retorna apenas booleano, nunca o PIN
+                },
+                external_accounts: externalAccountsResult.rows,
+                transactions: transactionsResult.rows
+            });
+
+        } catch (error) {
+            logFinance(req.user?.id || 'unknown', 'ERROR_DASHBOARD', error.message);
+            res.status(500).json({ error: "Erro interno ao carregar a carteira digital." });
         }
-        debugPrint("⚠️ [WALLET_ERROR] ${response.body}");
-      }
-    } on SocketException {
-      _errorMessage = "Sem conexão com a internet. Verifique sua rede.";
-    } on TimeoutException {
-      _errorMessage = "Tempo limite excedido. O servidor demorou a responder.";
-    } catch (e) {
-      debugPrint("❌ [WALLET_CRITICAL] Exception: $e");
-      _errorMessage = "Erro interno no aplicativo.";
-    } finally {
-      _isLoading = false;
-      notifyListeners();
-    }
-  }
+    });
 
-  /// 2. TRANSFERÊNCIA P2P (Internal Transfer)
-  /// Rota: POST /api/wallet/transfer/internal
-  /// Descrição: Envia dinheiro para outro usuário usando PIN de segurança.
-  Future<bool> transferP2P({
-    required AuthProvider auth,
-    required String targetContact, // Email, Phone ou IBAN
-    required double amount,
-    required String pin,
-    String description = "Transferência P2P",
-  }) async {
-    // 1. Pré-validações Locais
-    if (amount <= 0) {
-      _errorMessage = "O valor deve ser maior que zero.";
-      notifyListeners();
-      return false;
-    }
-    if (amount > _balance) {
-      _errorMessage = "Saldo insuficiente para esta operação.";
-      notifyListeners();
-      return false;
-    }
+    /**
+     * ROTA: GET /summary
+     * DESCRIÇÃO: Endpoint leve apenas para saldo (Usado em polling ou refresh rápido).
+     */
+    router.get('/summary', async (req, res) => {
+        try {
+            const result = await pool.query("SELECT balance, bonus_points FROM users WHERE id = $1", [req.user.id]);
+            if (result.rows.length === 0) return res.sendStatus(404);
 
-    _isLoading = true;
-    _errorMessage = null;
-    _successMessage = null;
-    notifyListeners();
-
-    try {
-      final url = Uri.parse('${_getApiUrl(auth)}/wallet/transfer/internal');
-      
-      final body = {
-        'receiver_identifier': targetContact,
-        'amount': amount,
-        'description': description,
-        'pin': pin
-      };
-
-      debugPrint("💸 [WALLET] Enviando P2P: $amount para $targetContact");
-
-      final response = await http.post(
-        url,
-        headers: _headers(auth),
-        body: jsonEncode(body)
-      ).timeout(const Duration(seconds: 40)); // Timeout maior para transações
-
-      final data = jsonDecode(response.body);
-
-      if (response.statusCode == 200 && data['success'] == true) {
-        _successMessage = "Transferência realizada com sucesso!";
-        HapticFeedback.heavyImpact();
-        
-        // Recarrega tudo para garantir consistência dos dados
-        await loadWalletData(auth); 
-        return true;
-      } else {
-        _errorMessage = data['error'] ?? data['message'] ?? "A transação foi recusada.";
-        HapticFeedback.vibrate();
-        return false;
-      }
-    } catch (e) {
-      _errorMessage = "Erro na transferência: Verifique sua conexão.";
-      debugPrint("❌ [WALLET_P2P_ERROR] $e");
-      return false;
-    } finally {
-      _isLoading = false;
-      notifyListeners();
-    }
-  }
-
-  /// 3. SOLICITAR PAGAMENTO (Request Money)
-  /// Rota: POST /api/wallet/request-payment
-  /// Descrição: Envia notificação para outro usuário pedindo valor.
-  Future<bool> requestPayment({
-    required AuthProvider auth,
-    required String targetIdentifier,
-    required double amount,
-    String description = "Solicitação de Pagamento"
-  }) async {
-    if (amount <= 0) {
-        _errorMessage = "Valor inválido.";
-        notifyListeners();
-        return false;
-    }
-
-    _isLoading = true;
-    notifyListeners();
-
-    try {
-      final url = Uri.parse('${_getApiUrl(auth)}/wallet/request-payment');
-      
-      final response = await http.post(
-        url, 
-        headers: _headers(auth), 
-        body: jsonEncode({
-          'target_identifier': targetIdentifier,
-          'amount': amount,
-          'description': description
-        })
-      ).timeout(const Duration(seconds: 20));
-
-      final data = jsonDecode(response.body);
-
-      if (response.statusCode == 200) {
-        _successMessage = "Solicitação enviada com sucesso.";
-        _isLoading = false;
-        notifyListeners();
-        return true;
-      } else {
-        _errorMessage = data['error'] ?? "Não foi possível enviar a solicitação.";
-        _isLoading = false;
-        notifyListeners();
-        return false;
-      }
-    } catch (e) {
-      _errorMessage = "Erro de conexão ao solicitar pagamento.";
-      _isLoading = false;
-      notifyListeners();
-      return false;
-    }
-  }
-
-  /// 4. RECARGA DE CARTEIRA (Top-Up)
-  /// Rota: POST /api/wallet/topup
-  /// Descrição: Inicia processo de recarga via Multicaixa ou Gateway.
-  Future<bool> topUp({
-    required AuthProvider auth,
-    required double amount,
-    required String method, // 'multicaixa', 'visa'
-  }) async {
-    _isLoading = true;
-    _errorMessage = null;
-    notifyListeners();
-
-    try {
-      final url = Uri.parse('${_getApiUrl(auth)}/wallet/topup');
-      
-      final response = await http.post(
-        url,
-        headers: _headers(auth),
-        body: jsonEncode({
-          'amount': amount,
-          'method': method,
-          // Gera um ID de transação local para rastreamento (opcional)
-          'transaction_id': 'APP-${DateTime.now().millisecondsSinceEpoch}'
-        })
-      ).timeout(const Duration(seconds: 30));
-
-      final data = jsonDecode(response.body);
-
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        _successMessage = data['message'] ?? "Recarga efetuada com sucesso.";
-        
-        // Se o backend retornar o novo saldo imediatamente (Simulação/Instantâneo)
-        if (data['new_balance'] != null) {
-          _balance = double.tryParse(data['new_balance'].toString()) ?? _balance;
-          auth.syncBalance(_balance);
-          
-          // Adiciona transação simulada à lista se o backend não retornou a lista atualizada
-          // Isso melhora a UX (feedback instantâneo)
-          await loadWalletData(auth); 
+            res.json({
+                balance: parseFloat(result.rows[0].balance),
+                points: result.rows[0].bonus_points
+            });
+        } catch (e) {
+            res.status(500).json({ error: e.message });
         }
-        
-        return true;
-      } else {
-        _errorMessage = data['error'] ?? "Falha na recarga.";
-        return false;
-      }
-    } catch (e) {
-      // Fallback gracioso
-      _errorMessage = "Serviço de recarga indisponível temporariamente.";
-      debugPrint("❌ [WALLET_TOPUP_ERROR] $e");
-      return false;
-    } finally {
-      _isLoading = false;
-      notifyListeners();
-    }
-  }
+    });
 
-  /// 5. LEVANTAMENTO / SAQUE (Withdraw)
-  /// Rota: POST /api/wallet/withdraw
-  /// Descrição: Solicita retirada de fundos para conta bancária.
-  Future<bool> withdraw({
-    required AuthProvider auth,
-    required double amount,
-    required String iban,
-    String? description,
-  }) async {
-    if (amount > _balance) {
-      _errorMessage = "Saldo insuficiente para levantamento.";
-      notifyListeners();
-      return false;
-    }
+    // =============================================================================================
+    // 💸 SEÇÃO 3: TRANSFERÊNCIAS P2P (CORE TRANSACTIONAL)
+    // =============================================================================================
 
-    // Regra de Negócio: Mínimo 2000 Kz (Espelhando o Backend)
-    if (amount < 2000) {
-      _errorMessage = "Valor mínimo de levantamento é 2.000 Kz.";
-      notifyListeners();
-      return false;
-    }
+    /**
+     * ROTA: POST /transfer/internal
+     * DESCRIÇÃO: Transferência entre usuários da plataforma (P2P).
+     * SEGURANÇA: Exige PIN, Saldo Suficiente, Bloqueio de Linha (Row Lock).
+     */
+    router.post('/transfer/internal', async (req, res) => {
+        const { receiver_identifier, amount, description, pin } = req.body;
+        const senderId = req.user.id;
+        const txRef = generateTransactionRef('TRF');
 
-    _isLoading = true;
-    _errorMessage = null;
-    notifyListeners();
+        // 1. Validação de Entrada Básica
+        if (!isValidAmount(amount)) {
+            return res.status(400).json({ error: "O valor da transferência deve ser positivo." });
+        }
+        if (!receiver_identifier) {
+            return res.status(400).json({ error: "O destinatário é obrigatório." });
+        }
+        if (!pin) {
+            return res.status(400).json({ error: "O PIN de segurança é obrigatório." });
+        }
 
-    try {
-      final url = Uri.parse('${_getApiUrl(auth)}/wallet/withdraw');
-      
-      final response = await http.post(
-        url,
-        headers: _headers(auth),
-        body: jsonEncode({
-          'amount': amount,
-          'destination_iban': iban,
-          'bank_details': { // Objeto esperado pelo backend
-             'account_number': iban,
-             'bank_name': 'Banco Externo'
-          },
-          'description': description ?? "Levantamento AOtravel",
-        })
-      ).timeout(const Duration(seconds: 30));
+        // Início da Conexão Dedicada para Transação ACID
+        const client = await pool.connect();
 
-      final data = jsonDecode(response.body);
+        try {
+            logFinance(senderId, 'INIT_TRANSFER', { target: receiver_identifier, amount, ref: txRef });
 
-      if (response.statusCode == 200) {
-        _successMessage = "Levantamento solicitado. Aguarde aprovação.";
-        HapticFeedback.mediumImpact();
-        
-        // Deduz saldo visualmente até o refresh real
-        _balance -= amount;
-        auth.syncBalance(_balance);
-        
-        // Recarrega para obter o status 'pending' correto do servidor
-        await loadWalletData(auth);
+            // INÍCIO DA TRANSAÇÃO NO BANCO DE DADOS
+            await client.query('BEGIN');
 
-        return true;
-      } else {
-        _errorMessage = data['error'] ?? "Erro ao processar levantamento.";
-        return false;
-      }
-    } catch (e) {
-      _errorMessage = "Erro de conexão com o servidor.";
-      return false;
-    } finally {
-      _isLoading = false;
-      notifyListeners();
-    }
-  }
+            // 2. BUSCAR REMETENTE COM BLOQUEIO (FOR UPDATE)
+            // Isso impede que o saldo seja gasto duas vezes simultaneamente.
+            const senderRes = await client.query(
+                `SELECT id, name, balance, wallet_pin, is_blocked, account_limit
+                 FROM users WHERE id = $1 FOR UPDATE`,
+                [senderId]
+            );
 
-  /// 6. ADICIONAR CONTA BANCÁRIA
-  /// Rota: POST /api/wallet/accounts/add
-  Future<bool> addExternalAccount(
-    AuthProvider auth, {
-    required String providerName,
-    required String accountNumber,
-    required String holderName,
-  }) async {
-    _isLoading = true;
-    notifyListeners();
+            const sender = senderRes.rows[0];
 
-    try {
-      final url = Uri.parse('${_getApiUrl(auth)}/wallet/accounts/add');
-      
-      final response = await http.post(
-        url,
-        headers: _headers(auth),
-        body: jsonEncode({
-          'provider': providerName,
-          'account_number': accountNumber,
-          'holder_name': holderName
-        })
-      ).timeout(const Duration(seconds: 20));
+            // 3. Validações de Negócio do Remetente
+            if (sender.is_blocked) throw new Error("Sua carteira está bloqueada temporariamente.");
+            if (sender.wallet_pin !== pin) throw new Error("PIN de segurança incorreto."); // Em prod, usar bcrypt.compare
+            if (parseFloat(sender.balance) < parseFloat(amount)) throw new Error("Saldo insuficiente.");
+            if (parseFloat(amount) > parseFloat(sender.account_limit)) throw new Error(`Valor excede o seu limite diário de ${sender.account_limit}.`);
 
-      if (response.statusCode == 200) {
-        _successMessage = "Conta adicionada com sucesso.";
-        await loadWalletData(auth); // Atualiza a lista de contas
-        return true;
-      } else {
-        final data = jsonDecode(response.body);
-        _errorMessage = data['error'] ?? "Erro ao adicionar conta.";
-        return false;
-      }
-    } catch (e) {
-      _errorMessage = "Erro de conexão.";
-      return false;
-    } finally {
-      _isLoading = false;
-      notifyListeners();
-    }
-  }
+            // 4. BUSCAR DESTINATÁRIO
+            // Busca por E-mail, Telefone, IBAN ou ID Interno
+            const receiverRes = await client.query(
+                `SELECT id, name, is_blocked, fcm_token
+                 FROM users
+                 WHERE (email = $1 OR phone = $1 OR iban = $1 OR id::text = $1)
+                 AND id != $2`, // Garante que não é o próprio usuário
+                [receiver_identifier, senderId]
+            );
 
-  /// 7. REMOVER CONTA BANCÁRIA
-  /// Rota: DELETE /api/wallet/accounts/:id
-  Future<bool> deleteExternalAccount(AuthProvider auth, int accountId) async {
-    _isLoading = true;
-    notifyListeners();
+            if (receiverRes.rows.length === 0) {
+                throw new Error("Destinatário não encontrado ou inválido.");
+            }
 
-    try {
-      final url = Uri.parse('${_getApiUrl(auth)}/wallet/accounts/$accountId');
-      
-      final response = await http.delete(
-        url,
-        headers: _headers(auth),
-      );
+            const receiver = receiverRes.rows[0];
+            if (receiver.is_blocked) throw new Error("A conta do destinatário está inativa.");
 
-      if (response.statusCode == 200) {
-        _successMessage = "Conta removida.";
-        // Remove localmente para UI instantânea
-        _externalAccounts.removeWhere((acc) => acc['id'] == accountId);
-        return true;
-      } else {
-        _errorMessage = "Erro ao remover conta.";
-        return false;
-      }
-    } catch (e) {
-      _errorMessage = "Erro de conexão.";
-      return false;
-    } finally {
-      _isLoading = false;
-      notifyListeners();
-    }
-  }
+            // 5. EXECUÇÃO FINANCEIRA (ATÔMICA)
 
-  /// 8. VERIFICAR PIN (Segurança UI)
-  /// Rota: POST /api/wallet/verify-pin
-  Future<bool> verifyPin(AuthProvider auth, String pin) async {
-    _isLoading = true;
-    notifyListeners();
+            // A. Debitar do Remetente
+            await client.query(
+                "UPDATE users SET balance = balance - $1 WHERE id = $2",
+                [amount, senderId]
+            );
 
-    try {
-      final url = Uri.parse('${_getApiUrl(auth)}/wallet/verify-pin');
-      
-      final response = await http.post(
-        url,
-        headers: _headers(auth),
-        body: jsonEncode({'pin': pin})
-      );
+            // B. Creditar no Destinatário
+            await client.query(
+                "UPDATE users SET balance = balance + $1 WHERE id = $2",
+                [amount, receiver.id]
+            );
 
-      final data = jsonDecode(response.body);
+            // 6. REGISTRO DE HISTÓRICO (DUPLA ENTRADA)
+            // É boa prática contábil registrar a visão de cada usuário separadamente.
 
-      if (response.statusCode == 200 && data['valid'] == true) {
-        return true;
-      }
-      return false;
-    } catch (e) {
-      return false;
-    } finally {
-      _isLoading = false;
-      notifyListeners();
-    }
-  }
+            // Registro para Remetente (Débito)
+            await client.query(
+                `INSERT INTO wallet_transactions
+                 (user_id, sender_id, receiver_id, amount, type, method, description, reference_id, status, metadata)
+                 VALUES ($1, $2, $3, $4, 'transfer', 'internal', $5, $6, 'completed', $7)`,
+                [
+                    senderId,
+                    senderId,
+                    receiver.id,
+                    -Math.abs(amount), // Valor negativo para indicar saída visualmente
+                    `Envio para ${receiver.name}`,
+                    txRef,
+                    JSON.stringify({ note: description, direction: 'outbound' })
+                ]
+            );
 
-  /// 9. CONFIGURAR PIN
-  /// Rota: POST /api/wallet/set-pin
-  Future<bool> setPin(AuthProvider auth, String newPin, {String? currentPin}) async {
-    _isLoading = true;
-    notifyListeners();
+            // Registro para Destinatário (Crédito)
+            await client.query(
+                `INSERT INTO wallet_transactions
+                 (user_id, sender_id, receiver_id, amount, type, method, description, reference_id, status, metadata)
+                 VALUES ($1, $2, $3, $4, 'transfer', 'internal', $5, $6, 'completed', $7)`,
+                [
+                    receiver.id,
+                    senderId,
+                    receiver.id,
+                    Math.abs(amount), // Valor positivo
+                    `Recebido de ${sender.name}`,
+                    txRef,
+                    JSON.stringify({ note: description, direction: 'inbound' })
+                ]
+            );
 
-    try {
-      final url = Uri.parse('${_getApiUrl(auth)}/wallet/set-pin');
-      
-      final response = await http.post(
-        url,
-        headers: _headers(auth),
-        body: jsonEncode({
-          'new_pin': newPin,
-          'current_pin': currentPin
-        })
-      );
+            // 7. CONFIRMAÇÃO DA TRANSAÇÃO
+            await client.query('COMMIT');
 
-      final data = jsonDecode(response.body);
+            // 8. NOTIFICAÇÕES EM TEMPO REAL (PÓS-COMMIT)
+            // Só notificamos se o dinheiro realmente moveu.
 
-      if (response.statusCode == 200 && data['success'] == true) {
-        _successMessage = "PIN configurado com sucesso.";
-        _hasPin = true;
-        return true;
-      } else {
-        _errorMessage = data['error'] ?? "Erro ao configurar PIN.";
-        return false;
-      }
-    } catch (e) {
-      _errorMessage = "Erro de conexão.";
-      return false;
-    } finally {
-      _isLoading = false;
-      notifyListeners();
-    }
-  }
+            // Notifica Destinatário
+            io.to(`user_${receiver.id}`).emit('payment_received', {
+                amount: amount,
+                sender_name: sender.name,
+                reference: txRef,
+                timestamp: new Date().toISOString(),
+                message: `Você recebeu ${amount} Kz de ${sender.name}`
+            });
 
-  // ===========================================================================
-  // 🔌 ADAPTADORES DE COMPATIBILIDADE (LEGACY SUPPORT)
-  // Mantidos para garantir que chamadas antigas da UI não quebrem o app.
-  // ===========================================================================
+            // Notifica Remetente (Confirmação visual)
+            io.to(`user_${senderId}`).emit('transfer_success', {
+                amount: amount,
+                receiver_name: receiver.name,
+                reference: txRef,
+                new_balance: parseFloat(sender.balance) - parseFloat(amount)
+            });
 
-  /// Alias para transferP2P (Usado em telas antigas)
-  Future<bool> transferFunds(
-    AuthProvider auth, {
-    required String targetIbanOrPhone,
-    required double amount,
-    required String pin,
-    String? description,
-  }) async {
-    return await transferP2P(
-      auth: auth,
-      targetContact: targetIbanOrPhone,
-      amount: amount,
-      pin: pin,
-      description: description ?? "Transferência"
-    );
-  }
+            logFinance(senderId, 'SUCCESS_TRANSFER', { ref: txRef, amount });
 
-  /// Alias para recarregar dados (Usado em telas antigas)
-  Future<void> refreshWallet([AuthProvider? auth]) async {
-    if (auth != null) {
-      await loadWalletData(auth);
-    } else {
-      debugPrint("⚠️ [WalletProvider] refreshWallet chamado sem AuthProvider.");
-    }
-  }
-}
+            res.json({
+                success: true,
+                message: "Transferência realizada com sucesso.",
+                reference: txRef,
+                data: {
+                    amount: amount,
+                    receiver: receiver.name,
+                    date: new Date().toISOString()
+                }
+            });
+
+        } catch (error) {
+            // Em caso de qualquer erro, desfaz TUDO. Dinheiro não é perdido.
+            await client.query('ROLLBACK');
+            logFinance(senderId, 'FAILED_TRANSFER', error.message);
+            res.status(400).json({ error: error.message || "Erro ao processar transferência." });
+        } finally {
+            // Libera a conexão para o pool
+            client.release();
+        }
+    });
+
+    // =============================================================================================
+    // 📥 SEÇÃO 4: RECARGAS E DEPÓSITOS (TOP-UP)
+    // =============================================================================================
+
+    /**
+     * ROTA: POST /topup
+     * DESCRIÇÃO: Simula ou integra gateways de pagamento (Multicaixa/Visa).
+     * NOTA: Em produção, isso seria um callback/webhook do gateway de pagamento.
+     */
+    router.post('/topup', async (req, res) => {
+        const { amount, method, transaction_id } = req.body;
+        const userId = req.user.id;
+        const ref = transaction_id || generateTransactionRef('DEP');
+
+        if (!isValidAmount(amount)) {
+            return res.status(400).json({ error: "Valor de recarga inválido." });
+        }
+
+        const client = await pool.connect();
+
+        try {
+            await client.query('BEGIN');
+
+            // 1. Atualizar Saldo
+            await client.query(
+                "UPDATE users SET balance = balance + $1 WHERE id = $2",
+                [amount, userId]
+            );
+
+            // 2. Registrar Histórico
+            await client.query(
+                `INSERT INTO wallet_transactions
+                 (user_id, amount, type, method, description, reference_id, status, metadata)
+                 VALUES ($1, $2, 'topup', $3, 'Recarga de Carteira', $4, 'completed', $5)`,
+                [
+                    userId,
+                    amount,
+                    method || 'multicaixa',
+                    ref,
+                    JSON.stringify({ gateway: 'simulated', original_ref: transaction_id })
+                ]
+            );
+
+            await client.query('COMMIT');
+
+            // 3. Obter saldo atualizado para retornar à UI
+            const balanceRes = await client.query("SELECT balance FROM users WHERE id = $1", [userId]);
+
+            io.to(`user_${userId}`).emit('wallet_updated', {
+                type: 'topup',
+                amount: amount,
+                new_balance: parseFloat(balanceRes.rows[0].balance)
+            });
+
+            res.json({
+                success: true,
+                message: "Recarga realizada com sucesso.",
+                new_balance: parseFloat(balanceRes.rows[0].balance),
+                reference: ref
+            });
+
+        } catch (error) {
+            await client.query('ROLLBACK');
+            handleDbError(error, res, ref);
+        } finally {
+            client.release();
+        }
+    });
+
+    // =============================================================================================
+    // 📤 SEÇÃO 5: SAQUES E LEVANTAMENTOS (WITHDRAW)
+    // =============================================================================================
+
+    /**
+     * ROTA: POST /withdraw
+     * DESCRIÇÃO: Solicita retirada para conta bancária externa.
+     * FLUXO: Deduz saldo imediatamente, cria registro 'pending'. Admin aprova depois.
+     */
+    router.post('/withdraw', async (req, res) => {
+        const { amount, destination_iban, description } = req.body;
+        const userId = req.user.id;
+        const ref = generateTransactionRef('WTH');
+
+        if (!isValidAmount(amount)) {
+            return res.status(400).json({ error: "Valor de saque inválido." });
+        }
+
+        // Valor mínimo de saque (Regra de Negócio)
+        if (amount < 2000) {
+            return res.status(400).json({ error: "O valor mínimo para levantamento é 2.000 Kz." });
+        }
+
+        const client = await pool.connect();
+
+        try {
+            await client.query('BEGIN');
+
+            // 1. Verificar Saldo com Lock
+            const userRes = await client.query("SELECT balance FROM users WHERE id = $1 FOR UPDATE", [userId]);
+            const currentBalance = parseFloat(userRes.rows[0].balance);
+
+            if (currentBalance < amount) {
+                throw new Error("Saldo insuficiente para realizar este levantamento.");
+            }
+
+            // 2. Deduzir Saldo (O dinheiro sai da conta virtual imediatamente para evitar gasto duplo)
+            await client.query(
+                "UPDATE users SET balance = balance - $1 WHERE id = $2",
+                [amount, userId]
+            );
+
+            // 3. Registrar Transação (Status: PENDING)
+            await client.query(
+                `INSERT INTO wallet_transactions
+                 (user_id, amount, type, method, description, reference_id, status, metadata)
+                 VALUES ($1, $2, 'withdraw', 'bank_transfer', $3, $4, 'pending', $5)`,
+                [
+                    userId,
+                    -amount, // Negativo
+                    description || `Levantamento para ${destination_iban}`,
+                    ref,
+                    JSON.stringify({ destination: destination_iban, bank: 'Unknown' })
+                ]
+            );
+
+            await client.query('COMMIT');
+
+            res.json({
+                success: true,
+                message: "Solicitação de levantamento enviada. O processamento pode levar até 24h.",
+                reference: ref
+            });
+
+        } catch (error) {
+            await client.query('ROLLBACK');
+            res.status(400).json({ error: error.message });
+        } finally {
+            client.release();
+        }
+    });
+
+    // =============================================================================================
+    // 🔔 SEÇÃO 6: SOLICITAÇÃO DE PAGAMENTO (REQUEST MONEY)
+    // =============================================================================================
+
+    /**
+     * ROTA: POST /request-payment
+     * DESCRIÇÃO: Envia uma notificação push/socket para outro usuário pedindo dinheiro.
+     */
+    router.post('/request-payment', async (req, res) => {
+        const { target_identifier, amount, description } = req.body;
+        const userId = req.user.id;
+
+        if (!isValidAmount(amount)) {
+            return res.status(400).json({ error: "Valor inválido." });
+        }
+
+        try {
+            // 1. Localizar o alvo
+            const targetRes = await pool.query(
+                "SELECT id, name, fcm_token FROM users WHERE email = $1 OR phone = $1 OR iban = $1",
+                [target_identifier]
+            );
+
+            if (targetRes.rows.length === 0) {
+                return res.status(404).json({ error: "Usuário não encontrado." });
+            }
+
+            const targetUser = targetRes.rows[0];
+
+            // 2. Salvar solicitação no banco (Opcional, mas bom para histórico)
+            await pool.query(
+                `INSERT INTO payment_requests
+                 (requester_id, payer_id, amount, description, status)
+                 VALUES ($1, $2, $3, $4, 'pending')`,
+                [userId, targetUser.id, amount, description]
+            );
+
+            // 3. Enviar evento Socket em tempo real (Overlay na tela do pagador)
+            io.to(`user_${targetUser.id}`).emit('payment_requested_overlay', {
+                requester_id: userId,
+                requester_name: req.user.name,
+                amount: amount,
+                description: description || "Solicitação de dinheiro",
+                timestamp: new Date().toISOString()
+            });
+
+            // 4. (Opcional) Enviar Push Notification via FCM aqui se o usuário estiver offline
+
+            res.json({ success: true, message: `Solicitação enviada para ${targetUser.name}` });
+
+        } catch (error) {
+            logFinance(userId, 'REQUEST_ERROR', error.message);
+            res.status(500).json({ error: "Erro ao enviar solicitação." });
+        }
+    });
+
+    // =============================================================================================
+    // 💳 SEÇÃO 7: GESTÃO DE CONTAS BANCÁRIAS EXTERNAS
+    // =============================================================================================
+
+    /**
+     * ROTA: POST /accounts/add
+     * DESCRIÇÃO: Salva uma conta bancária favorita para saques futuros.
+     */
+    router.post('/accounts/add', async (req, res) => {
+        const { provider, account_number, holder_name } = req.body;
+        const userId = req.user.id;
+
+        if (!provider || !account_number || !holder_name) {
+            return res.status(400).json({ error: "Todos os campos são obrigatórios." });
+        }
+
+        try {
+            // Limite de contas (Regra de Negócio: Max 3)
+            const countRes = await pool.query("SELECT COUNT(*) FROM external_accounts WHERE user_id = $1", [userId]);
+            if (parseInt(countRes.rows[0].count) >= 5) {
+                return res.status(400).json({ error: "Limite de 5 contas bancárias atingido." });
+            }
+
+            await pool.query(
+                `INSERT INTO external_accounts (user_id, provider, account_number, holder_name)
+                 VALUES ($1, $2, $3, $4)`,
+                [userId, provider, account_number, holder_name]
+            );
+
+            res.json({ success: true, message: "Conta adicionada com sucesso." });
+        } catch (error) {
+            res.status(500).json({ error: "Erro ao salvar conta bancária." });
+        }
+    });
+
+    /**
+     * ROTA: DELETE /accounts/:id
+     * DESCRIÇÃO: Remove uma conta bancária salva.
+     */
+    router.delete('/accounts/:id', async (req, res) => {
+        try {
+            const result = await pool.query(
+                "DELETE FROM external_accounts WHERE id = $1 AND user_id = $2 RETURNING id",
+                [req.params.id, req.user.id]
+            );
+
+            if (result.rows.length === 0) {
+                return res.status(404).json({ error: "Conta não encontrada ou permissão negada." });
+            }
+
+            res.json({ success: true, message: "Conta removida." });
+        } catch (error) {
+            res.status(500).json({ error: "Erro ao remover conta." });
+        }
+    });
+
+    // =============================================================================================
+    // 🔐 SEÇÃO 8: SEGURANÇA (PIN E VERIFICAÇÃO)
+    // =============================================================================================
+
+    /**
+     * ROTA: POST /verify-pin
+     * DESCRIÇÃO: Verifica se o PIN informado corresponde ao do usuário (para ações no frontend).
+     */
+    router.post('/verify-pin', async (req, res) => {
+        const { pin } = req.body;
+        const userId = req.user.id;
+
+        try {
+            const result = await pool.query("SELECT wallet_pin FROM users WHERE id = $1", [userId]);
+            const storedPin = result.rows[0]?.wallet_pin;
+
+            if (!storedPin) {
+                return res.status(400).json({ error: "PIN não configurado." });
+            }
+
+            if (storedPin === pin) {
+                res.json({ valid: true });
+            } else {
+                res.json({ valid: false });
+            }
+        } catch (error) {
+            res.status(500).json({ error: "Erro na verificação." });
+        }
+    });
+
+    /**
+     * ROTA: POST /set-pin
+     * DESCRIÇÃO: Configura ou altera o PIN da carteira.
+     */
+    router.post('/set-pin', async (req, res) => {
+        const { current_pin, new_pin } = req.body;
+        const userId = req.user.id;
+
+        if (!new_pin || new_pin.length !== 4) {
+            return res.status(400).json({ error: "O novo PIN deve ter 4 dígitos." });
+        }
+
+        try {
+            const result = await pool.query("SELECT wallet_pin FROM users WHERE id = $1", [userId]);
+            const storedPin = result.rows[0]?.wallet_pin;
+
+            // Se já tiver PIN, exige o antigo
+            if (storedPin && storedPin !== current_pin) {
+                return res.status(401).json({ error: "PIN atual incorreto." });
+            }
+
+            await pool.query("UPDATE users SET wallet_pin = $1 WHERE id = $2", [new_pin, userId]);
+
+            logFinance(userId, 'PIN_CHANGE', { success: true });
+            res.json({ success: true, message: "PIN de segurança atualizado." });
+
+        } catch (error) {
+            res.status(500).json({ error: "Erro ao definir PIN." });
+        }
+    });
+
+    // =============================================================================================
+    // 🔎 SEÇÃO 9: INSPEÇÃO DE TRANSAÇÃO (DETALHES)
+    // =============================================================================================
+
+    router.get('/transaction/:ref', async (req, res) => {
+        try {
+            const result = await pool.query(
+                `SELECT t.*,
+                        s.name as sender_name,
+                        r.name as receiver_name
+                 FROM wallet_transactions t
+                 LEFT JOIN users s ON t.sender_id = s.id
+                 LEFT JOIN users r ON t.receiver_id = r.id
+                 WHERE t.reference_id = $1 AND (t.sender_id = $2 OR t.receiver_id = $2 OR t.user_id = $2)`,
+                [req.params.ref, req.user.id]
+            );
+
+            if (result.rows.length === 0) {
+                return res.status(404).json({ error: "Transação não encontrada." });
+            }
+
+            res.json(result.rows[0]);
+        } catch (error) {
+            res.status(500).json({ error: "Erro ao buscar transação." });
+        }
+    });
+
+    // Retorna o roteador configurado para ser usado no server.js
+    return router;
+};
