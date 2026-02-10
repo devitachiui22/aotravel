@@ -1,14 +1,13 @@
 /**
- * =================================================================================================
- * 🚀 AOTRAVEL SERVER - CORE ENGINE v6.0 (MODULARIZADO)
- * =================================================================================================
- *
- * ARQUIVO: backend/server.js
- * DESCRIÇÃO: Backend Monolítico Modularizado - Core de Transporte e Gerenciamento
- * STATUS: PRODUCTION READY - WALLET MODULE INTEGRATED
- * DATA: 10 de Fevereiro de 2026
- * =================================================================================================
- */
+=================================================================================================
+🚀 AOTRAVEL SERVER - CORE ENGINE v6.0 (MODULARIZADO)
+=================================================================================================
+ARQUIVO: backend/server.js
+DESCRIÇÃO: Backend Monolítico Modularizado - Core de Transporte e Gerenciamento
+STATUS: PRODUCTION READY - FINANCIAL LOGIC EXTRACTED TO WALLET.JS
+DATA: 10 de Fevereiro de 2026
+=================================================================================================
+*/
 
 require('dotenv').config();
 const express = require('express');
@@ -27,9 +26,6 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-
-// Importação do Módulo Financeiro Externo (Wallet)
-const walletRoutes = require('./wallet');
 
 // Constantes de Ambiente
 const PORT = process.env.PORT || 3000;
@@ -133,7 +129,6 @@ pool.on('error', (err, client) => {
 
 /**
  * BOOTSTRAP DATABASE - Criação de tabelas essenciais
- * Nota: A tabela 'wallet_transactions' é gerenciada pelo módulo wallet.js (Auto-Healing).
  */
 const bootstrapDatabase = async () => {
     const client = await pool.connect();
@@ -146,8 +141,6 @@ const bootstrapDatabase = async () => {
         await client.query('CREATE EXTENSION IF NOT EXISTS "pgcrypto";');
 
         // 2. TABELA USERS (Central de Identidade)
-        // Mantemos colunas financeiras básicas aqui para integridade do login/perfil,
-        // mesmo que o wallet.js faça patching.
         await client.query(`
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
@@ -267,6 +260,7 @@ const bootstrapDatabase = async () => {
 
         await client.query('COMMIT');
         Logger.info('DB_INIT', '✅ Banco de Dados inicializado com sucesso.');
+
     } catch (e) {
         await client.query('ROLLBACK');
         Logger.error('DB_INIT', '❌ Falha crítica na inicialização do banco', e);
@@ -497,6 +491,7 @@ authRouter.get('/profile', authenticateToken, async (req, res) => {
         if (result.rows.length === 0) return res.sendStatus(404);
 
         res.json(result.rows[0]);
+
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
@@ -546,9 +541,7 @@ ridesRouter.post('/request', authenticateToken, async (req, res) => {
 
     try {
         const result = await pool.query(
-            `INSERT INTO rides (passenger_id, origin_lat, origin_lng, dest_lat, dest_lng, origin_address, dest_address, estimated_price, distance_km, status)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'searching')
-             RETURNING *`,
+            `INSERT INTO rides (passenger_id, origin_lat, origin_lng, dest_lat, dest_lng, origin_address, dest_address, estimated_price, distance_km, status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'searching') RETURNING *`,
             [passengerId, origin_lat, origin_lng, dest_lat, dest_lng, origin_addr, dest_addr, price_offer, distance_km]
         );
 
@@ -608,7 +601,6 @@ ridesRouter.post('/accept', authenticateToken, requireDriver, async (req, res) =
 
 /**
  * POST /api/rides/update-status
- * Inclui lógica de pagamento do motorista ao completar a corrida.
  */
 ridesRouter.post('/update-status', authenticateToken, async (req, res) => {
     const { ride_id, status, cancel_reason } = req.body;
@@ -630,32 +622,7 @@ ridesRouter.post('/update-status', authenticateToken, async (req, res) => {
         let paramIndex = 2;
 
         if (status === 'started') query += `, started_at = NOW()`;
-        
-        // Lógica de Conclusão e Pagamento
-        if (status === 'completed') {
-            query += `, completed_at = NOW()`;
-            
-            // PRESERVAÇÃO DA LÓGICA DE PAGAMENTO DO MOTORISTA (SQL DIRETO)
-            // Conforme solicitado, mantemos a lógica de pagamento aqui.
-            // O módulo wallet.js carrega a tabela wallet_transactions via auto-healing.
-            const ridePrice = ride.final_price || ride.estimated_price;
-            const driverId = ride.driver_id;
-            
-            if (driverId && ridePrice) {
-                // 1. Atualizar Saldo do Motorista
-                await pool.query("UPDATE users SET balance = balance + $1 WHERE id = $2", [ridePrice, driverId]);
-                
-                // 2. Registrar Transação na Carteira (SQL Direto para garantir a integridade da corrida)
-                const txRef = `RIDE-EARN-${ride_id}-${Date.now()}`;
-                await pool.query(
-                    `INSERT INTO wallet_transactions 
-                    (reference_id, user_id, amount, type, status, description, created_at)
-                    VALUES ($1, $2, $3, 'ride_earning', 'completed', $4, NOW())`,
-                    [txRef, driverId, ridePrice, `Ganhos da Corrida #${ride_id}`]
-                );
-            }
-        }
-        
+        if (status === 'completed') query += `, completed_at = NOW()`;
         if (status === 'cancelled') {
             query += `, cancel_reason = $${paramIndex}`;
             params.push(cancel_reason);
@@ -680,6 +647,169 @@ ridesRouter.post('/update-status', authenticateToken, async (req, res) => {
     }
 });
 
+/**
+ * POST /api/rides/complete - Completa uma corrida e processa o pagamento
+ * MANTIDO no server.js porque contém lógica específica de corridas
+ */
+ridesRouter.post('/complete', authenticateToken, requireDriver, async (req, res) => {
+    const { ride_id, final_price } = req.body;
+    const driverId = req.user.id;
+
+    if (!ride_id || !final_price) {
+        return res.status(400).json({ error: "ID da corrida e preço final são obrigatórios." });
+    }
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        // Lock da corrida para evitar condições de corrida
+        const rideRes = await client.query(
+            "SELECT * FROM rides WHERE id = $1 AND driver_id = $2 AND status = 'started' FOR UPDATE",
+            [ride_id, driverId]
+        );
+
+        if (rideRes.rows.length === 0) {
+            throw new Error("Corrida não encontrada ou não está em andamento.");
+        }
+
+        const ride = rideRes.rows[0];
+        const passengerId = ride.passenger_id;
+        const amount = parseFloat(final_price);
+
+        // 1. Atualizar status da corrida
+        await client.query(
+            "UPDATE rides SET status = 'completed', completed_at = NOW(), final_price = $1 WHERE id = $2",
+            [amount, ride_id]
+        );
+
+        // 2. Buscar saldo do passageiro (com lock para garantir consistência)
+        const passengerRes = await client.query(
+            "SELECT id, balance, name FROM users WHERE id = $1 FOR UPDATE",
+            [passengerId]
+        );
+
+        if (passengerRes.rows.length === 0) {
+            throw new Error("Passageiro não encontrado.");
+        }
+
+        const passenger = passengerRes.rows[0];
+        const passengerBalance = parseFloat(passenger.balance || 0);
+
+        // 3. Verificar se passageiro tem saldo suficiente
+        if (passengerBalance < amount) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+                error: "Saldo insuficiente do passageiro para pagar a corrida.",
+                required: amount,
+                available: passengerBalance
+            });
+        }
+
+        // 4. Buscar motorista (também com lock)
+        const driverRes = await client.query(
+            "SELECT id, balance, name FROM users WHERE id = $1 FOR UPDATE",
+            [driverId]
+        );
+        const driver = driverRes.rows[0];
+
+        // 5. Processar transações financeiras
+        const newPassengerBalance = passengerBalance - amount;
+        const newDriverBalance = parseFloat(driver.balance || 0) + amount;
+
+        // Atualizar saldo do passageiro (débito)
+        await client.query(
+            "UPDATE users SET balance = $1 WHERE id = $2",
+            [newPassengerBalance, passengerId]
+        );
+
+        // Atualizar saldo do motorista (crédito)
+        await client.query(
+            "UPDATE users SET balance = $1 WHERE id = $2",
+            [newDriverBalance, driverId]
+        );
+
+        // 6. Registrar transações na tabela wallet_transactions (agora gerenciada pelo wallet.js)
+        const transactionRef = `RIDE-${ride_id}-${Date.now()}`;
+
+        // Transação do passageiro (pagamento)
+        await client.query(
+            `INSERT INTO wallet_transactions
+             (reference_id, user_id, sender_id, receiver_id, amount, type, method, status, description, balance_after)
+             VALUES ($1, $2, $3, $4, $5, 'ride_payment', 'internal', 'completed', $6, $7)`,
+            [
+                transactionRef,
+                passengerId,
+                passengerId,
+                driverId,
+                -amount,
+                `Pagamento de corrida para ${driver.name}`,
+                newPassengerBalance
+            ]
+        );
+
+        // Transação do motorista (recebimento)
+        await client.query(
+            `INSERT INTO wallet_transactions
+             (reference_id, user_id, sender_id, receiver_id, amount, type, method, status, description, balance_after)
+             VALUES ($1, $2, $3, $4, $5, 'ride_earnings', 'internal', 'completed', $6, $7)`,
+            [
+                transactionRef,
+                driverId,
+                passengerId,
+                driverId,
+                amount,
+                `Recebimento de corrida de ${passenger.name}`,
+                newDriverBalance
+            ]
+        );
+
+        await client.query('COMMIT');
+
+        // 7. Notificações em tempo real
+        io.to(`user_${passengerId}`).emit('ride_completed', {
+            ride_id,
+            amount_paid: amount,
+            new_balance: newPassengerBalance
+        });
+
+        io.to(`user_${driverId}`).emit('ride_payment_received', {
+            ride_id,
+            amount_received: amount,
+            new_balance: newDriverBalance
+        });
+
+        // Atualizar rating do motorista (simples - incrementar)
+        await client.query(
+            "UPDATE users SET rating = COALESCE(rating, 5.00) + 0.1 WHERE id = $1",
+            [driverId]
+        );
+
+        Logger.audit(driverId, 'RIDE_COMPLETED', {
+            ride_id,
+            amount,
+            passenger_id: passengerId,
+            driver_id: driverId
+        });
+
+        res.json({
+            success: true,
+            message: "Corrida completada e pagamento processado.",
+            ride_id,
+            amount,
+            passenger_new_balance: newPassengerBalance,
+            driver_new_balance: newDriverBalance
+        });
+
+    } catch (error) {
+        await client.query('ROLLBACK');
+        Logger.error('RIDE_COMPLETE', error.message);
+        res.status(500).json({ error: error.message });
+    } finally {
+        client.release();
+    }
+});
+
 // =================================================================================================
 // 8. ROTAS ADMINISTRATIVAS (BACKOFFICE) - CONSOLIDADAS
 // =================================================================================================
@@ -691,20 +821,10 @@ const adminRouter = express.Router();
  */
 adminRouter.get('/stats', authenticateToken, requireAdmin, async (req, res) => {
     try {
-        const stats = await pool.query(`
-            SELECT
-                (SELECT COUNT(*) FROM users) as total_users,
-                (SELECT COUNT(*) FROM users WHERE role='driver') as total_drivers,
-                (SELECT COUNT(*) FROM users WHERE role='passenger') as total_passengers,
-                (SELECT COUNT(*) FROM rides) as total_rides,
-                (SELECT COUNT(*) FROM users WHERE role='driver' AND is_online=true) as active_drivers,
-                (SELECT COUNT(*) FROM rides WHERE status='completed') as completed_rides,
-                (SELECT COUNT(*) FROM rides WHERE status='searching') as searching_rides,
-                (SELECT COUNT(*) FROM user_documents WHERE status='pending') as pending_docs,
-                (SELECT COALESCE(SUM(balance), 0) FROM users) as total_balances
-        `);
+        const stats = await pool.query(`SELECT (SELECT COUNT(*) FROM users) as total_users, (SELECT COUNT(*) FROM users WHERE role='driver') as total_drivers, (SELECT COUNT(*) FROM users WHERE role='passenger') as total_passengers, (SELECT COUNT(*) FROM rides) as total_rides, (SELECT COUNT(*) FROM users WHERE role='driver' AND is_online=true) as active_drivers, (SELECT COUNT(*) FROM rides WHERE status='completed') as completed_rides, (SELECT COUNT(*) FROM rides WHERE status='searching') as searching_rides, (SELECT COUNT(*) FROM user_documents WHERE status='pending') as pending_docs, (SELECT COALESCE(SUM(balance), 0) FROM users) as total_balances`);
 
         res.json(stats.rows[0]);
+
     } catch (e) {
         Logger.error('ADMIN_STATS', e);
         res.status(500).json({ error: "Erro ao buscar estatísticas." });
@@ -718,13 +838,7 @@ adminRouter.get('/users', authenticateToken, requireAdmin, async (req, res) => {
     const { role, is_online, is_blocked, search, limit = 50, offset = 0 } = req.query;
 
     try {
-        let query = `
-            SELECT id, name, email, phone, role, photo_url,
-                   balance, is_online, rating, is_blocked,
-                   is_verified, created_at
-            FROM users
-            WHERE 1=1
-        `;
+        let query = `SELECT id, name, email, phone, role, photo_url, balance, is_online, rating, is_blocked, is_verified, created_at FROM users WHERE 1=1`;
 
         const params = [];
         let paramCount = 1;
@@ -772,6 +886,7 @@ adminRouter.get('/users', authenticateToken, requireAdmin, async (req, res) => {
             limit: parseInt(limit),
             offset: parseInt(offset)
         });
+
     } catch (e) {
         Logger.error('ADMIN_USERS', e);
         res.status(500).json({ error: "Erro ao listar usuários." });
@@ -817,6 +932,7 @@ adminRouter.post('/verify-user', authenticateToken, requireAdmin, async (req, re
             success: true,
             message: `Usuário ${action === 'block' ? 'bloqueado' : action === 'unblock' ? 'desbloqueado' : action === 'approve' ? 'verificado' : 'rejeitado'} com sucesso.`
         });
+
     } catch (e) {
         Logger.error('ADMIN_VERIFY', e);
         res.status(500).json({ error: "Erro ao processar ação administrativa." });
@@ -830,17 +946,7 @@ adminRouter.get('/rides', authenticateToken, requireAdmin, async (req, res) => {
     const { status, date_from, date_to, limit = 50, offset = 0 } = req.query;
 
     try {
-        let query = `
-            SELECT r.*,
-                   p.name as passenger_name,
-                   d.name as driver_name,
-                   p.phone as passenger_phone,
-                   d.phone as driver_phone
-            FROM rides r
-            LEFT JOIN users p ON r.passenger_id = p.id
-            LEFT JOIN users d ON r.driver_id = d.id
-            WHERE 1=1
-        `;
+        let query = `SELECT r.*, p.name as passenger_name, d.name as driver_name, p.phone as passenger_phone, d.phone as driver_phone FROM rides r LEFT JOIN users p ON r.passenger_id = p.id LEFT JOIN users d ON r.driver_id = d.id WHERE 1=1`;
 
         const params = [];
         let paramCount = 1;
@@ -880,6 +986,7 @@ adminRouter.get('/rides', authenticateToken, requireAdmin, async (req, res) => {
             limit: parseInt(limit),
             offset: parseInt(offset)
         });
+
     } catch (e) {
         Logger.error('ADMIN_RIDES', e);
         res.status(500).json({ error: "Erro ao listar corridas." });
@@ -895,9 +1002,9 @@ app.use('/api/auth', authRouter);
 app.use('/api/rides', ridesRouter);
 app.use('/api/admin', adminRouter);
 
-// Módulo Financeiro (Wallet) - Integração com Módulo Externo
-// Inicializa o roteador da carteira passando a conexão do banco (pool) e socket.io
-app.use('/api/wallet', authenticateToken, walletRoutes(pool, io));
+// Módulo Financeiro (Wallet) - IMPORTADO EXTERNAMENTE
+const walletRouter = require('./wallet')(pool, io);
+app.use('/api/wallet', authenticateToken, walletRouter);
 
 // =================================================================================================
 // 10. MOTOR REAL-TIME (SOCKET.IO)
@@ -981,12 +1088,12 @@ app.get('/', (req, res) => res.status(200).json({
     environment: NODE_ENV,
     database: "Connected",
     socket_io: "Active",
-    wallet: "External Module Loaded",
+    wallet: "External Module",
     endpoints: {
-        auth: "/api/auth/*",
-        rides: "/api/rides/*",
-        admin: "/api/admin/*",
-        wallet: "/api/wallet/*"
+        auth: "/api/auth/",
+        rides: "/api/rides/",
+        admin: "/api/admin/",
+        wallet: "/api/wallet/"
     }
 }));
 
@@ -1022,7 +1129,7 @@ const startServer = async () => {
             📡 Port:        ${PORT}
             💾 Database:    Connected
             🔌 Socket.io:   Active
-            💸 Wallet:      External Module Loaded
+            💸 Wallet:      Modo externo funcional
             👑 Admin Panel: Full Functional
             ===========================================================
             `);
