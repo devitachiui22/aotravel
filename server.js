@@ -44,7 +44,7 @@ const bcrypt = require('bcrypt');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const walletRoutes = require('./wallet');
+
 
 // INICIALIZAÇÃO DO APP EXPRESS
 const app = express();
@@ -57,7 +57,7 @@ app.use(bodyParser.json({ limit: '5mb' }));
 app.use(bodyParser.urlencoded({ limit: '5mb', extended: true }));
 app.use(express.json({ limit: '5mb' }));
 app.use(express.urlencoded({ limit: '5mb', extended: true }));
-app.use('/api/wallet', authenticateToken, walletRoutes(pool, io));
+
 /**
  * CONFIGURAÇÃO DE CORS (CROSS-ORIGIN RESOURCE SHARING)
  * Permite que o Flutter (Mobile) e Web Dashboard acessem a API sem bloqueios.
@@ -226,6 +226,11 @@ async function getFullRideDetails(rideId) {
         return null;
     }
 }
+
+// --- FUNÇÃO ROUTAS PARA WALLET
+const walletRoutes = require('./wallet');
+app.use('/api/wallet', authenticateToken, walletRoutes(pool, io));
+
 
 // --- FUNÇÃO GETUSERFULLDETAILS REPARADA (COM COALESCE PARA EVITAR NULL CRASH) ---
 async function getUserFullDetails(userId) {
@@ -2949,4 +2954,3 @@ server.listen(PORT, '0.0.0.0', () => {
     ============================================================
     `);
 });
-
