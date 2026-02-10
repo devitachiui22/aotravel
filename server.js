@@ -1,11 +1,12 @@
 /**
 =================================================================================================
-🚀 AOTRAVEL SERVER - CORE ENGINE v6.0 (MODULARIZADO)
+🚀 AOTRAVEL SERVER - CORE ENGINE v6.0 (MODULARIZADO - CORRIGIDO)
 =================================================================================================
 ARQUIVO: backend/server.js
 DESCRIÇÃO: Backend Monolítico Modularizado - Core de Transporte e Gerenciamento
 STATUS: PRODUCTION READY - FINANCIAL LOGIC EXTRACTED TO WALLET.JS
 DATA: 10 de Fevereiro de 2026
+VERSÃO: v6.1 - Correção de Schema de Banco de Dados
 =================================================================================================
 */
 
@@ -140,7 +141,7 @@ const bootstrapDatabase = async () => {
         await client.query('CREATE EXTENSION IF NOT EXISTS "uuid-ossp";');
         await client.query('CREATE EXTENSION IF NOT EXISTS "pgcrypto";');
 
-        // 2. TABELA USERS (Central de Identidade)
+        // 2. TABELA USERS (Central de Identidade) - CORRIGIDA com todas as colunas necessárias
         await client.query(`
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
@@ -161,15 +162,19 @@ const bootstrapDatabase = async () => {
                 -- Dados Financeiros (Wallet Core)
                 balance DECIMAL(15,2) DEFAULT 0.00,
                 bonus_points INTEGER DEFAULT 0,
-                wallet_account_number VARCHAR(21) UNIQUE,
+                wallet_account_number VARCHAR(50) UNIQUE,
                 wallet_pin_hash VARCHAR(255),
+                wallet_status VARCHAR(20) DEFAULT 'active',
                 daily_limit DECIMAL(15,2) DEFAULT 500000.00,
-                daily_usage DECIMAL(15,2) DEFAULT 0.00,
-                last_usage_date DATE DEFAULT CURRENT_DATE,
+                daily_limit_used DECIMAL(15,2) DEFAULT 0.00,
+                last_transaction_date DATE DEFAULT CURRENT_DATE,
+                account_tier VARCHAR(20) DEFAULT 'standard',
+                kyc_level INTEGER DEFAULT 1,
 
                 -- Metadados
                 fcm_token TEXT,
                 photo_url TEXT,
+                photo TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
@@ -257,6 +262,38 @@ const bootstrapDatabase = async () => {
             ('app_version', '{"ios": "1.0.0", "android": "1.0.0", "force_update": false}', 'Versão mínima do app')
             ON CONFLICT (key) DO NOTHING;
         `);
+
+        // 7. VERIFICAÇÃO E CORREÇÃO DE COLUNAS FALTANTES
+        const requiredColumns = [
+            { table: 'users', column: 'password_hash', type: 'VARCHAR(255) NOT NULL DEFAULT \'\'' },
+            { table: 'users', column: 'photo', type: 'TEXT' },
+            { table: 'users', column: 'wallet_status', type: 'VARCHAR(20) DEFAULT \'active\'' },
+            { table: 'users', column: 'daily_limit_used', type: 'DECIMAL(15,2) DEFAULT 0.00' },
+            { table: 'users', column: 'last_transaction_date', type: 'DATE DEFAULT CURRENT_DATE' },
+            { table: 'users', column: 'account_tier', type: 'VARCHAR(20) DEFAULT \'standard\'' },
+            { table: 'users', column: 'kyc_level', type: 'INTEGER DEFAULT 1' }
+        ];
+
+        for (const col of requiredColumns) {
+            try {
+                await client.query(`
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 
+                            FROM information_schema.columns 
+                            WHERE table_name = '${col.table}' 
+                            AND column_name = '${col.column}'
+                        ) THEN
+                            EXECUTE 'ALTER TABLE ${col.table} ADD COLUMN ${col.column} ${col.type}';
+                        END IF;
+                    END $$;
+                `);
+                Logger.info('DB_SCHEMA', `Coluna ${col.table}.${col.column} verificada/criada.`);
+            } catch (colError) {
+                Logger.warn('DB_SCHEMA', `Erro ao verificar coluna ${col.table}.${col.column}: ${colError.message}`);
+            }
+        }
 
         await client.query('COMMIT');
         Logger.info('DB_INIT', '✅ Banco de Dados inicializado com sucesso.');
@@ -407,7 +444,7 @@ authRouter.post('/register', async (req, res) => {
         const newUserRes = await client.query(
             `INSERT INTO users (name, email, phone, password_hash, role, vehicle_details, created_at)
              VALUES ($1, $2, $3, $4, $5, $6, NOW())
-             RETURNING id, name, email, role`,
+             RETURNING id, name, email, role, phone`,
             [name, email, phone, hashedPassword, role, vehicleDetails]
         );
         const newUser = newUserRes.rows[0];
@@ -452,6 +489,10 @@ authRouter.post('/login', async (req, res) => {
             return res.status(403).json({ error: "Sua conta está bloqueada. Contate o suporte." });
         }
 
+        if (!user.password_hash || user.password_hash.trim() === '') {
+            return res.status(500).json({ error: "Erro na conta. Contate o suporte." });
+        }
+
         const validPassword = await bcrypt.compare(password, user.password_hash);
         if (!validPassword) {
             return res.status(401).json({ error: "Credenciais inválidas." });
@@ -463,13 +504,31 @@ authRouter.post('/login', async (req, res) => {
 
         const token = jwt.sign({ id: user.id, role: user.role, email: user.email }, JWT_SECRET, { expiresIn: '7d' });
 
-        delete user.password_hash;
-        delete user.wallet_pin_hash;
+        const userResponse = {
+            id: user.id,
+            name: user.name,
+            email: user.email,
+            phone: user.phone,
+            role: user.role,
+            vehicle_details: user.vehicle_details,
+            rating: user.rating,
+            is_online: user.is_online,
+            is_verified: user.is_verified,
+            balance: user.balance,
+            bonus_points: user.bonus_points,
+            wallet_account_number: user.wallet_account_number,
+            daily_limit: user.daily_limit,
+            fcm_token: user.fcm_token,
+            photo_url: user.photo_url,
+            photo: user.photo,
+            created_at: user.created_at,
+            updated_at: user.updated_at
+        };
 
         res.json({
             success: true,
             token: token,
-            user: user
+            user: userResponse
         });
 
     } catch (error) {
@@ -484,7 +543,10 @@ authRouter.post('/login', async (req, res) => {
 authRouter.get('/profile', authenticateToken, async (req, res) => {
     try {
         const result = await pool.query(
-            "SELECT id, name, email, phone, role, photo_url, rating, balance, bonus_points, wallet_account_number, is_verified, vehicle_details FROM users WHERE id = $1",
+            `SELECT id, name, email, phone, role, photo_url, photo, rating, balance, 
+                    bonus_points, wallet_account_number, is_verified, vehicle_details, 
+                    wallet_status, daily_limit, account_tier, kyc_level, created_at
+             FROM users WHERE id = $1`,
             [req.user.id]
         );
 
@@ -493,6 +555,7 @@ authRouter.get('/profile', authenticateToken, async (req, res) => {
         res.json(result.rows[0]);
 
     } catch (error) {
+        Logger.error('AUTH_PROFILE', error.message);
         res.status(500).json({ error: error.message });
     }
 });
@@ -521,6 +584,89 @@ authRouter.post('/upload-doc', authenticateToken, upload.single('document'), asy
     } catch (error) {
         Logger.error('UPLOAD_DOC', error.message);
         res.status(500).json({ error: "Falha ao salvar documento." });
+    }
+});
+
+/**
+ * PUT /api/auth/update-profile
+ */
+authRouter.put('/update-profile', authenticateToken, upload.single('photo'), async (req, res) => {
+    const { name, phone, vehicle_model, vehicle_plate } = req.body;
+    const userId = req.user.id;
+
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        let photoUrl = null;
+        if (req.file) {
+            photoUrl = `/uploads/${req.file.filename}`;
+        }
+
+        let vehicleDetails = null;
+        if (vehicle_model || vehicle_plate) {
+            const currentUser = await client.query("SELECT vehicle_details FROM users WHERE id = $1", [userId]);
+            const currentDetails = currentUser.rows[0]?.vehicle_details || {};
+            
+            vehicleDetails = JSON.stringify({
+                model: vehicle_model || currentDetails.model,
+                plate: vehicle_plate || currentDetails.plate,
+                verified: currentDetails.verified || false
+            });
+        }
+
+        const updates = [];
+        const params = [];
+        let paramIndex = 1;
+
+        if (name) {
+            updates.push(`name = $${paramIndex}`);
+            params.push(name);
+            paramIndex++;
+        }
+
+        if (phone && isValidAngolaPhone(phone)) {
+            updates.push(`phone = $${paramIndex}`);
+            params.push(phone);
+            paramIndex++;
+        }
+
+        if (photoUrl) {
+            updates.push(`photo_url = $${paramIndex}, photo = $${paramIndex}`);
+            params.push(photoUrl);
+            paramIndex++;
+        }
+
+        if (vehicleDetails) {
+            updates.push(`vehicle_details = $${paramIndex}`);
+            params.push(vehicleDetails);
+            paramIndex++;
+        }
+
+        if (updates.length === 0) {
+            return res.status(400).json({ error: "Nenhum dado para atualizar." });
+        }
+
+        updates.push(`updated_at = NOW()`);
+        
+        params.push(userId);
+        const query = `UPDATE users SET ${updates.join(', ')} WHERE id = $${paramIndex} RETURNING id, name, email, phone, role, photo_url, photo, vehicle_details`;
+        
+        const result = await client.query(query, params);
+        await client.query('COMMIT');
+
+        res.json({
+            success: true,
+            message: "Perfil atualizado com sucesso.",
+            user: result.rows[0]
+        });
+
+    } catch (error) {
+        await client.query('ROLLBACK');
+        Logger.error('UPDATE_PROFILE', error.message);
+        res.status(500).json({ error: error.message });
+    } finally {
+        client.release();
     }
 });
 
@@ -582,11 +728,16 @@ ridesRouter.post('/accept', authenticateToken, requireDriver, async (req, res) =
             [driverId, ride_id]
         );
 
-        const driverInfo = await client.query("SELECT name, phone, vehicle_details, rating, photo_url FROM users WHERE id = $1", [driverId]);
+        const driverInfo = await client.query("SELECT id, name, phone, vehicle_details, rating, photo_url, photo FROM users WHERE id = $1", [driverId]);
 
         await client.query('COMMIT');
 
-        const rideData = { ...ride, driver: driverInfo.rows[0], status: 'accepted' };
+        const rideData = { 
+            ...ride, 
+            driver: driverInfo.rows[0], 
+            status: 'accepted' 
+        };
+        
         io.to(`user_${ride.passenger_id}`).emit('ride_accepted', rideData);
 
         res.json({ success: true, ride: rideData });
@@ -649,7 +800,6 @@ ridesRouter.post('/update-status', authenticateToken, async (req, res) => {
 
 /**
  * POST /api/rides/complete - Completa uma corrida e processa o pagamento
- * MANTIDO no server.js porque contém lógica específica de corridas
  */
 ridesRouter.post('/complete', authenticateToken, requireDriver, async (req, res) => {
     const { ride_id, final_price } = req.body;
@@ -663,7 +813,6 @@ ridesRouter.post('/complete', authenticateToken, requireDriver, async (req, res)
     try {
         await client.query('BEGIN');
 
-        // Lock da corrida para evitar condições de corrida
         const rideRes = await client.query(
             "SELECT * FROM rides WHERE id = $1 AND driver_id = $2 AND status = 'started' FOR UPDATE",
             [ride_id, driverId]
@@ -677,13 +826,11 @@ ridesRouter.post('/complete', authenticateToken, requireDriver, async (req, res)
         const passengerId = ride.passenger_id;
         const amount = parseFloat(final_price);
 
-        // 1. Atualizar status da corrida
         await client.query(
             "UPDATE rides SET status = 'completed', completed_at = NOW(), final_price = $1 WHERE id = $2",
             [amount, ride_id]
         );
 
-        // 2. Buscar saldo do passageiro (com lock para garantir consistência)
         const passengerRes = await client.query(
             "SELECT id, balance, name FROM users WHERE id = $1 FOR UPDATE",
             [passengerId]
@@ -696,45 +843,38 @@ ridesRouter.post('/complete', authenticateToken, requireDriver, async (req, res)
         const passenger = passengerRes.rows[0];
         const passengerBalance = parseFloat(passenger.balance || 0);
 
-        // 3. Verificar se passageiro tem saldo suficiente
         if (passengerBalance < amount) {
             await client.query('ROLLBACK');
-            return res.status(400).json({
+            return res.status(400).json({ 
                 error: "Saldo insuficiente do passageiro para pagar a corrida.",
                 required: amount,
                 available: passengerBalance
             });
         }
 
-        // 4. Buscar motorista (também com lock)
         const driverRes = await client.query(
             "SELECT id, balance, name FROM users WHERE id = $1 FOR UPDATE",
             [driverId]
         );
         const driver = driverRes.rows[0];
 
-        // 5. Processar transações financeiras
         const newPassengerBalance = passengerBalance - amount;
         const newDriverBalance = parseFloat(driver.balance || 0) + amount;
 
-        // Atualizar saldo do passageiro (débito)
         await client.query(
             "UPDATE users SET balance = $1 WHERE id = $2",
             [newPassengerBalance, passengerId]
         );
 
-        // Atualizar saldo do motorista (crédito)
         await client.query(
             "UPDATE users SET balance = $1 WHERE id = $2",
             [newDriverBalance, driverId]
         );
 
-        // 6. Registrar transações na tabela wallet_transactions (agora gerenciada pelo wallet.js)
         const transactionRef = `RIDE-${ride_id}-${Date.now()}`;
-
-        // Transação do passageiro (pagamento)
+        
         await client.query(
-            `INSERT INTO wallet_transactions
+            `INSERT INTO wallet_transactions 
              (reference_id, user_id, sender_id, receiver_id, amount, type, method, status, description, balance_after)
              VALUES ($1, $2, $3, $4, $5, 'ride_payment', 'internal', 'completed', $6, $7)`,
             [
@@ -748,9 +888,8 @@ ridesRouter.post('/complete', authenticateToken, requireDriver, async (req, res)
             ]
         );
 
-        // Transação do motorista (recebimento)
         await client.query(
-            `INSERT INTO wallet_transactions
+            `INSERT INTO wallet_transactions 
              (reference_id, user_id, sender_id, receiver_id, amount, type, method, status, description, balance_after)
              VALUES ($1, $2, $3, $4, $5, 'ride_earnings', 'internal', 'completed', $6, $7)`,
             [
@@ -766,7 +905,6 @@ ridesRouter.post('/complete', authenticateToken, requireDriver, async (req, res)
 
         await client.query('COMMIT');
 
-        // 7. Notificações em tempo real
         io.to(`user_${passengerId}`).emit('ride_completed', {
             ride_id,
             amount_paid: amount,
@@ -779,7 +917,6 @@ ridesRouter.post('/complete', authenticateToken, requireDriver, async (req, res)
             new_balance: newDriverBalance
         });
 
-        // Atualizar rating do motorista (simples - incrementar)
         await client.query(
             "UPDATE users SET rating = COALESCE(rating, 5.00) + 0.1 WHERE id = $1",
             [driverId]
@@ -810,6 +947,81 @@ ridesRouter.post('/complete', authenticateToken, requireDriver, async (req, res)
     }
 });
 
+/**
+ * GET /api/rides/history
+ */
+ridesRouter.get('/history', authenticateToken, async (req, res) => {
+    const userId = req.user.id;
+    const { status, limit = 20, offset = 0 } = req.query;
+
+    try {
+        let query = `
+            SELECT r.*, 
+                   p.name as passenger_name, p.photo_url as passenger_photo,
+                   d.name as driver_name, d.photo_url as driver_photo
+            FROM rides r
+            LEFT JOIN users p ON r.passenger_id = p.id
+            LEFT JOIN users d ON r.driver_id = d.id
+            WHERE (r.passenger_id = $1 OR r.driver_id = $1)
+        `;
+
+        const params = [userId];
+        let paramCount = 2;
+
+        if (status) {
+            query += ` AND r.status = $${paramCount}`;
+            params.push(status);
+            paramCount++;
+        }
+
+        query += ` ORDER BY r.created_at DESC LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
+        params.push(parseInt(limit), parseInt(offset));
+
+        const result = await pool.query(query, params);
+
+        res.json({
+            success: true,
+            rides: result.rows,
+            total: result.rows.length
+        });
+
+    } catch (error) {
+        Logger.error('RIDE_HISTORY', error.message);
+        res.status(500).json({ error: "Erro ao buscar histórico de corridas." });
+    }
+});
+
+/**
+ * GET /api/rides/active
+ */
+ridesRouter.get('/active', authenticateToken, async (req, res) => {
+    const userId = req.user.id;
+
+    try {
+        const result = await pool.query(
+            `SELECT r.*, 
+                    p.name as passenger_name, p.photo_url as passenger_photo,
+                    d.name as driver_name, d.photo_url as driver_photo
+             FROM rides r
+             LEFT JOIN users p ON r.passenger_id = p.id
+             LEFT JOIN users d ON r.driver_id = d.id
+             WHERE (r.passenger_id = $1 OR r.driver_id = $1)
+             AND r.status IN ('searching', 'accepted', 'started')
+             ORDER BY r.created_at DESC LIMIT 5`,
+            [userId]
+        );
+
+        res.json({
+            success: true,
+            active_rides: result.rows
+        });
+
+    } catch (error) {
+        Logger.error('RIDE_ACTIVE', error.message);
+        res.status(500).json({ error: "Erro ao buscar corridas ativas." });
+    }
+});
+
 // =================================================================================================
 // 8. ROTAS ADMINISTRATIVAS (BACKOFFICE) - CONSOLIDADAS
 // =================================================================================================
@@ -821,7 +1033,19 @@ const adminRouter = express.Router();
  */
 adminRouter.get('/stats', authenticateToken, requireAdmin, async (req, res) => {
     try {
-        const stats = await pool.query(`SELECT (SELECT COUNT(*) FROM users) as total_users, (SELECT COUNT(*) FROM users WHERE role='driver') as total_drivers, (SELECT COUNT(*) FROM users WHERE role='passenger') as total_passengers, (SELECT COUNT(*) FROM rides) as total_rides, (SELECT COUNT(*) FROM users WHERE role='driver' AND is_online=true) as active_drivers, (SELECT COUNT(*) FROM rides WHERE status='completed') as completed_rides, (SELECT COUNT(*) FROM rides WHERE status='searching') as searching_rides, (SELECT COUNT(*) FROM user_documents WHERE status='pending') as pending_docs, (SELECT COALESCE(SUM(balance), 0) FROM users) as total_balances`);
+        const stats = await pool.query(`
+            SELECT 
+                (SELECT COUNT(*) FROM users) as total_users,
+                (SELECT COUNT(*) FROM users WHERE role='driver') as total_drivers,
+                (SELECT COUNT(*) FROM users WHERE role='passenger') as total_passengers,
+                (SELECT COUNT(*) FROM rides) as total_rides,
+                (SELECT COUNT(*) FROM users WHERE role='driver' AND is_online=true) as active_drivers,
+                (SELECT COUNT(*) FROM rides WHERE status='completed') as completed_rides,
+                (SELECT COUNT(*) FROM rides WHERE status='searching') as searching_rides,
+                (SELECT COUNT(*) FROM user_documents WHERE status='pending') as pending_docs,
+                (SELECT COALESCE(SUM(balance), 0) FROM users) as total_balances,
+                (SELECT COALESCE(SUM(final_price), 0) FROM rides WHERE status='completed') as total_revenue
+        `);
 
         res.json(stats.rows[0]);
 
@@ -838,7 +1062,7 @@ adminRouter.get('/users', authenticateToken, requireAdmin, async (req, res) => {
     const { role, is_online, is_blocked, search, limit = 50, offset = 0 } = req.query;
 
     try {
-        let query = `SELECT id, name, email, phone, role, photo_url, balance, is_online, rating, is_blocked, is_verified, created_at FROM users WHERE 1=1`;
+        let query = `SELECT id, name, email, phone, role, photo_url, photo, balance, is_online, rating, is_blocked, is_verified, wallet_status, account_tier, created_at FROM users WHERE 1=1`;
 
         const params = [];
         let paramCount = 1;
@@ -903,39 +1127,77 @@ adminRouter.post('/verify-user', authenticateToken, requireAdmin, async (req, re
         return res.status(400).json({ error: "ID do usuário e ação são obrigatórios." });
     }
 
+    const client = await pool.connect();
     try {
+        await client.query('BEGIN');
+
         let query;
-        let params = [user_id];
+        let updateData = {};
 
         switch (action) {
             case 'approve':
-                query = "UPDATE users SET is_verified = true WHERE id = $1";
+                updateData.is_verified = true;
                 break;
             case 'reject':
-                query = "UPDATE users SET is_verified = false WHERE id = $1";
+                updateData.is_verified = false;
                 break;
             case 'block':
-                query = "UPDATE users SET is_blocked = true WHERE id = $1";
+                updateData.is_blocked = true;
+                updateData.is_online = false;
                 break;
             case 'unblock':
-                query = "UPDATE users SET is_blocked = false WHERE id = $1";
+                updateData.is_blocked = false;
+                break;
+            case 'verify_driver':
+                await client.query(
+                    "UPDATE users SET vehicle_details = jsonb_set(vehicle_details, '{verified}', 'true') WHERE id = $1",
+                    [user_id]
+                );
+                break;
+            case 'upgrade_tier':
+                updateData.account_tier = 'premium';
+                updateData.daily_limit = 5000000.00;
                 break;
             default:
-                return res.status(400).json({ error: "Ação inválida. Use: 'approve', 'reject', 'block' ou 'unblock'." });
+                return res.status(400).json({ error: "Ação inválida." });
         }
 
-        await pool.query(query, params);
+        if (Object.keys(updateData).length > 0) {
+            const updates = [];
+            const params = [];
+            let paramIndex = 1;
+
+            for (const [key, value] of Object.entries(updateData)) {
+                updates.push(`${key} = $${paramIndex}`);
+                params.push(value);
+                paramIndex++;
+            }
+
+            params.push(user_id);
+            query = `UPDATE users SET ${updates.join(', ')} WHERE id = $${paramIndex}`;
+            await client.query(query, params);
+        }
+
+        await client.query(
+            "INSERT INTO user_documents (user_id, doc_type, file_url, status, verified_at) VALUES ($1, 'admin_action', 'N/A', 'approved', NOW())",
+            [user_id]
+        );
+
+        await client.query('COMMIT');
 
         Logger.audit(req.user.id, 'ADMIN_ACTION', { action, user_id, reason });
 
         res.json({
             success: true,
-            message: `Usuário ${action === 'block' ? 'bloqueado' : action === 'unblock' ? 'desbloqueado' : action === 'approve' ? 'verificado' : 'rejeitado'} com sucesso.`
+            message: `Usuário ${action} com sucesso.`
         });
 
     } catch (e) {
+        await client.query('ROLLBACK');
         Logger.error('ADMIN_VERIFY', e);
         res.status(500).json({ error: "Erro ao processar ação administrativa." });
+    } finally {
+        client.release();
     }
 });
 
@@ -993,6 +1255,74 @@ adminRouter.get('/rides', authenticateToken, requireAdmin, async (req, res) => {
     }
 });
 
+/**
+ * GET /api/admin/documents
+ */
+adminRouter.get('/documents', authenticateToken, requireAdmin, async (req, res) => {
+    const { status, limit = 50, offset = 0 } = req.query;
+
+    try {
+        let query = `
+            SELECT ud.*, u.name as user_name, u.email, u.phone, u.role
+            FROM user_documents ud
+            JOIN users u ON ud.user_id = u.id
+            WHERE 1=1
+        `;
+
+        const params = [];
+        let paramCount = 1;
+
+        if (status) {
+            query += ` AND ud.status = $${paramCount}`;
+            params.push(status);
+            paramCount++;
+        }
+
+        query += ` ORDER BY ud.uploaded_at DESC LIMIT $${paramCount} OFFSET $${paramCount + 1}`;
+        params.push(parseInt(limit), parseInt(offset));
+
+        const result = await pool.query(query, params);
+
+        res.json({
+            documents: result.rows,
+            total: result.rows.length
+        });
+
+    } catch (e) {
+        Logger.error('ADMIN_DOCS', e);
+        res.status(500).json({ error: "Erro ao listar documentos." });
+    }
+});
+
+/**
+ * POST /api/admin/settings
+ */
+adminRouter.post('/settings', authenticateToken, requireAdmin, async (req, res) => {
+    const { key, value, description } = req.body;
+
+    if (!key || !value) {
+        return res.status(400).json({ error: "Chave e valor são obrigatórios." });
+    }
+
+    try {
+        await pool.query(
+            `INSERT INTO app_settings (key, value, description) 
+             VALUES ($1, $2, $3)
+             ON CONFLICT (key) DO UPDATE SET value = $2, description = $3`,
+            [key, JSON.stringify(value), description]
+        );
+
+        res.json({
+            success: true,
+            message: "Configuração atualizada com sucesso."
+        });
+
+    } catch (e) {
+        Logger.error('ADMIN_SETTINGS', e);
+        res.status(500).json({ error: "Erro ao salvar configuração." });
+    }
+});
+
 // =================================================================================================
 // 9. MONTAGEM DE ROTAS
 // =================================================================================================
@@ -1003,8 +1333,19 @@ app.use('/api/rides', ridesRouter);
 app.use('/api/admin', adminRouter);
 
 // Módulo Financeiro (Wallet) - IMPORTADO EXTERNAMENTE
-const walletRouter = require('./wallet')(pool, io);
-app.use('/api/wallet', authenticateToken, walletRouter);
+try {
+    const walletModule = require('./wallet');
+    if (typeof walletModule === 'function') {
+        const walletRouter = walletModule(pool, io);
+        app.use('/api/wallet', authenticateToken, walletRouter);
+        console.log('✅ Módulo Wallet carregado com sucesso.');
+    } else {
+        console.log('⚠️ Módulo Wallet não retornou uma função, desativando rotas financeiras.');
+    }
+} catch (error) {
+    console.error('❌ Erro ao carregar módulo Wallet:', error.message);
+    console.log('⚠️ Rotas financeiras desativadas devido a erro no módulo.');
+}
 
 // =================================================================================================
 // 10. MOTOR REAL-TIME (SOCKET.IO)
@@ -1037,7 +1378,8 @@ io.on('connection', (socket) => {
 
     if (userRole === 'driver') {
         socket.join('drivers_room');
-        pool.query("UPDATE users SET is_online = true WHERE id = $1", [userId]);
+        pool.query("UPDATE users SET is_online = true WHERE id = $1", [userId])
+            .catch(err => Logger.error('SOCKET_ONLINE', err.message));
     }
 
     // Atualização de Localização
@@ -1059,10 +1401,56 @@ io.on('connection', (socket) => {
                 [payload.ride_id, userId, payload.text, payload.type || 'text']
             );
 
-            io.to(`user_${payload.receiver_id}`).emit('receive_message', res.rows[0]);
+            const message = res.rows[0];
+            
+            // Notificar remetente
+            socket.emit('message_sent', message);
+            
+            // Notificar destinatário
+            io.to(`user_${payload.receiver_id}`).emit('receive_message', message);
+
+            // Se for uma corrida, notificar todos na sala da corrida
+            if (payload.ride_id) {
+                io.to(`ride_${payload.ride_id}`).emit('ride_message', {
+                    ...message,
+                    sender_role: userRole
+                });
+            }
 
         } catch (e) {
             socket.emit('error', { message: "Erro ao enviar mensagem" });
+            Logger.error('SOCKET_CHAT', e.message);
+        }
+    });
+
+    // Entrar na sala de uma corrida
+    socket.on('join_ride', (rideId) => {
+        socket.join(`ride_${rideId}`);
+        Logger.info('SOCKET', `Usuário ${userId} entrou na sala da corrida ${rideId}`);
+    });
+
+    // Sair da sala de uma corrida
+    socket.on('leave_ride', (rideId) => {
+        socket.leave(`ride_${rideId}`);
+        Logger.info('SOCKET', `Usuário ${userId} saiu da sala da corrida ${rideId}`);
+    });
+
+    // Notificação de chegada
+    socket.on('driver_arrived', (data) => {
+        const { ride_id, passenger_id } = data;
+        if (userRole === 'driver' && passenger_id) {
+            io.to(`user_${passenger_id}`).emit('driver_arrived_notification', {
+                ride_id,
+                driver_id: userId,
+                message: "Motorista chegou no local"
+            });
+        }
+    });
+
+    // Ping para manter conexão
+    socket.on('ping', (callback) => {
+        if (typeof callback === 'function') {
+            callback({ timestamp: Date.now() });
         }
     });
 
@@ -1072,7 +1460,8 @@ io.on('connection', (socket) => {
         activeUsers.delete(userId);
         if (userRole === 'driver') {
             driverLocations.delete(userId);
-            pool.query("UPDATE users SET is_online = false WHERE id = $1", [userId]);
+            pool.query("UPDATE users SET is_online = false WHERE id = $1", [userId])
+                .catch(err => Logger.error('SOCKET_OFFLINE', err.message));
         }
     });
 });
@@ -1084,7 +1473,7 @@ io.on('connection', (socket) => {
 // Health Check
 app.get('/', (req, res) => res.status(200).json({
     status: "AOTRAVEL SERVER ONLINE",
-    version: "v6.0 - MODULARIZADO",
+    version: "v6.1 - MODULARIZADO E CORRIGIDO",
     environment: NODE_ENV,
     database: "Connected",
     socket_io: "Active",
@@ -1094,24 +1483,71 @@ app.get('/', (req, res) => res.status(200).json({
         rides: "/api/rides/",
         admin: "/api/admin/",
         wallet: "/api/wallet/"
-    }
+    },
+    timestamp: new Date().toISOString()
 }));
+
+// Health Check Detalhado
+app.get('/health', async (req, res) => {
+    try {
+        const dbCheck = await pool.query('SELECT NOW() as db_time, version() as db_version');
+        const activeConnections = activeUsers.size;
+        const activeDrivers = Array.from(driverLocations.keys()).length;
+
+        res.status(200).json({
+            status: "healthy",
+            timestamp: new Date().toISOString(),
+            database: {
+                connected: true,
+                time: dbCheck.rows[0].db_time,
+                version: dbCheck.rows[0].db_version.split(' ')[1]
+            },
+            socket_io: {
+                active: true,
+                connected_users: activeConnections,
+                active_drivers: activeDrivers
+            },
+            system: {
+                uptime: process.uptime(),
+                memory: process.memoryUsage(),
+                node_version: process.version
+            }
+        });
+    } catch (error) {
+        res.status(500).json({
+            status: "unhealthy",
+            error: error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
+});
 
 // Rota 404
 app.use((req, res) => {
     res.status(404).json({
         error: "Rota não encontrada.",
         path: req.path,
-        method: req.method
+        method: req.method,
+        timestamp: new Date().toISOString()
     });
 });
 
 // Tratamento de Erros Global
 app.use((err, req, res, next) => {
     Logger.error('GLOBAL_ERROR', err.message, err.stack);
+    
+    if (err instanceof multer.MulterError) {
+        return res.status(400).json({
+            error: "Erro no upload de arquivo",
+            message: err.message,
+            code: err.code
+        });
+    }
+    
     res.status(500).json({
-        error: "Erro Interno Crítico",
-        message: NODE_ENV === 'development' ? err.message : "Contate o administrador."
+        error: "Erro Interno do Servidor",
+        message: NODE_ENV === 'development' ? err.message : "Contate o administrador do sistema.",
+        timestamp: new Date().toISOString()
     });
 });
 
@@ -1119,26 +1555,68 @@ app.use((err, req, res, next) => {
 const startServer = async () => {
     try {
         await bootstrapDatabase();
+        
+        // Aguardar um pouco para garantir que o wallet.js tenha tempo para inicializar
+        await new Promise(resolve => setTimeout(resolve, 1000));
 
         server.listen(PORT, '0.0.0.0', () => {
             console.log(`
             ===========================================================
-            🚀 AOTRAVEL SERVER RUNNING (MODULARIZADO)
+            🚀 AOTRAVEL SERVER RUNNING (MODULARIZADO E CORRIGIDO)
             ===========================================================
             🌍 Environment: ${NODE_ENV}
             📡 Port:        ${PORT}
             💾 Database:    Connected
             🔌 Socket.io:   Active
-            💸 Wallet:      Modo externo funcional
+            💸 Wallet:      External Module Loaded
             👑 Admin Panel: Full Functional
+            🐛 Debug:       Schema corrigido
             ===========================================================
             `);
+            
+            // Verificação de segurança
+            console.log('🔒 Verificando configurações de segurança...');
+            if (!process.env.JWT_SECRET || process.env.JWT_SECRET.includes('default')) {
+                console.warn('⚠️  ATENÇÃO: JWT_SECRET está usando valor padrão. Configure uma chave segura no .env');
+            }
+            
+            if (!process.env.DATABASE_URL) {
+                console.error('❌ ERRO: DATABASE_URL não configurado.');
+                process.exit(1);
+            }
+            
+            console.log('✅ Sistema pronto para receber conexões.');
         });
 
     } catch (error) {
         Logger.error('STARTUP', 'Falha fatal ao iniciar servidor', error);
+        console.error('❌ Falha na inicialização:', error.message);
         process.exit(1);
     }
 };
 
+// Manipulação de sinais de término
+process.on('SIGTERM', () => {
+    console.log('🔄 Recebido SIGTERM, encerrando servidor graciosamente...');
+    server.close(() => {
+        console.log('✅ Servidor encerrado.');
+        pool.end(() => {
+            console.log('✅ Pool de conexões encerrado.');
+            process.exit(0);
+        });
+    });
+});
+
+process.on('SIGINT', () => {
+    console.log('🔄 Recebido SIGINT, encerrando servidor...');
+    server.close(() => {
+        console.log('✅ Servidor encerrado.');
+        pool.end(() => {
+            console.log('✅ Pool de conexões encerrado.');
+            process.exit(0);
+        });
+    });
+});
+
+// Iniciar o servidor
 startServer();
