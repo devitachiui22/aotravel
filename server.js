@@ -44,6 +44,7 @@ const bcrypt = require('bcrypt');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const walletRoutes = require('./wallet');
 
 
 // INICIALIZAÇÃO DO APP EXPRESS
@@ -226,10 +227,6 @@ async function getFullRideDetails(rideId) {
         return null;
     }
 }
-
-// --- FUNÇÃO ROUTAS PARA WALLET
-const walletRoutes = require('./wallet');
-app.use('/api/wallet', authenticateToken, walletRoutes(pool, io));
 
 
 // --- FUNÇÃO GETUSERFULLDETAILS REPARADA (COM COALESCE PARA EVITAR NULL CRASH) ---
@@ -614,6 +611,8 @@ async function authenticateToken(req, res, next) {
         res.status(500).json({ error: 'Erro na autenticação' });
     }
 }
+
+app.use('/api/wallet', authenticateToken, walletRoutes(pool, io));
 
 // Middleware para verificar admin
 async function requireAdmin(req, res, next) {
