@@ -466,7 +466,7 @@ exports.signup = async (req, res) => {
             `INSERT INTO user_sessions
              (user_id, session_token, device_info, ip_address, expires_at, is_active)
              VALUES ($1, $2, $3, $4, $5, true)`,
-            [newUser.id, sessionToken, JSON.stringify(deviceInfo || {}), ipAddress, expiresAt]
+            [newUser.id, sessionToken, JSON.stringify(device_info || {}), ipAddress, expiresAt]
         );
 
         // Atualiza tokens na tabela de user
@@ -632,3 +632,4 @@ exports.checkSession = async (req, res) => {
  * FIM DO ARQUIVO - AUTH CONTROLLER
  * =================================================================================================
  */
+
