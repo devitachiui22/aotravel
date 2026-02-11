@@ -15,7 +15,7 @@ const path = require('path');
 const db = require('./src/config/db');
 const appConfig = require('./src/config/appConfig');
 const { bootstrapDatabase } = require('./src/utils/dbBootstrap');
-const { globalErrorHandler, notFoundHandler } = require('./src/middleware/errorHandler');
+const { globalErrorHandler, notFoundHandler } = require('./src/middleware/errorMiddleware.js');
 const routes = require('./src/routes');
 const { setupSocketIO } = require('./src/services/socketService');
 
