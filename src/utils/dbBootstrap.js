@@ -375,4 +375,4 @@ async function bootstrapDatabase() {
     }
 }
 
-module.exports = bootstrapDatabase;
+module.exports = { bootstrapDatabase };
