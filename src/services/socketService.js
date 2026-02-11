@@ -429,7 +429,8 @@ function emitToUser(userId, event, data) {
 }
 
 module.exports = {
-    initializeSocket,
+    setupSocketIO: initializeSocket, // O server.js vai chamar isso e funcionará!
+    initializeSocket,                // Mantém o nome original para outros módulos
     emitGlobal,
     emitToUser
 };
