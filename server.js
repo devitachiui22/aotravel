@@ -1,7 +1,10 @@
 /**
- * SERVER.JS - VERSÃO FINAL DE PRODUÇÃO
- * Localização: /backend/server.js
- * Descrição: Ponto de entrada principal configurado para arquitetura modular.
+ * =================================================================================================
+ * 🚀 AOTRAVEL SERVER PRO - CORE ENGINE
+ * =================================================================================================
+ * ARQUIVO: server.js (Localizado na Raiz do projeto /backend)
+ * STATUS: PRODUCTION READY - SEM OMISSÕES
+ * =================================================================================================
  */
 
 require('dotenv').config();
@@ -11,115 +14,88 @@ const { Server } = require("socket.io");
 const cors = require('cors');
 const path = require('path');
 
-// Importações de Módulos Internos (Ajustados para a pasta ./src/)
+// 1. IMPORTAÇÃO DE CONFIGURAÇÕES E BANCO
+// O db.js exporta o 'pool' direto (sem chaves)
 const db = require('./src/config/db');
+// O appConfig exporta o objeto SYSTEM_CONFIG direto (sem chaves)
 const appConfig = require('./src/config/appConfig');
+
+// 2. IMPORTAÇÃO DE UTILITÁRIOS E BOOTSTRAP
+// O dbBootstrap exporta { bootstrapDatabase } como objeto (com chaves)
 const { bootstrapDatabase } = require('./src/utils/dbBootstrap');
-const { globalErrorHandler, notFoundHandler } = require('./src/middleware/errorMiddleware.js');
+
+// 3. IMPORTAÇÃO DE MIDDLEWARES
+// O errorMiddleware exporta { globalErrorHandler, notFoundHandler } como objeto (com chaves)
+const { globalErrorHandler, notFoundHandler } = require('./src/middleware/errorMiddleware');
+
+// 4. IMPORTAÇÃO DE ROTAS E SERVIÇOS
+// O index de routes exporta o 'router' direto (sem chaves)
 const routes = require('./src/routes');
+// O socketService exporta { setupSocketIO } como objeto (com chaves)
 const { setupSocketIO } = require('./src/services/socketService');
 
-// Inicialização do Express e Servidor HTTP
 const app = express();
 const server = http.createServer(app);
 
-// Configuração Robusta e Profissional do Socket.io
+// --- CONFIGURAÇÃO DO SOCKET.IO ---
 const io = new Server(server, {
     cors: {
         origin: "*",
-        methods: ["GET", "POST"],
-        allowedHeaders: ["my-custom-header"],
-        credentials: true
+        methods: ["GET", "POST"]
     },
     pingTimeout: 20000,
     pingInterval: 25000,
-    transports: ['websocket', 'polling'],
-    allowEIO3: true // Compatibilidade com versões anteriores se necessário
+    transports: ['websocket', 'polling']
 });
 
-/**
- * Injeção de Dependência do Socket.io
- * Disponibiliza a instância 'io' globalmente para ser acessada nos Controllers
- * através de req.app.get('io')
- */
+// Injeção de dependência para uso nos controllers via req.app.get('io')
 app.set('io', io);
 
-// --- Middlewares Globais de Segurança e Parsing ---
-
-// Habilitação de CORS para integração total com o Frontend
-app.use(cors({
-    origin: '*',
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
-}));
-
-// Configuração de limites de carga para evitar erros em uploads de base64 ou JSONs extensos
+// --- MIDDLEWARES GLOBAIS ---
+app.use(cors({ origin: '*' }));
 app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
-/**
- * Configuração de Arquivos Estáticos (Uploads)
- * O caminho é resolvido dinamicamente para garantir que as imagens sejam servidas corretamente
- */
-app.use('/uploads', express.static(appConfig.uploadDir || path.join(__dirname, 'src/uploads')));
+// Servir arquivos estáticos (Uploads) com fallback de segurança
+const uploadPath = appConfig.SERVER?.UPLOAD_DIR || 'uploads';
+app.use('/uploads', express.static(path.join(__dirname, uploadPath)));
 
-// --- Definição de Rotas ---
-
-/**
- * Agregador de Rotas Principal (Modularizado)
- * Centraliza auth, profile, ride, wallet, admin e chat
- */
+// --- MAPEAMENTO DE ROTAS ---
 app.use(routes);
 
-// --- Tratamento de Erros e Rotas Inexistentes ---
+// --- HANDLERS DE ERRO ---
+app.use(notFoundHandler); // Captura 404
+app.use(globalErrorHandler); // Captura erros 500
 
-// Middleware para capturar rotas não definidas (404)
-app.use(notFoundHandler);
-
-// Middleware global de exceções (Catch-all) para estabilidade do servidor
-app.use(globalErrorHandler);
-
-// --- Inicialização e Bootstrapping do Sistema ---
-
-/**
- * Função auto-executável para garantir a ordem de subida dos serviços:
- * 1. Bootstrap do Banco de Dados (Criação de tabelas/schemas)
- * 2. Inicialização dos eventos de Socket.io
- * 3. Ativação do servidor na porta configurada
- */
+// --- INICIALIZAÇÃO (BOOT) ---
 (async function startServer() {
     try {
         console.log("--- Iniciando Processo de Boot ---");
 
-        // Valida conexão e estrutura do banco de dados
+        // 1. Sincroniza Banco de Dados e Migrações
         await bootstrapDatabase();
         console.log("✅ Banco de Dados: Tabelas e Schemas verificados.");
 
-        // Configura a lógica de escuta e eventos do Socket
+        // 2. Inicializa lógica de Sockets
+        // Agora o nome bate exatamente com o export do seu socketService.js
         setupSocketIO(io);
-        console.log("✅ Socket.io: Eventos configurados com sucesso.");
+        console.log("✅ Socket.io: Eventos configurados.");
 
-        // Definição da Porta (Prioridade para appConfig ou variável de ambiente)
-        const PORT = appConfig.port || process.env.PORT || 3000;
-
-        // Escuta em 0.0.0.0 para permitir conexões externas e via rede local
+        // 3. Liga o Servidor
+        const PORT = appConfig.SERVER?.PORT || process.env.PORT || 3000;
         server.listen(PORT, '0.0.0.0', () => {
             console.log("--------------------------------------------------");
-            console.log(`🚀 SERVIDOR RODANDO COM SUCESSO NA PORTA: ${PORT}`);
-            console.log(`📡 MODO: Produção / Modularizado`);
-            console.log(`🌍 ACESSO: http://localhost:${PORT}`);
+            console.log(`🚀 SERVIDOR ONLINE NA PORTA: ${PORT}`);
+            console.log(`🌍 URL: http://0.0.0.0:${PORT}`);
             console.log("--------------------------------------------------");
         });
 
     } catch (err) {
-        console.error("❌ ERRO CRÍTICO DURANTE O BOOT DO SERVIDOR:");
+        console.error("❌ ERRO CRÍTICO NO BOOT:");
         console.error(err.message);
-        console.error(err.stack);
-
-        // Finaliza o processo com erro para evitar estado inconsistente
         process.exit(1);
     }
 })();
 
-// Exportação do servidor para possíveis testes automatizados
+// Exportação para testes
 module.exports = { app, server, io };
