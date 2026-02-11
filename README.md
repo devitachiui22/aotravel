@@ -1,119 +1,140 @@
 <div align="center">
 
-# 🚀 AOtravel App
-### O Futuro da Mobilidade & Finanças em Angola
+<img src="https://capsule-render.vercel.app/api?type=waving&color=0f172a&height=300&section=header&text=AOtravel%20Titanium&fontSize=70&fontColor=ffffff&fontAlign=50&desc=Backend%20Architecture%20v11.0.0-GOLD&descAlign=50&descAlignY=60" alt="AOtravel Header" width="100%"/>
 
-![Version](https://img.shields.io/badge/version-11.0.0--GOLD--ARMORED-blueviolet?style=for-the-badge)
-![Status](https://img.shields.io/badge/status-PRODUCTION%20READY-success?style=for-the-badge)
-![Stack](https://img.shields.io/badge/Node.js-PostgreSQL-blue?style=for-the-badge&logo=node.js)
-![Realtime](https://img.shields.io/badge/Socket.IO-Titanium%20Engine-orange?style=for-the-badge)
+<br/>
 
-<p align="center">
-  <em>"Mais do que um aplicativo de transporte. Um ecossistema financeiro sobre rodas."</em>
+[![Status](https://img.shields.io/badge/SYSTEM_STATUS-OPERATIONAL-success?style=for-the-badge&logo=statuspage&logoColor=white)](https://render.com)
+[![Version](https://img.shields.io/badge/CORE_VERSION-11.0.0_ARMORED-702575?style=for-the-badge&logo=git&logoColor=white)](https://github.com)
+[![License](https://img.shields.io/badge/LICENSE-PROPRIETARY-000000?style=for-the-badge&logo=balance-scale&logoColor=white)](https://aotravel.ao)
+
+<br/>
+<br/>
+
+<p align="center" width="60%">
+  <samp>
+    "Engenharia de precisão para um ecossistema financeiro e de mobilidade. 
+    Projetado para resiliência, segurança ACID e escala horizontal."
+  </samp>
 </p>
+
+<br/>
 
 </div>
 
 ---
 
-## 🎨 A Visão (Design & Arquitetura)
+## ⚡ **System Architecture**
 
-Desenvolvido sob a filosofia **"Titanium Architecture"**, o backend do AOtravel não foi apenas codificado; ele foi **arquitetado** para resistir à instabilidade de redes móveis (3G/4G), garantir integridade financeira absoluta (ACID) e escalar horizontalmente.
-
-Combinamos a agilidade de um **App de Mobilidade** com a segurança rigorosa de uma **Fintech**, tudo em um único monólito modularizado e resiliente.
-
----
-
-## 💎 Funcionalidades Estelares
-
-### 🚕 Módulo de Mobilidade (Ride Engine)
-O coração pulsante do sistema. Não apenas conecta A ao B, mas orquestra a logística.
-
-*   **📍 Radar em Tempo Real (Socket.IO):** Rastreamento de motoristas com atualização de alta frequência (High-Frequency GPS Updates) e baixo consumo de dados.
-*   **🧠 Algoritmo de Dispatch Inteligente:** Encontra o motorista ideal baseado em raio geográfico, rating e tipo de veículo, reduzindo o tempo de espera (ETA).
-*   **💰 Precificação Dinâmica Híbrida:** Calcula tarifas baseadas em distância (Haversine), tempo e demanda, com suporte para negociação (Offer/Bid) em futuras versões.
-*   **🛡️ Segurança da Viagem:** Monitoramento da rota e botão de pânico integrado.
-
-### 🏦 Módulo Financeiro (Titanium Wallet)
-Um banco digital completo dentro do app.
-
-*   **🔐 Transações ACID (Atomicity):** Garantia de que o dinheiro nunca se perde. Ou a transação acontece totalmente, ou nada acontece. Zero inconsistência.
-*   **💸 Pagamentos P2P Instantâneos:** Transferências entre usuários via número de telefone ou QR Code.
-*   **🧾 Pagamento de Serviços (Integração Local):** Liquidação de faturas de serviços essenciais (ENDE, EPAL, ZAP, UNITEL) direto do saldo da carteira.
-*   **🏦 Saques & Depósitos:** Integração (simulada) com gateways bancários (MCX/GPE) e gestão de IBANs.
-*   **💳 Cartões Virtuais:** Geração e gestão de cartões para uso seguro.
-
-### 👮 Módulo de Segurança & Compliance (KYC)
-*   **🆔 Verificação de Identidade (KYC Level 2):** Upload e análise de BI e Carta de Condução com auditoria administrativa.
-*   **📱 Device Fingerprinting:** Rastreamento de sessões por dispositivo e IP para prevenir fraudes e Account Takeover.
-*   **🛑 Kill Switch Administrativo:** Bloqueio instantâneo de contas e congelamento de carteiras suspeitas.
-
----
-
-## 🚀 Diferenciais Competitivos (O "Toque Augusto Neves")
-
-O que torna o AOtravel único no mercado angolano e global?
-
-| Diferencial | Descrição |
-| :---        | :---      |
-| **📡 Modo "Network-Resilient"** | O Socket.IO foi configurado com *Heartbeats* agressivos e reconexão inteligente para suportar as oscilações das redes móveis locais sem perder o estado da corrida. |
-| **🛡️ Auto-Healing Database** | O sistema detecta colunas faltantes no banco de dados e aplica correções (Schema Repair) automaticamente no boot, sem downtime. |
-| **💾 Double-Entry Ledger** | Sistema de contabilidade de dupla entrada para a Wallet. Cada centavo é rastreado da origem ao destino. Auditabilidade total. |
-| **⚡ Smart Caching (Lazy Load)** | Carregamento inteligente de dados de perfil e estatísticas para garantir que o app abra em milissegundos. |
-| **🇦🇴 Localização Profunda** | Validação nativa de números de telefone (+244), IBANs (AO06) e integração cultural nos fluxos de UX. |
-
----
-
-## 🔮 Roadmap de Expansão (O Futuro)
-
-Para onde vamos? O céu não é o limite.
-
-### 1. AOtravel Super Delivery 🍔📦
-*   Expansão do `rideRoutes` para suportar `delivery_type`.
-*   Gestão de frotas de motoboys.
-*   Rastreamento de encomendas em tempo real.
-
-### 2. Integração IoT (Hardware) 🚗
-*   Leitura OBD-II para telemetria do veículo (combustível, manutenção).
-*   Bloqueio remoto do veículo em caso de roubo via API do Backend.
-
-### 3. Fintech 2.0 (Microcrédito) 📈
-*   Análise de score de crédito baseado no histórico de corridas e pagamentos.
-*   Oferta de micro-empréstimos para motoristas (manutenção/combustível) descontados automaticamente dos ganhos.
-
-### 4. Inteligência Artificial (AI Core) 🤖
-*   **Previsão de Demanda:** Usar ML para posicionar motoristas antes que o passageiro chame.
-*   **Detecção de Fraude:** IA analisando padrões de GPS e transações financeiras anômalas.
-
----
-
-## 🛠️ Stack Tecnológica
+O **AOtravel Titanium** não é apenas um backend; é um orquestrador de eventos distribuídos. A arquitetura foi desenhada seguindo os princípios de **Clean Architecture** e **Fail-Safe Systems**, priorizando a integridade dos dados acima de tudo.
 
 <div align="center">
 
-| Categoria | Tecnologia | Uso |
-| :---      | :---       | :--- |
-| **Core**     | ![NodeJS](https://img.shields.io/badge/-Node.js-339933?style=flat&logo=node.js&logoColor=white) | Runtime de alta performance |
-| **Framework* | ![Express](https://img.shields.io/badge/-Express-000000?style=flat&logo=express&logoColor=white) | API RESTful e Roteamento |
-| **Database** | ![Postgres](https://img.shields.io/badge/-PostgreSQL-4169E1?style=flat&logo=postgresql&logoColor=white) | Neon Tech (Cloud Serverless) |
-| **Realtime** | ![SocketIO](https://img.shields.io/badge/-Socket.IO-010101?style=flat&logo=socket.io&logoColor=white) | Comunicação Bidirecional |
-| **Security** | ![Bcrypt](https://img.shields.io/badge/-Bcrypt-red?style=flat) | Hashing e Criptografia |
+| **Core Principle** | **Implementation Strategy** |
+| :--- | :--- |
+| **Resiliência de Rede** | `Socket.IO` com *Heartbeats* agressivos e *Auto-Reconnection* para redes 3G/4G instáveis. |
+| **Integridade Financeira** | Ledger de dupla entrada (Double-Entry) com transações atômicas (`BEGIN`...`COMMIT`). |
+| **Auto-Cura (Self-Healing)** | O sistema detecta corrupção de schema no boot e aplica correções automaticamente. |
+| **Segurança Militar** | Migração transparente de hash, RBAC estrito e Sessões Persistentes criptografadas. |
 
 </div>
 
 ---
 
-## 📂 Estrutura do Projeto (Clean Architecture)
+## 💎 **Core Modules**
+
+<div align="center">
+
+### `MÓDULO 01` • **RIDE & DISPATCH ENGINE**
+*Gerenciamento logístico e geoespacial de alta frequência.*
+
+| Componente | Função Técnica |
+| :--- | :--- |
+| ![Radar](https://img.shields.io/badge/RADAR-SOCKET.IO-black?style=flat-square) | Rastreamento em tempo real de motoristas via WebSockets. |
+| ![Algo](https://img.shields.io/badge/ALGORITHM-GEOSPATIAL-blue?style=flat-square) | Cálculo de *Haversine* para matching de proximidade (Raio 15km). |
+| ![Pricing](https://img.shields.io/badge/PRICING-DYNAMIC-green?style=flat-square) | Tarifação baseada em variáveis de tempo, distância e categoria. |
+
+<br/>
+
+### `MÓDULO 02` • **TITANIUM WALLET**
+*Core bancário digital integrado com conformidade BNA.*
+
+| Componente | Função Técnica |
+| :--- | :--- |
+| ![ACID](https://img.shields.io/badge/DB-ACID_TRANSACTIONS-purple?style=flat-square) | Garantia de consistência total em movimentações financeiras. |
+| ![P2P](https://img.shields.io/badge/TRANSFER-P2P_INSTANT-orange?style=flat-square) | Transferências internas com resolução de ID via Telefone/QR. |
+| ![Audit](https://img.shields.io/badge/SECURITY-AUDIT_LOGS-red?style=flat-square) | Rastreabilidade imutável de cada centavo movimentado. |
+
+</div>
+
+---
+
+## 🚀 **Exclusive Differentiators**
+### *The "Augusto Neves" Signature*
+
+O que coloca este backend anos à frente das soluções tradicionais de mercado?
+
+> **📡 Network-Agnostic Stability**
+> <br/> A maioria dos apps falha quando o motorista entra em uma zona de sombra. O AOtravel mantém o estado da transação em cache e sincroniza assim que o `ping` retorna, sem perda de dados (State Recovery).
+
+> **🛡️ Database Self-Healing**
+> <br/> O `dbBootstrap.js` atua como um médico do sistema. A cada reinicialização, ele verifica a saúde das tabelas, índices e colunas. Se algo estiver faltando, ele recria cirurgicamente sem afetar os dados existentes.
+
+> **📱 Device Fingerprinting**
+> <br/> O sistema de autenticação (`authController.js`) não confia apenas na senha. Ele vincula a sessão ao hardware do dispositivo, bloqueando tentativas de *Account Takeover* mesmo se a senha for vazada.
+
+---
+
+## 🔮 **Future Horizons (Roadmap)**
+
+<div align="center">
+
+| Q3 2026 | Q4 2026 | Q1 2027 |
+| :---: | :---: | :---: |
+| **Fintech 2.0** | **AI Dispatch** | **Super App** |
+| Microcrédito baseado em Score<br>Integração Visa/Mastercard Direta | Previsão de Demanda (ML)<br>Detecção de Fraude Neural | Módulo de Delivery<br>Marketplace de Serviços |
+
+</div>
+
+### **Expandable Features Ready-to-Code:**
+1.  **Frota Corporativa:** Gestão de vouchers para empresas.
+2.  **Gamification:** Sistema de XP e Níveis para motoristas (já preparado no DB).
+3.  **Voice Commerce:** Pedir corridas via comando de voz (integração futura).
+
+---
+
+## 🛠️ **Technology Stack**
+
+A fundação tecnológica escolhida para performance extrema.
+
+<div align="center">
+
+![NodeJS](https://img.shields.io/badge/Runtime-Node.js_v20-339933?style=for-the-badge&logo=node.js&logoColor=white)
+![Express](https://img.shields.io/badge/API-Express_Framework-000000?style=for-the-badge&logo=express&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/Database-PostgreSQL_16-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)
+![SocketIO](https://img.shields.io/badge/Realtime-Socket.IO-010101?style=for-the-badge&logo=socket.io&logoColor=white)
+![Security](https://img.shields.io/badge/Security-Bcrypt_&_JWT-critical?style=for-the-badge&logo=authentik&logoColor=white)
+
+</div>
+
+---
+
+## 📂 **Project Anatomy**
+
+Estrutura de diretórios organizada para escalabilidade máxima.
 
 ```bash
-backend/
-├── src/
-│   ├── config/          # Configurações Globais (App, DB)
-│   ├── controllers/     # Lógica de Negócios (Titanium Logic)
-│   ├── middleware/      # Guardiões (Auth, Upload, Error)
-│   ├── routes/          # Definição de Endpoints API
-│   ├── services/        # Motores Complexos (Wallet, Socket)
-│   └── utils/           # Ferramentas e Bootstraps
-├── uploads/             # Persistência de Mídia
-├── server.js            # Ponto de Entrada (Bootstrapper)
-└── .env                 # Segredos de Ambiente
+📦 src
+ ┣ 📂 config         # ⚙️ Constantes Globais & DB Pool
+ ┣ 📂 controllers    # 🧠 Lógica de Negócios (The Brain)
+ ┣ 📂 middleware     # 🛡️ Camada de Segurança & Interceptação
+ ┣ 📂 routes         # 🚦 Definição de Endpoints API
+ ┣ 📂 services       # 🔌 Motores Complexos (Wallet, Socket)
+ ┗ 📂 utils          # 🛠️ Ferramentas & Self-Healing Scripts
+<div align="center">
+<br/>
+![alt text](https://img.shields.io/badge/DEPLOY-RENDER.COM-black?style=for-the-badge&logo=render&logoColor=white)
+<br/>
+<br/>
+<img src="https://readme-typing-svg.herokuapp.com?font=Fira+Code&pause=1000&color=3F51B5&center=true&vCenter=true&width=435&lines=Architected+by+Augusto+Neves;Software+Engineer;UI%2FUX+Designer" alt="Typing SVG" />
+</div>
