@@ -167,7 +167,7 @@ exports.getProfile = async (req, res) => {
  * UPDATE PROFILE
  * Rota: PUT /api/profile
  * Descrição: Atualiza dados cadastrais básicos (Nome, Telefone) e detalhes do veículo.
- *            Implementa validação de inputs e restrições baseadas em Role.
+ * Implementa validação de inputs e retorna o objeto de usuário completo e atualizado.
  */
 exports.updateProfile = async (req, res) => {
     const { name, phone, vehicle_details } = req.body;
@@ -228,10 +228,9 @@ exports.updateProfile = async (req, res) => {
             }
 
             // Merge com dados existentes para não perder info (ex: cor, ano)
-            // Busca dados atuais
             const currentRes = await client.query("SELECT vehicle_details FROM users WHERE id = $1", [userId]);
             const currentDetails = currentRes.rows[0].vehicle_details || {};
-            
+
             // Sobrescreve com novos dados
             const newDetails = { ...currentDetails, ...vehicle_details, updated_at: new Date().toISOString() };
 
@@ -247,30 +246,33 @@ exports.updateProfile = async (req, res) => {
 
         // Adiciona Timestamp
         updates.push(`updated_at = NOW()`);
-        
-        // Finaliza Query
+
+        // Finaliza Query de Atualização
         values.push(userId);
         const query = `
-            UPDATE users 
-            SET ${updates.join(', ')} 
-            WHERE id = $${paramCount} 
-            RETURNING id, name, phone, vehicle_details, updated_at
+            UPDATE users
+            SET ${updates.join(', ')}
+            WHERE id = $${paramCount}
         `;
 
-        const result = await client.query(query, values);
-
+        await client.query(query, values);
         await client.query('COMMIT');
+
+        // ✅ DEPOIS (CORRETO) - Busca os dados completos e atualizados do usuário
+        // Utiliza a função auxiliar para garantir consistência de dados em todo o sistema
+        const updatedUser = await getUserFullDetails(userId);
+
+        // 🛡️ SEGURANÇA: Remove dados sensíveis antes de enviar ao cliente
+        delete updatedUser.password;
+        delete updatedUser.wallet_pin_hash;
 
         logSystem('PROFILE_UPDATE', `Usuário ${userId} atualizou seu perfil.`);
 
-        res.json({
-            success: true,
-            message: "Perfil atualizado com sucesso.",
-            user: result.rows[0]
-        });
+        // Retorna o objeto completo para o Provider do Flutter atualizar o estado global
+        res.json(updatedUser);
 
     } catch (e) {
-        await client.query('ROLLBACK');
+        if (client) await client.query('ROLLBACK');
         logError('PROFILE_UPDATE_ERROR', e);
         res.status(500).json({ error: "Erro ao atualizar perfil." });
     } finally {
