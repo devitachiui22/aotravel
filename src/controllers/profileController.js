@@ -282,7 +282,7 @@ exports.updateProfile = async (req, res) => {
 
 /**
  * 📸 PROTOCOLO: ATUALIZAÇÃO DE FOTO VIA BASE64 (TITANIUM FULL)
- * Rota: POST ou PUT /api/profile/photo
+ * Rota: POST /api/profile/photo
  * Descrição: Processa imagem Base64, salva no DB e retorna o perfil atualizado.
  */
 exports.uploadPhoto = async (req, res) => {
@@ -300,14 +300,22 @@ exports.uploadPhoto = async (req, res) => {
         });
     }
 
+    // Validação básica de formato Base64
+    if (typeof photo !== 'string' || photo.length < 50) {
+        return res.status(400).json({
+            success: false,
+            error: "Formato de imagem inválido."
+        });
+    }
+
     try {
         // 3. Execução da Atualização no Banco de Dados
-        // Nota: O campo 'photo' deve ser do tipo TEXT ou BYTEA para suportar Base64 longo
         const updateQuery = `
             UPDATE users
             SET photo = $1,
                 updated_at = NOW()
             WHERE id = $2
+            RETURNING id
         `;
 
         const updateResult = await pool.query(updateQuery, [photo, userId]);
@@ -320,34 +328,33 @@ exports.uploadPhoto = async (req, res) => {
             });
         }
 
-        // 4. Recuperação dos dados atualizados (Garante integridade no Frontend)
-        const selectQuery = `
-            SELECT id, name, email, phone, photo
-            FROM users
-            WHERE id = $1
-        `;
-        const result = await pool.query(selectQuery, [userId]);
+        // 4. Recuperação dos dados atualizados (Usando helper existente)
+        const fullUser = await getUserFullDetails(userId);
+
+        if (!fullUser) {
+            return res.status(404).json({
+                success: false,
+                error: "Usuário não encontrado após atualização."
+            });
+        }
+
+        // Remover dados sensíveis
+        delete fullUser.password;
+        delete fullUser.wallet_pin_hash;
 
         // Log de Auditoria do Sistema
-        if (typeof logSystem === 'function') {
-            logSystem('PHOTO_SYNC', `Sucesso: Usuário ${userId} atualizou foto de perfil.`);
-        }
+        logSystem('PHOTO_SYNC', `Sucesso: Usuário ${userId} atualizou foto de perfil.`);
 
         // 5. Resposta Estruturada para o Flutter AuthProvider
         res.status(200).json({
             success: true,
             message: "Foto atualizada com sucesso",
-            user: result.rows[0], // Objeto completo para merge imediato no estado do App
-            photo_url: photo      // Retorno da string original para confirmação de cache
+            ...fullUser,  // Spread do usuário completo (dados planos)
+            photo_url: photo
         });
 
     } catch (e) {
-        // Log de erro detalhado para Debug
-        if (typeof logError === 'function') {
-            logError('PHOTO_UPLOAD_FATAL', e);
-        } else {
-            console.error('❌ Erro Crítico uploadPhoto:', e.message);
-        }
+        logError('PHOTO_UPLOAD_FATAL', e);
 
         res.status(500).json({
             success: false,
