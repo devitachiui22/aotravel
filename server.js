@@ -145,7 +145,7 @@ app.use('/uploads', express.static(path.join(__dirname, uploadPath)));
 app.get('/admin', (req, res) => {
     const stats = systemStats;
     const uptime = moment.duration(moment().diff(moment(stats.startTime))).humanize();
-    
+
     res.send(`
     <!DOCTYPE html>
     <html lang="pt">
@@ -309,7 +309,7 @@ app.get('/admin', (req, res) => {
                     <h3>👥 USUÁRIOS ONLINE</h3>
                     <div class="stat-number">${stats.sockets.total}</div>
                     <div class="stat-label">
-                        🚗 Motoristas: ${stats.sockets.drivers} | 
+                        🚗 Motoristas: ${stats.sockets.drivers} |
                         👤 Passageiros: ${stats.sockets.passengers}
                     </div>
                     <div class="progress-bar">
@@ -321,7 +321,7 @@ app.get('/admin', (req, res) => {
                     <h3>🚕 CORRIDAS HOJE</h3>
                     <div class="stat-number">${stats.rides.total}</div>
                     <div class="stat-label">
-                        ✅ Completas: ${stats.rides.completed} | 
+                        ✅ Completas: ${stats.rides.completed} |
                         🔍 Buscando: ${stats.rides.searching}
                     </div>
                     <div class="progress-bar">
@@ -333,7 +333,7 @@ app.get('/admin', (req, res) => {
                     <h3>📡 REQUISIÇÕES</h3>
                     <div class="stat-number">${stats.requests.total}</div>
                     <div class="stat-label">
-                        📤 POST: ${stats.requests.byMethod.POST} | 
+                        📤 POST: ${stats.requests.byMethod.POST} |
                         📥 GET: ${stats.requests.byMethod.GET}
                     </div>
                     <div class="progress-bar">
@@ -422,18 +422,18 @@ app.get('/admin', (req, res) => {
 app.use((req, res, next) => {
     const start = Date.now();
     const originalSend = res.send;
-    
+
     // Intercepta o send para capturar status code
     res.send = function(body) {
         const duration = Date.now() - start;
-        
+
         // Atualiza estatísticas
         systemStats.requests.total++;
         systemStats.requests.byMethod[req.method] = (systemStats.requests.byMethod[req.method] || 0) + 1;
-        
+
         const endpoint = req.originalUrl.split('?')[0];
         systemStats.requests.byEndpoint[endpoint] = (systemStats.requests.byEndpoint[endpoint] || 0) + 1;
-        
+
         // Adiciona às últimas 10 requisições
         systemStats.requests.last10.unshift({
             time: new Date(),
@@ -443,11 +443,11 @@ app.use((req, res, next) => {
             duration: duration
         });
         if (systemStats.requests.last10.length > 10) systemStats.requests.last10.pop();
-        
+
         // Atualiza tempo médio de resposta
         systemStats.performance.totalResponseTime += duration;
         systemStats.performance.avgResponseTime = systemStats.performance.totalResponseTime / systemStats.requests.total;
-        
+
         // LOG PREMIUM COLORIDO
         const methodColor = {
             'GET': chalk.green,
@@ -455,11 +455,11 @@ app.use((req, res, next) => {
             'PUT': chalk.yellow,
             'DELETE': chalk.red
         }[req.method] || chalk.white;
-        
-        const statusColor = res.statusCode < 300 ? chalk.green : 
-                           res.statusCode < 400 ? chalk.yellow : 
+
+        const statusColor = res.statusCode < 300 ? chalk.green :
+                           res.statusCode < 400 ? chalk.yellow :
                            chalk.red;
-        
+
         console.log(
             chalk.gray(moment().format('HH:mm:ss')) + ' ' +
             methodColor(req.method.padEnd(6)) + ' ' +
@@ -467,17 +467,17 @@ app.use((req, res, next) => {
             statusColor(res.statusCode.toString()) + ' ' +
             chalk.gray(`${duration}ms`)
         );
-        
+
         // Log especial para endpoints de corrida
         if (req.originalUrl.includes('/rides/')) {
             if (req.originalUrl.includes('/request')) log.ride(`NOVA CORRIDA solicitada`);
             if (req.originalUrl.includes('/accept')) log.ride(`CORRIDA ACEITA`);
             if (req.originalUrl.includes('/complete')) log.ride(`CORRIDA FINALIZADA`);
         }
-        
+
         originalSend.call(this, body);
     };
-    
+
     next();
 });
 
@@ -513,6 +513,42 @@ app.use(notFoundHandler);
 app.use(globalErrorHandler);
 
 // =================================================================================================
+// 🚨 ROTA DE TESTE - VERIFICAR MOTORISTAS ONLINE
+// =================================================================================================
+app.get('/api/debug/drivers', async (req, res) => {
+    try {
+        const pool = require('./src/config/db');
+        const result = await pool.query(`
+            SELECT
+                dp.driver_id,
+                dp.lat,
+                dp.lng,
+                dp.socket_id,
+                dp.last_update,
+                dp.status,
+                u.name,
+                u.phone,
+                u.is_online
+            FROM driver_positions dp
+            JOIN users u ON dp.driver_id = u.id
+            WHERE dp.last_update > NOW() - INTERVAL '2 minutes'
+            ORDER BY dp.last_update DESC
+        `);
+
+        console.log(`🚨 [DEBUG] Motoristas online: ${result.rows.length}`);
+        res.json({
+            success: true,
+            count: result.rows.length,
+            drivers: result.rows,
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('❌ [DEBUG] Erro:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// =================================================================================================
 // 9. PROCESSO DE BOOT COM DASHBOARD NO TERMINAL
 // =================================================================================================
 (async function startServer() {
@@ -545,12 +581,12 @@ app.use(globalErrorHandler);
         // 2. Socket.IO
         log.socket('Inicializando motor de tempo real...');
         setupSocketIO(io);
-        
+
         // Monitoramento de sockets
         io.engine.on('connection', (socket) => {
             systemStats.sockets.total = io.engine.clientsCount;
         });
-        
+
         log.success('Socket.IO inicializado com monitoramento em tempo real.');
 
         // 3. Servidor HTTP
@@ -559,14 +595,14 @@ app.use(globalErrorHandler);
             console.log(chalk.green('\n┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓'));
             console.log(chalk.green('┃                    ✅ SERVIDOR ONLINE                             ┃'));
             console.log(chalk.green('┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n'));
-            
+
             // Tabela de endpoints
             const table = new Table({
                 head: [chalk.white('🌐 ENDPOINT'), chalk.white('📡 MÉTODO'), chalk.white('📝 DESCRIÇÃO')],
                 colWidths: [50, 15, 40],
                 style: { head: ['cyan'], border: ['gray'] }
             });
-            
+
             table.push(
                 ['/', 'GET', 'Health Check'],
                 ['/admin', 'GET', 'Dashboard Visual em Tempo Real'],
@@ -581,15 +617,15 @@ app.use(globalErrorHandler);
                 ['/api/chat/:ride_id', 'GET', 'Histórico do chat'],
                 ['/uploads/*', 'GET', 'Arquivos estáticos']
             );
-            
+
             console.log(table.toString());
-            
+
             console.log(chalk.cyan('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
             console.log(chalk.white.bold(`   📡 API:         http://localhost:${PORT}/api`));
             console.log(chalk.white.bold(`   📊 DASHBOARD:   http://localhost:${PORT}/admin`));
             console.log(chalk.white.bold(`   🔌 SOCKET:      ws://localhost:${PORT}`));
             console.log(chalk.cyan('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'));
-            
+
             log.success(`Servidor rodando na porta ${PORT}`);
             log.info(`Acesse o dashboard: ${chalk.underline.blue(`http://localhost:${PORT}/admin`)}`);
         });
@@ -606,10 +642,10 @@ app.use(globalErrorHandler);
 // =================================================================================================
 const shutdown = (signal) => {
     log.warn(`\nRecebido sinal ${signal}. Iniciando desligamento gracioso...`);
-    
+
     server.close(() => {
         log.success('Servidor HTTP fechado.');
-        
+
         db.end(() => {
             log.success('Pool de conexões encerrado.');
             console.log(chalk.yellow('\n👋 Servidor finalizado com segurança. Até logo!\n'));
