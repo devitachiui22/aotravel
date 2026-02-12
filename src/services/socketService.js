@@ -192,6 +192,13 @@ function handleConnection(socket) {
      * 🚗 CRÍTICO: ENTRADA DE MOTORISTA COM POSIÇÃO
      */
     socket.on('join_driver_room', async (data) => {
+
+        console.log('\n🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴');
+        console.log('🚨 [BACKEND] EVENTO join_driver_room RECEBIDO!');
+        console.log('📦 Dados recebidos:', JSON.stringify(data, null, 2));
+        console.log('🔌 Socket ID:', socket.id);
+        console.log('🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴\n');
+        
         try {
             // ✅ VALIDAÇÃO - SE data for undefined, NÃO FAZ NADA
             if (!data) {
@@ -202,7 +209,7 @@ function handleConnection(socket) {
 
             // ✅ EXTRAIR driver_id de forma segura
             let driverId = null;
-            
+
             if (typeof data === 'object') {
                 driverId = data.driver_id || data.userId || data.id;
             } else {
@@ -218,11 +225,11 @@ function handleConnection(socket) {
 
             // ✅ CONVERTER PARA STRING/NÚMERO DE FORMA SEGURA
             const driverIdStr = driverId.toString();
-            
+
             // Entrar na sala global de motoristas e na sala individual
             socket.join('drivers');
             socket.join(`driver_${driverIdStr}`);
-            
+
             console.log(`✅ [SOCKET] Driver ${driverIdStr} entrou na sala de motoristas`);
 
             // ✅ Armazenar mapeamento
@@ -237,8 +244,8 @@ function handleConnection(socket) {
             }
 
             // ✅ ENVIAR CONFIRMAÇÃO
-            socket.emit('joined_ack', { 
-                room: 'drivers', 
+            socket.emit('joined_ack', {
+                room: 'drivers',
                 driver_id: driverIdStr,
                 status: 'online',
                 timestamp: new Date().toISOString()
@@ -256,22 +263,22 @@ function handleConnection(socket) {
                         speed: data.speed || 0,
                         status: 'online'
                     }, socket);
-                    
+
                     // ✅ VERIFICAR COLUNAS DINAMICAMENTE
                     const checkColumns = await pool.query(`
-                        SELECT column_name 
-                        FROM information_schema.columns 
+                        SELECT column_name
+                        FROM information_schema.columns
                         WHERE table_name = 'driver_positions'
                     `);
-                    
+
                     const columns = checkColumns.rows.map(col => col.column_name);
-                    
+
                     // ✅ CONSTRUIR QUERY DINAMICAMENTE BASEADO NAS COLUNAS EXISTENTES
                     let query = `
                         INSERT INTO driver_positions (driver_id, lat, lng, socket_id, last_update, status, is_online)
                         VALUES ($1, $2, $3, $4, NOW(), $5, true)
-                        ON CONFLICT (driver_id) 
-                        DO UPDATE SET 
+                        ON CONFLICT (driver_id)
+                        DO UPDATE SET
                             lat = EXCLUDED.lat,
                             lng = EXCLUDED.lng,
                             socket_id = EXCLUDED.socket_id,
@@ -279,9 +286,9 @@ function handleConnection(socket) {
                             status = EXCLUDED.status,
                             is_online = true
                     `;
-                    
+
                     const params = [driverIdStr, data.lat, data.lng, socket.id, 'online'];
-                    
+
                     // ADICIONAR heading SE EXISTIR
                     if (columns.includes('heading') && data.heading !== undefined) {
                         query = query.replace(
@@ -294,7 +301,7 @@ function handleConnection(socket) {
                         );
                         params.splice(3, 0, data.heading || 0);
                     }
-                    
+
                     // ADICIONAR speed SE EXISTIR
                     if (columns.includes('speed') && data.speed !== undefined) {
                         if (columns.includes('heading') && data.heading !== undefined) {
@@ -316,7 +323,7 @@ function handleConnection(socket) {
 
                     await pool.query(query, params);
                     console.log(`📍 [SOCKET] Posição do driver ${driverIdStr} atualizada: (${data.lat}, ${data.lng})`);
-                    
+
                 } catch (dbError) {
                     console.error('❌ [SOCKET] Erro ao atualizar posição:', dbError.message);
                 }
@@ -360,6 +367,7 @@ function handleConnection(socket) {
                 error: error.message
             });
         }
+
     });
 
     /**
