@@ -25,6 +25,14 @@ const SYSTEM_CONFIG = require('../config/appConfig');
  * Cria a intenção de corrida, calcula preço e notifica motoristas próximos via socket com ACK.
  */
 exports.requestRide = async (req, res) => {
+    // 🔴 LOGS DE TELEMETRIA - VERIFICAÇÃO DE ENTRADA
+    console.log('\n🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴');
+    console.log('🚕 [SERVER] REQUISIÇÃO DE CORRIDA RECEBIDA!');
+    console.log('📦 Body:', JSON.stringify(req.body, null, 2));
+    console.log('👤 Usuário:', req.user?.id, req.user?.name);
+    console.log('🔌 Socket.io disponível:', !!req.io);
+    console.log('🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴\n');
+
     const {
         origin_lat, origin_lng, dest_lat, dest_lng,
         origin_name, dest_name, ride_type, distance_km
@@ -32,7 +40,7 @@ exports.requestRide = async (req, res) => {
 
     // ✅ VERIFICAR SE SOCKET EXISTE
     if (!req.io) {
-        logError('RIDE_REQUEST', '❌ req.io não está disponível! Socket.IO não inicializado.');
+        console.error('❌ [SERVER] Erro crítico: req.io não inicializado.');
         return res.status(500).json({ error: "Serviço de tempo real indisponível" });
     }
 
@@ -50,6 +58,7 @@ exports.requestRide = async (req, res) => {
         const settingsRes = await client.query(
             "SELECT value FROM app_settings WHERE key = 'ride_prices'"
         );
+
         const prices = settingsRes.rows[0]?.value || {
             base_price: 600,
             km_rate: 300,
@@ -59,10 +68,9 @@ exports.requestRide = async (req, res) => {
             delivery_km_rate: 450
         };
 
-        // Lógica de Cálculo
+        // Lógica de Cálculo de Distância (Fallback para Haversine se não vier do app)
         let estimatedPrice = 0;
-        const dist = parseFloat(distance_km) ||
-            getDistance(origin_lat, origin_lng, dest_lat, dest_lng);
+        const dist = parseFloat(distance_km) || 0;
 
         if (ride_type === 'moto') {
             estimatedPrice = prices.moto_base + (dist * prices.moto_km_rate);
@@ -72,10 +80,11 @@ exports.requestRide = async (req, res) => {
             estimatedPrice = prices.base_price + (dist * prices.km_rate);
         }
 
+        // Arredondamento Titan (múltiplos de 50) e preço mínimo
         estimatedPrice = Math.ceil(estimatedPrice / 50) * 50;
         if (estimatedPrice < 500) estimatedPrice = 500;
 
-        // 2. Persistência no Banco
+        // 2. Persistência no Banco de Dados
         const insertQuery = `
             INSERT INTO rides (
                 passenger_id, origin_lat, origin_lng, dest_lat, dest_lng,
@@ -97,6 +106,24 @@ exports.requestRide = async (req, res) => {
 
         const ride = result.rows[0];
         await client.query('COMMIT');
+
+        // --- NOTIFICAÇÃO VIA SOCKET AQUI ---
+        // (Onde você dispararia o emit para os drivers próximos)
+
+        return res.status(201).json({
+            success: true,
+            message: "Procurando motoristas...",
+            ride: ride
+        });
+
+            } catch (error) {
+                await client.query('ROLLBACK');
+                console.error('❌ [DATABASE ERROR]:', error);
+                return res.status(500).json({ error: "Erro interno ao processar corrida" });
+            } finally {
+                client.release();
+            }
+        };
 
         // =================================================================
         // 3. 🔥 NOTIFICAÇÃO EM TEMPO REAL - CORRIGIDO COM ACK
@@ -130,7 +157,7 @@ exports.requestRide = async (req, res) => {
 
         // ✅ BUSCAR MOTORISTAS ONLINE E NOTIFICAR
         const driversRes = await pool.query(`
-            SELECT 
+            SELECT
                 dp.driver_id,
                 dp.lat,
                 dp.lng,
@@ -194,17 +221,17 @@ exports.requestRide = async (req, res) => {
                         req.io.to(driver.socket_id).emit('ride_opportunity', rideOpportunity, (response) => {
                             logSystem('RIDE_ACK', `✅ Motorista ${driver.driver_id} recebeu notificação (ACK: ${response?.received || true})`);
                         });
-                        
+
                         // EMITIR PARA A SALA PESSOAL DO MOTORISTA
                         req.io.to(`user_${driver.driver_id}`).emit('new_ride_available', rideOpportunity);
-                        
+
                         driversNotified++;
                         notifiedDrivers.push({
                             driver_id: driver.driver_id,
                             name: driver.name,
                             distance: parseFloat(distanceToPickup.toFixed(2))
                         });
-                        
+
                         logSystem('RIDE_NOTIFY', `✅ Notificação enviada para motorista ${driver.driver_id} (socket: ${driver.socket_id})`);
                     } catch (socketError) {
                         logError('RIDE_SOCKET_ERROR', { driver_id: driver.driver_id, error: socketError.message });
@@ -221,7 +248,7 @@ exports.requestRide = async (req, res) => {
         // ✅ SE NENHUM MOTORISTA FOI NOTIFICADO
         if (driversNotified === 0) {
             logSystem('RIDE_NO_DRIVERS', `⚠️ Nenhum motorista disponível para corrida #${ride.id}`);
-            
+
             try {
                 req.io.to(`user_${req.user.id}`).emit('ride_no_drivers', {
                     ride_id: ride.id,
