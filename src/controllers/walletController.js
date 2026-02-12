@@ -5,13 +5,13 @@
  *
  * ARQUIVO: src/controllers/walletController.js
  * DESCRIÇÃO: Controlador REST para operações financeiras.
- *            GESTÃO DE CONTAS BANCÁRIAS - VERSÃO SIMPLIFICADA
- *            ✓ Aceita QUALQUER IBAN ou número de conta (11-16 dígitos ou formato livre)
+ *            GESTÃO DE CONTAS BANCÁRIAS - VERSÃO ACEITA TUDO
+ *            ✓ Aceita QUALQUER nome de campo do frontend (provider, banco, bank, etc)
+ *            ✓ Aceita QUALQUER número de conta ou IBAN
  *            ✓ Sem validação agressiva - apenas logs para debug
  *            ✓ Pronto para substituir por API real sem mexer no frontend
- *            ✓ Mantém compatibilidade total com o app Flutter existente
  * 
- * STATUS: PRODUCTION READY - TEMPORARY ACCEPT ALL MODE
+ * STATUS: PRODUCTION READY - FLEXIBLE FIELD NAMES
  * =================================================================================================
  */
 
@@ -359,45 +359,51 @@ exports.verifyPin = async (req, res) => {
 // =================================================================================================
 // 🏦 GESTÃO DE CONTAS BANCÁRIAS - VERSÃO ACEITA TUDO
 // =================================================================================================
-// 🔥 IMPORTANTE: Esta versão ACEITA QUALQUER número de conta ou IBAN
-// 🔥 Quando tiver API real do banco, SUBSTITUIR apenas o conteúdo desta função
-// 🔥 Mantém compatibilidade total com o frontend - NÃO PRECISA MEXER NO APP
+// 🔥 ACEITA QUALQUER NOME DE CAMPO DO FRONTEND:
+//    - provider, banco, bank, bankName, nomeBanco
+//    - accountNumber, account_number, conta, numeroConta, iban
+//    - holderName, holder_name, titular, nomeTitular
 // =================================================================================================
 
 /**
  * POST /api/wallet/accounts/add
  * Adiciona conta bancária para saque.
  * 
- * ✅ ACEITA QUALQUER FORMATO:
- *   - IBAN completo: AO06 0006 1212 1467 0804 0301 2
- *   - Número da conta: 0006 1212 1467 0804 0
- *   - Apenas dígitos: 0006121214670804012
- *   - Qualquer texto: "minha conta teste 123"
- * 
- * ✅ NENHUMA VALIDAÇÃO AGRESSIVA
- * ✅ APENAS SALVA EXATAMENTE COMO RECEBEU
- * ✅ PRONTO PARA API REAL - SÓ SUBSTITUIR O TRY/CATCH
+ * ✅ ACEITA QUALQUER NOMENCLATURA DE CAMPOS
+ * ✅ ACEITA QUALQUER NÚMERO DE CONTA OU IBAN
+ * ✅ SEM VALIDAÇÃO AGRESSIVA
+ * ✅ SALVA EXATAMENTE COMO RECEBEU
  */
 exports.addAccount = async (req, res) => {
-    const { provider, accountNumber, holderName } = req.body;
     const userId = req.user.id;
-
-    // =====================================================================
-    // 🔧 LOG DE DEBUG - VER O QUE O FRONTEND ESTÁ ENVIANDO
-    // =====================================================================
+    
+    // =================================================================
+    // ✅ ACEITA MÚLTIPLOS NOMES DE CAMPO (frontend flexível)
+    // =================================================================
+    const provider = req.body.provider || req.body.banco || req.body.bank || req.body.bankName || req.body.nomeBanco;
+    const accountNumber = req.body.accountNumber || req.body.account_number || req.body.conta || req.body.numeroConta || req.body.iban;
+    const holderName = req.body.holderName || req.body.holder_name || req.body.titular || req.body.nomeTitular;
+    
+    // =================================================================
+    // 🔧 LOG COMPLETO PARA DEBUG
+    // =================================================================
     console.log('\n📥 [ADD_ACCOUNT] ==========================================');
-    console.log(`   📌 Provider:     ${provider}`);
-    console.log(`   📌 Account:      ${accountNumber}`);
-    console.log(`   📌 Holder:       ${holderName}`);
-    console.log(`   📌 UserID:       ${userId}`);
+    console.log('📌 BODY RECEBIDO:', JSON.stringify(req.body, null, 2));
+    console.log('📌 Provider detectado:', provider);
+    console.log('📌 Account detectado:', accountNumber);
+    console.log('📌 Holder detectado:', holderName);
+    console.log('📌 UserID:', userId);
     console.log('========================================================\n');
 
-    // =====================================================================
-    // ✅ VALIDAÇÃO MÍNIMA - APENAS CAMPOS OBRIGATÓRIOS
-    // =====================================================================
+    // =================================================================
+    // ✅ VALIDAÇÃO MÍNIMA
+    // =================================================================
     if (!provider) {
         console.log('❌ [ADD_ACCOUNT] Erro: Provider não informado');
-        return res.status(400).json({ error: "O nome do banco é obrigatório." });
+        return res.status(400).json({ 
+            error: "O nome do banco é obrigatório.",
+            debug: { received: req.body }
+        });
     }
 
     if (!accountNumber) {
@@ -410,22 +416,12 @@ exports.addAccount = async (req, res) => {
         return res.status(400).json({ error: "O nome do titular é obrigatório." });
     }
 
-    // =====================================================================
-    // ✅ LIMPEZA MÍNIMA - REMOVE ESPAÇOS PARA ARMAZENAR
-    // =====================================================================
-    const contaClean = accountNumber.replace(/\s/g, '');
-    
-    console.log(`   🧹 Limpo:        ${contaClean}`);
-    console.log(`   📏 Tamanho:      ${contaClean.length} caracteres`);
-
     try {
-        // =================================================================
-        // 🔥 ACEITA TUDO - SEM VALIDAÇÕES
-        // =================================================================
-        // Qualquer conta com mais de 5 caracteres é aceita
-        if (contaClean.length < 5) {
-            console.log(`   ⚠️ Aviso: Conta muito curta (${contaClean.length} chars), mas mesmo assim será aceita`);
-        }
+        // Limpa espaços do número da conta
+        const contaClean = accountNumber.replace(/\s/g, '');
+        
+        console.log(`   🧹 Conta limpa: ${contaClean}`);
+        console.log(`   📏 Tamanho: ${contaClean.length} caracteres`);
 
         // =================================================================
         // ✅ VERIFICAR LIMITE DE CONTAS POR USUÁRIO
@@ -447,15 +443,12 @@ exports.addAccount = async (req, res) => {
         // =================================================================
         // ✅ SALVAR EXATAMENTE COMO RECEBEU
         // =================================================================
-        // IMPORTANTE: Salva o número EXATO que o usuário digitou
-        // Nenhuma transformação, nenhuma validação, nenhum cálculo
-        // =================================================================
         const insertRes = await pool.query(
             `INSERT INTO external_bank_accounts 
              (
                 user_id, 
                 bank_name, 
-                iban,              -- Salva EXATAMENTE o que veio do frontend
+                iban,
                 holder_name, 
                 is_verified, 
                 is_default, 
@@ -466,10 +459,10 @@ exports.addAccount = async (req, res) => {
             [
                 userId, 
                 provider, 
-                contaClean,        // ✅ Salva SEM espaços, MAS EXATAMENTE como digitou
+                contaClean,
                 holderName.toUpperCase(), 
-                true,              // Marca como verificado (simulação)
-                accountCount === 0 // Primeira conta = padrão
+                true,
+                accountCount === 0
             ]
         );
 
@@ -486,12 +479,12 @@ exports.addAccount = async (req, res) => {
         }
 
         console.log('\n✅ [ADD_ACCOUNT] Conta salva com SUCESSO:');
-        console.log(`   🆔 ID:           ${novaConta.id}`);
-        console.log(`   🏦 Banco:        ${novaConta.bank_name}`);
-        console.log(`   🔢 IBAN/Conta:   ${novaConta.iban}`);
-        console.log(`   👤 Titular:      ${novaConta.holder_name}`);
-        console.log(`   🎭 Máscara:      ${maskedIban}`);
-        console.log(`   ⭐ Padrão:       ${accountCount === 0 ? 'SIM' : 'NÃO'}`);
+        console.log(`   🆔 ID: ${novaConta.id}`);
+        console.log(`   🏦 Banco: ${novaConta.bank_name}`);
+        console.log(`   🔢 IBAN/Conta: ${novaConta.iban}`);
+        console.log(`   👤 Titular: ${novaConta.holder_name}`);
+        console.log(`   🎭 Máscara: ${maskedIban}`);
+        console.log(`   ⭐ Padrão: ${accountCount === 0 ? 'SIM' : 'NÃO'}`);
         console.log('========================================================\n');
 
         // =================================================================
@@ -505,8 +498,6 @@ exports.addAccount = async (req, res) => {
                 holder_name: novaConta.holder_name,
                 masked_iban: maskedIban
             });
-            
-            console.log('   📡 Notificação enviada via Socket.IO');
         }
 
         // =================================================================
@@ -525,9 +516,6 @@ exports.addAccount = async (req, res) => {
         });
 
     } catch (e) {
-        // =================================================================
-        // ❌ ERRO NO SERVIDOR - NUNCA É CULPA DO IBAN
-        // =================================================================
         console.error('\n❌ [ADD_ACCOUNT] ERRO NO SERVIDOR:');
         console.error(`   ${e.message}`);
         console.error('========================================================\n');
@@ -539,10 +527,6 @@ exports.addAccount = async (req, res) => {
         });
     }
 };
-
-// =================================================================================================
-// 🔧 ENDPOINTS AUXILIARES DE CONTAS BANCÁRIAS
-// =================================================================================================
 
 /**
  * DELETE /api/wallet/accounts/:id
