@@ -281,51 +281,73 @@ exports.updateProfile = async (req, res) => {
 };
 
 /**
- * UPLOAD PROFILE PHOTO
- * Rota: POST /api/profile/photo
- * Descrição: Recebe arquivo via Multer, salva no disco, atualiza DB e remove foto antiga.
+ * 🔄 PROTOCOLO: ATUALIZAÇÃO DE FOTO VIA BASE64 (TITANIUM FULL)
+ * Rota: POST ou PUT /api/profile/photo
+ * Descrição: Processa a imagem convertida em string pelo App e salva no DB.
  */
 exports.uploadPhoto = async (req, res) => {
+    // 1. Obter o ID do usuário através do middleware de autenticação
     const userId = req.user.id;
 
-    if (!req.file) {
-        return res.status(400).json({ error: "Nenhum arquivo de imagem enviado." });
+    // 2. Extrair a string Base64 do corpo da requisição JSON
+    // Note: O Flutter envia {'photo': 'base64string...'}
+    const { photo } = req.body;
+
+    // Validação básica de presença de dados
+    if (!photo) {
+        return res.status(400).json({
+            success: false,
+            error: "Nenhuma string de imagem detectada no corpo da requisição."
+        });
     }
 
     try {
-        // 1. Identificar foto antiga para remoção
-        const userRes = await pool.query("SELECT photo FROM users WHERE id = $1", [userId]);
-        const oldPhoto = userRes.rows[0]?.photo;
+        // 3. Atualização Crítica no Banco de Dados
+        // Usamos TEXT no banco para suportar o tamanho do Base64
+        const query = `
+            UPDATE users
+            SET photo = $1,
+                updated_at = NOW()
+            WHERE id = $2
+            RETURNING id, name, photo, updated_at
+        `;
 
-        // 2. Definir novo caminho (URL relativa)
-        // O Multer salva apenas o filename, precisamos prefixar
-        const photoUrl = `/uploads/${req.file.filename}`;
+        const result = await pool.query(query, [photo, userId]);
 
-        // 3. Atualizar Banco
-        await pool.query(
-            "UPDATE users SET photo = $1, updated_at = NOW() WHERE id = $2",
-            [photoUrl, userId]
-        );
-
-        // 4. Limpeza (Cleanup)
-        if (oldPhoto && oldPhoto !== photoUrl) {
-            deleteOldFile(oldPhoto);
+        // Verificação se o usuário existe
+        if (result.rowCount === 0) {
+            return res.status(404).json({
+                success: false,
+                error: "Usuário não encontrado no sistema."
+            });
         }
 
-        logSystem('PHOTO_UPLOAD', `Foto de perfil atualizada para User ${userId}`);
+        // Log de sucesso para auditoria do sistema
+        if (typeof logSystem === 'function') {
+            logSystem('PHOTO_SYNC', `Perfil atualizado: Usuário ${userId} sincronizou nova foto.`);
+        }
 
-        res.json({
+        // 4. Resposta de Sucesso (Consumida pelo Flutter AuthProvider)
+        // Retornamos o objeto atualizado para que o App possa atualizar o estado local
+        res.status(200).json({
             success: true,
-            message: "Foto de perfil atualizada.",
-            photo_url: photoUrl
+            message: "Sincronização de foto concluída",
+            user: result.rows[0], // Opcional: enviar o user completo facilita o merge no Flutter
+            photo: photo         // Retorna a string para confirmação imediata
         });
 
     } catch (e) {
-        // Se der erro no banco, tenta remover o arquivo que acabou de subir para não deixar lixo
-        if (req.file) deleteOldFile(req.file.path);
-        
-        logError('PHOTO_UPLOAD_ERROR', e);
-        res.status(500).json({ error: "Erro ao processar upload da foto." });
+        // Log de erro detalhado no servidor
+        if (typeof logError === 'function') {
+            logError('PHOTO_UPLOAD_FATAL', e);
+        } else {
+            console.error('❌ Erro Crítico uploadPhoto:', e);
+        }
+
+        res.status(500).json({
+            success: false,
+            error: "Falha na rede ou erro interno no processamento da imagem."
+        });
     }
 };
 
