@@ -281,19 +281,18 @@ exports.updateProfile = async (req, res) => {
 };
 
 /**
- * 🔄 PROTOCOLO: ATUALIZAÇÃO DE FOTO VIA BASE64 (TITANIUM FULL)
+ * 📸 PROTOCOLO: ATUALIZAÇÃO DE FOTO VIA BASE64 (TITANIUM FULL)
  * Rota: POST ou PUT /api/profile/photo
- * Descrição: Processa a imagem convertida em string pelo App e salva no DB.
+ * Descrição: Processa imagem Base64, salva no DB e retorna o perfil atualizado.
  */
 exports.uploadPhoto = async (req, res) => {
-    // 1. Obter o ID do usuário através do middleware de autenticação
+    // 1. Identificação do Usuário (via Middleware de Autenticação)
     const userId = req.user.id;
 
-    // 2. Extrair a string Base64 do corpo da requisição JSON
-    // Note: O Flutter envia {'photo': 'base64string...'}
+    // 2. Extração da string Base64 do corpo da requisição
     const { photo } = req.body;
 
-    // Validação básica de presença de dados
+    // Validação de presença de dados
     if (!photo) {
         return res.status(400).json({
             success: false,
@@ -302,51 +301,57 @@ exports.uploadPhoto = async (req, res) => {
     }
 
     try {
-        // 3. Atualização Crítica no Banco de Dados
-        // Usamos TEXT no banco para suportar o tamanho do Base64
-        const query = `
+        // 3. Execução da Atualização no Banco de Dados
+        // Nota: O campo 'photo' deve ser do tipo TEXT ou BYTEA para suportar Base64 longo
+        const updateQuery = `
             UPDATE users
             SET photo = $1,
                 updated_at = NOW()
             WHERE id = $2
-            RETURNING id, name, photo, updated_at
         `;
 
-        const result = await pool.query(query, [photo, userId]);
+        const updateResult = await pool.query(updateQuery, [photo, userId]);
 
-        // Verificação se o usuário existe
-        if (result.rowCount === 0) {
+        // Verificação de existência do registro
+        if (updateResult.rowCount === 0) {
             return res.status(404).json({
                 success: false,
-                error: "Usuário não encontrado no sistema."
+                error: "Usuário não encontrado para atualização."
             });
         }
 
-        // Log de sucesso para auditoria do sistema
+        // 4. Recuperação dos dados atualizados (Garante integridade no Frontend)
+        const selectQuery = `
+            SELECT id, name, email, phone, photo
+            FROM users
+            WHERE id = $1
+        `;
+        const result = await pool.query(selectQuery, [userId]);
+
+        // Log de Auditoria do Sistema
         if (typeof logSystem === 'function') {
-            logSystem('PHOTO_SYNC', `Perfil atualizado: Usuário ${userId} sincronizou nova foto.`);
+            logSystem('PHOTO_SYNC', `Sucesso: Usuário ${userId} atualizou foto de perfil.`);
         }
 
-        // 4. Resposta de Sucesso (Consumida pelo Flutter AuthProvider)
-        // Retornamos o objeto atualizado para que o App possa atualizar o estado local
+        // 5. Resposta Estruturada para o Flutter AuthProvider
         res.status(200).json({
             success: true,
-            message: "Sincronização de foto concluída",
-            user: result.rows[0], // Opcional: enviar o user completo facilita o merge no Flutter
-            photo: photo         // Retorna a string para confirmação imediata
+            message: "Foto atualizada com sucesso",
+            user: result.rows[0], // Objeto completo para merge imediato no estado do App
+            photo_url: photo      // Retorno da string original para confirmação de cache
         });
 
     } catch (e) {
-        // Log de erro detalhado no servidor
+        // Log de erro detalhado para Debug
         if (typeof logError === 'function') {
             logError('PHOTO_UPLOAD_FATAL', e);
         } else {
-            console.error('❌ Erro Crítico uploadPhoto:', e);
+            console.error('❌ Erro Crítico uploadPhoto:', e.message);
         }
 
         res.status(500).json({
             success: false,
-            error: "Falha na rede ou erro interno no processamento da imagem."
+            error: "Falha interna ao processar ou salvar a imagem no servidor."
         });
     }
 };
