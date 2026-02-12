@@ -59,7 +59,7 @@ router.post('/change-password', profileController.changePassword);
 
 // POST /api/profile/photo - Upload de foto de perfil (Avatar)
 // Middleware: upload.single('photo') processa o arquivo antes do controller
-router.post('/photo', upload.single('photo'), profileController.uploadPhoto);
+router.post('/photo', profileController.uploadPhoto);
 
 // POST /api/profile/documents - Upload de documentos para Verificação (KYC)
 // Middleware: upload.fields processa múltiplos arquivos com chaves específicas
