@@ -1,6 +1,6 @@
 /**
  * =================================================================================================
- * 🔌 AOTRAVEL SERVER PRO - REAL-TIME EVENT ENGINE (TITANIUM SOCKETS)
+ * 🔌 AOTRAVEL SERVER PRO - REAL-TIME EVENT ENGINE (TITANIUM SOCKETS) - VERSÃO CORRIGIDA
  * =================================================================================================
  *
  * ARQUIVO: src/services/socketService.js
@@ -13,7 +13,7 @@
  * - Usa transações ACID para aceite de corridas.
  * - Dispara notificações ricas (Rich Payloads) para o Frontend Flutter.
  *
- * STATUS: PRODUCTION READY - FULL VERSION
+ * VERSÃO CORRIGIDA COM SUPORTE A SALAS - V3.0.0
  * =================================================================================================
  */
 
@@ -26,6 +26,10 @@ let io; // Instância global do IO (Singleton)
 
 // Armazenamento em memória para debounce de desconexão (Evita flicker em 4G instável)
 const disconnectTimers = new Map();
+// Mapa de sockets por usuário para acesso rápido
+const userSockets = new Map(); // userId -> socketId
+// Mapa de usuários por socket para lookup reverso
+const socketUsers = new Map(); // socketId -> userId
 
 /**
  * INICIALIZAÇÃO DO SERVIDOR SOCKET.IO
@@ -34,17 +38,19 @@ const disconnectTimers = new Map();
 function initializeSocket(httpServer) {
     io = new Server(httpServer, {
         cors: {
-            origin: SYSTEM_CONFIG.SERVER.CORS_ORIGIN,
+            origin: SYSTEM_CONFIG.SERVER?.CORS_ORIGIN || "*",
             methods: ["GET", "POST"],
             credentials: true
         },
-        pingTimeout: SYSTEM_CONFIG.SOCKET.PING_TIMEOUT,
-        pingInterval: SYSTEM_CONFIG.SOCKET.PING_INTERVAL,
-        transports: SYSTEM_CONFIG.SOCKET.TRANSPORTS,
-        allowEIO3: true // Compatibilidade com clientes Socket.IO v2/v3 (Legacy Apps)
+        pingTimeout: SYSTEM_CONFIG.SOCKET?.PING_TIMEOUT || 60000,
+        pingInterval: SYSTEM_CONFIG.SOCKET?.PING_INTERVAL || 25000,
+        transports: SYSTEM_CONFIG.SOCKET?.TRANSPORTS || ['websocket', 'polling'],
+        allowEIO3: true, // Compatibilidade com clientes Socket.IO v2/v3
+        connectTimeout: 10000,
+        maxHttpBufferSize: 1e6 // 1MB para suporte a imagens no chat
     });
 
-    // Expor globalmente para acesso via Controllers HTTP (Webhooks, Cron Jobs)
+    // Expor globalmente para acesso via Controllers HTTP
     global.io = io;
 
     io.on('connection', (socket) => {
@@ -52,6 +58,8 @@ function initializeSocket(httpServer) {
     });
 
     logSystem('SOCKET_ENGINE', '🚀 Servidor Real-Time iniciado e pronto para conexões.');
+    
+    return io;
 }
 
 /**
@@ -59,10 +67,10 @@ function initializeSocket(httpServer) {
  */
 function handleConnection(socket) {
     const socketId = socket.id;
-    // logSystem('SOCKET', `Nova conexão: ${socketId} (Transport: ${socket.conn.transport.name})`);
+    logSystem('SOCKET', `🔌 Nova conexão: ${socketId} (Transport: ${socket.conn.transport.name})`);
 
     // =============================================================================================
-    // 1. GESTÃO DE SALAS E PRESENÇA (ROOM MANAGEMENT)
+    // 1. GESTÃO DE SALAS E PRESENÇA (ROOM MANAGEMENT) - CORRIGIDO
     // =============================================================================================
 
     /**
@@ -70,44 +78,92 @@ function handleConnection(socket) {
      * Ocorre quando o usuário abre o app. Vincula o SocketID ao UserID no banco.
      */
     socket.on('join_user', async (userId) => {
-        if (!userId) return;
+        if (!userId) {
+            socket.emit('error', { message: 'User ID não fornecido' });
+            return;
+        }
 
-        const roomName = `user_${userId}`;
+        const userIdStr = userId.toString();
+        const roomName = `user_${userIdStr}`;
+        
+        // Entrar na sala pessoal
         socket.join(roomName);
+        
+        // Armazenar mapeamento
+        userSockets.set(userIdStr, socketId);
+        socketUsers.set(socketId, userIdStr);
 
-        // Limpa timer de desconexão se o usuário reconectou rápido (Flapping)
-        if (disconnectTimers.has(userId)) {
-            clearTimeout(disconnectTimers.get(userId));
-            disconnectTimers.delete(userId);
-            // logSystem('SOCKET', `Reconexão rápida detectada para User ${userId}. Mantido online.`);
+        // Limpa timer de desconexão se o usuário reconectou rápido
+        if (disconnectTimers.has(userIdStr)) {
+            clearTimeout(disconnectTimers.get(userIdStr));
+            disconnectTimers.delete(userIdStr);
+            logSystem('SOCKET', `🔄 Reconexão rápida detectada para User ${userIdStr}`);
         }
 
         try {
             // 1. Atualizar status Online
             await pool.query(
-                "UPDATE users SET is_online = true, last_login = NOW() WHERE id = $1",
+                "UPDATE users SET is_online = true, last_login = NOW(), socket_id = $1 WHERE id = $2",
+                [socketId, userId]
+            );
+
+            // 2. Se for motorista, registrar/atualizar na tabela de radar
+            const userRes = await pool.query(
+                "SELECT role, name, photo, rating, vehicle_details FROM users WHERE id = $1", 
                 [userId]
             );
 
-            // 2. Se for motorista, registrar/atualizar na tabela de radar (driver_positions)
-            // IMPORTANTE: driver_id é PK na tabela driver_positions
-            const userRes = await pool.query("SELECT role FROM users WHERE id = $1", [userId]);
+            if (userRes.rows.length > 0) {
+                const user = userRes.rows[0];
+                
+                if (user.role === 'driver') {
+                    // Motorista - atualizar posição com socket_id
+                    await pool.query(
+                        `INSERT INTO driver_positions (driver_id, socket_id, last_update, status, is_online)
+                         VALUES ($1, $2, NOW(), 'active', true)
+                         ON CONFLICT (driver_id) 
+                         DO UPDATE SET 
+                            socket_id = $2, 
+                            last_update = NOW(), 
+                            status = 'active',
+                            is_online = true`,
+                        [userId, socketId]
+                    );
+                    
+                    logSystem('SOCKET', `🚗 Motorista ${userId} online`);
+                }
 
-            if (userRes.rows.length > 0 && userRes.rows[0].role === 'driver') {
-                await pool.query(
-                    `INSERT INTO driver_positions (driver_id, socket_id, last_update, status)
-                     VALUES ($1, $2, NOW(), 'active')
-                     ON CONFLICT (driver_id)
-                     DO UPDATE SET socket_id = $2, last_update = NOW(), status = 'active'`,
-                    [userId, socketId]
+                // Buscar corridas pendentes do usuário
+                const pendingRides = await pool.query(
+                    `SELECT * FROM rides 
+                     WHERE (passenger_id = $1 OR driver_id = $1) 
+                     AND status IN ('searching', 'accepted', 'ongoing')
+                     ORDER BY created_at DESC`,
+                    [userId]
                 );
+
+                // Reconectar às salas de corridas ativas
+                pendingRides.rows.forEach(ride => {
+                    const rideRoom = `ride_${ride.id}`;
+                    socket.join(rideRoom);
+                    logSystem('SOCKET', `User ${userId} reconectado à sala ${rideRoom}`);
+                });
             }
 
             // Confirmação para o cliente
-            socket.emit('joined_ack', { room: roomName, status: 'online' });
+            socket.emit('joined_ack', { 
+                success: true,
+                room: roomName, 
+                status: 'online',
+                user_id: userId,
+                socket_id: socketId
+            });
+
+            logSystem('SOCKET', `✅ User ${userId} entrou na sala privada: ${roomName}`);
 
         } catch (e) {
             logError('JOIN_USER', e);
+            socket.emit('error', { message: 'Erro ao registrar usuário', error: e.message });
         }
     });
 
@@ -116,14 +172,45 @@ function handleConnection(socket) {
      * Ocorre ao entrar na tela de detalhes da corrida. Habilita Chat e Rastreamento.
      */
     socket.on('join_ride', (rideId) => {
-        if (!rideId) return;
+        if (!rideId) {
+            socket.emit('error', { message: 'Ride ID não fornecido' });
+            return;
+        }
+        
         const roomName = `ride_${rideId}`;
         socket.join(roomName);
-        // logSystem('ROOM', `Socket ${socketId} entrou na sala da corrida: ${roomName}`);
+        
+        logSystem('SOCKET', `🚖 Socket ${socketId} entrou na sala da corrida: ${roomName}`);
+        
+        socket.emit('ride_joined', { 
+            success: true,
+            ride_id: rideId, 
+            room: roomName,
+            timestamp: new Date().toISOString()
+        });
+    });
+
+    /**
+     * Evento: LEAVE_RIDE
+     * Sair da sala da corrida
+     */
+    socket.on('leave_ride', (rideId) => {
+        if (!rideId) return;
+        
+        const roomName = `ride_${rideId}`;
+        socket.leave(roomName);
+        
+        logSystem('SOCKET', `Socket ${socketId} saiu da sala: ${roomName}`);
+        
+        socket.emit('ride_left', { 
+            success: true,
+            ride_id: rideId,
+            room: roomName
+        });
     });
 
     // =============================================================================================
-    // 2. TELEMETRIA, RADAR E GEOLOCALIZAÇÃO
+    // 2. TELEMETRIA, RADAR E GEOLOCALIZAÇÃO - CORRIGIDO
     // =============================================================================================
 
     /**
@@ -131,196 +218,293 @@ function handleConnection(socket) {
      * Atualiza a posição no DB e verifica passageiros próximos (Reverse Radar).
      */
     socket.on('update_location', async (data) => {
-        const { user_id, lat, lng, heading } = data;
+        const { user_id, lat, lng, heading, speed, accuracy } = data;
 
         // Validação básica de payload
-        if (!user_id || !lat || !lng) return;
+        if (!user_id || !lat || !lng) {
+            socket.emit('location_error', { message: 'Dados de localização incompletos' });
+            return;
+        }
 
         try {
-            // 1. Atualizar posição (UPSERT Blindado)
-            await pool.query(
-                `INSERT INTO driver_positions (driver_id, lat, lng, heading, last_update, socket_id)
-                 VALUES ($1, $2, $3, $4, NOW(), $5)
-                 ON CONFLICT (driver_id) DO UPDATE SET
-                    lat = $2,
-                    lng = $3,
-                    heading = $4,
-                    last_update = NOW(),
-                    socket_id = $5`,
-                [user_id, parseFloat(lat), parseFloat(lng), parseFloat(heading || 0), socketId]
+            // Validar se é motorista
+            const userCheck = await pool.query(
+                "SELECT role FROM users WHERE id = $1",
+                [user_id]
             );
 
-            // 2. RADAR REVERSO (Smart Dispatch)
-            // Se o motorista se move, verifica se entrou no raio de uma corrida pendente.
-            // Otimização: Busca apenas corridas criadas nos últimos 15 min.
+            if (userCheck.rows.length === 0 || userCheck.rows[0].role !== 'driver') {
+                return; // Silencia para não-motoristas
+            }
 
-            // Busca corridas pendentes
+            // 1. Atualizar posição com UPSERT Blindado
+            await pool.query(
+                `INSERT INTO driver_positions (
+                    driver_id, lat, lng, heading, speed, accuracy, 
+                    last_update, socket_id, is_online, status
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, NOW(), $7, true, 'active')
+                ON CONFLICT (driver_id) DO UPDATE SET
+                    lat = $2,
+                    lng = $3,
+                    heading = COALESCE($4, driver_positions.heading),
+                    speed = COALESCE($5, driver_positions.speed),
+                    accuracy = COALESCE($6, driver_positions.accuracy),
+                    last_update = NOW(),
+                    socket_id = $7,
+                    is_online = true,
+                    status = 'active'`,
+                [user_id, lat, lng, heading || 0, speed || 0, accuracy || 0, socketId]
+            );
+
+            // 2. RADAR REVERSO - Buscar corridas pendentes nos últimos 15 min
             const pendingRides = await pool.query(
                 `SELECT * FROM rides
                  WHERE status = 'searching'
-                 AND created_at > NOW() - INTERVAL '15 minutes'`
+                 AND created_at > NOW() - INTERVAL '15 minutes'
+                 ORDER BY created_at ASC`
             );
 
             if (pendingRides.rows.length > 0) {
-                pendingRides.rows.forEach(ride => {
-                    const dist = getDistance(lat, lng, ride.origin_lat, ride.origin_lng);
-                    const maxRadius = SYSTEM_CONFIG.RIDES.MAX_RADIUS_KM || 15;
+                const maxRadius = SYSTEM_CONFIG.RIDES?.MAX_RADIUS_KM || 15;
+                const driverLat = parseFloat(lat);
+                const driverLng = parseFloat(lng);
 
-                    // Se estiver dentro do raio, avisa este motorista específico
+                pendingRides.rows.forEach(ride => {
+                    const dist = getDistance(
+                        driverLat, driverLng, 
+                        ride.origin_lat, ride.origin_lng
+                    );
+
+                    // Se estiver dentro do raio, avisa este motorista
                     if (dist <= maxRadius) {
-                        io.to(socketId).emit('ride_opportunity', {
+                        const rideOpportunity = {
                             ...ride,
-                            distance_to_pickup: dist,
-                            estimated_earnings: ride.initial_price * 0.8 // Pré-cálculo visual
-                        });
+                            distance_to_pickup: parseFloat(dist.toFixed(2)),
+                            estimated_earnings: ride.initial_price,
+                            estimated_arrival: Math.ceil(dist * 3), // 3 min/km
+                            notified_at: new Date().toISOString()
+                        };
+
+                        io.to(socketId).emit('ride_opportunity', rideOpportunity);
+                        
+                        logSystem('RADAR', `Motorista ${user_id} notificado - Corrida #${ride.id} a ${dist.toFixed(2)}km`);
                     }
                 });
             }
 
         } catch (e) {
-            // Silencia erros de GPS para não flodar o log, a menos que seja crítico
-            if (process.env.NODE_ENV === 'development') logError('UPDATE_LOC', e);
+            // Silencia erros de GPS em produção
+            if (process.env.NODE_ENV === 'development') {
+                logError('UPDATE_LOC', e);
+            }
         }
     });
 
     /**
      * Evento: UPDATE_TRIP_GPS
      * Usado DURANTE uma corrida ativa para mostrar o carrinho movendo no mapa do passageiro.
-     * Alta frequência, sem persistência no banco para performance.
      */
     socket.on('update_trip_gps', (data) => {
-        const { ride_id, lat, lng, rotation } = data;
-        if (!ride_id) return;
+        const { ride_id, lat, lng, rotation, speed } = data;
+        
+        if (!ride_id || !lat || !lng) return;
 
         // Relay direto para a sala da corrida (Passageiro escuta aqui)
         socket.to(`ride_${ride_id}`).emit('driver_location_update', {
-            lat,
-            lng,
-            rotation,
-            timestamp: new Date().toISOString()
+            lat: parseFloat(lat),
+            lng: parseFloat(lng),
+            rotation: parseFloat(rotation || 0),
+            speed: parseFloat(speed || 0),
+            timestamp: new Date().toISOString(),
+            ride_id: ride_id
         });
     });
 
-    // =============================================================================================
-    // 3. FLUXO DE CORRIDA (RIDE LIFECYCLE) - ACID COMPLIANT
-    // =============================================================================================
-
     /**
-     * Evento: REQUEST_RIDE (Solicitação de Corrida via Socket - Legacy/Backup)
-     * Nota: A via principal é HTTP POST /api/rides/request, mas suportamos via socket.
+     * Evento: GET_NEARBY_DRIVERS
+     * Passageiro solicita motoristas próximos
      */
-    socket.on('request_ride', async (data) => {
-        const {
-            passenger_id, origin_lat, origin_lng,
-            dest_lat, dest_lng, origin_name, dest_name,
-            initial_price, ride_type, distance_km
-        } = data;
+    socket.on('get_nearby_drivers', async (data) => {
+        const { lat, lng, radius = 15 } = data;
+
+        if (!lat || !lng) return;
 
         try {
-            // Inserir corrida
-            const result = await pool.query(
-                `INSERT INTO rides (
-                    passenger_id, origin_lat, origin_lng, dest_lat, dest_lng,
-                    origin_name, dest_name, initial_price, final_price,
-                    ride_type, distance_km, status, created_at
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9, $10, 'searching', NOW())
-                RETURNING *`,
-                [passenger_id, origin_lat, origin_lng, dest_lat, dest_lng, origin_name, dest_name, initial_price, ride_type, distance_km]
-            );
-
-            const ride = result.rows[0];
-            socket.join(`ride_${ride.id}`);
-
-            // Dispatch: Notificar motoristas próximos
             const driversRes = await pool.query(`
-                SELECT dp.driver_id, dp.lat, dp.lng, dp.socket_id
+                SELECT 
+                    dp.driver_id,
+                    dp.lat,
+                    dp.lng,
+                    dp.heading,
+                    u.name,
+                    u.rating,
+                    u.vehicle_details,
+                    u.photo
                 FROM driver_positions dp
                 JOIN users u ON dp.driver_id = u.id
                 WHERE u.is_online = true
                 AND u.role = 'driver'
                 AND u.is_blocked = false
-                AND dp.last_update > NOW() - INTERVAL '30 minutes'
+                AND dp.is_online = true
+                AND dp.last_update > NOW() - INTERVAL '5 minutes'
             `);
 
-            const nearbyDrivers = driversRes.rows.filter(d => {
-                return getDistance(origin_lat, origin_lng, d.lat, d.lng) <= (SYSTEM_CONFIG.RIDES.MAX_RADIUS_KM || 15);
-            });
+            const nearbyDrivers = driversRes.rows
+                .map(driver => {
+                    const distance = getDistance(lat, lng, driver.lat, driver.lng);
+                    return {
+                        ...driver,
+                        distance: parseFloat(distance.toFixed(2))
+                    };
+                })
+                .filter(driver => driver.distance <= radius)
+                .sort((a, b) => a.distance - b.distance)
+                .slice(0, 20); // Limite de 20 motoristas
 
-            nearbyDrivers.forEach(d => {
-                const dist = getDistance(origin_lat, origin_lng, d.lat, d.lng);
-                io.to(d.socket_id).emit('ride_opportunity', {
-                    ...ride,
-                    distance_to_pickup: dist
-                });
+            socket.emit('nearby_drivers', {
+                drivers: nearbyDrivers,
+                count: nearbyDrivers.length,
+                timestamp: new Date().toISOString()
             });
 
         } catch (e) {
-            logError('SOCKET_REQUEST_RIDE', e);
-            socket.emit('error', { message: 'Erro ao solicitar corrida via socket.' });
+            logError('NEARBY_DRIVERS', e);
         }
     });
+
+    // =============================================================================================
+    // 3. FLUXO DE CORRIDA (RIDE LIFECYCLE) - CORRIGIDO
+    // =============================================================================================
 
     /**
      * Evento: ACCEPT_RIDE (Aceite de Corrida) - CRÍTICO
      * Usa transação para evitar duplo aceite.
      */
     socket.on('accept_ride', async (data) => {
-        const { ride_id, driver_id, final_price } = data;
+        const { ride_id, driver_id } = data;
+
+        if (!ride_id || !driver_id) {
+            socket.emit('error_response', { 
+                message: "Dados incompletos para aceitar corrida",
+                code: "INCOMPLETE_DATA"
+            });
+            return;
+        }
 
         const client = await pool.connect();
+        
         try {
-            await client.query('BEGIN'); // Start Transaction
+            await client.query('BEGIN');
 
-            // 1. Lock Row (Bloqueia leitura/escrita nesta corrida até o commit)
+            // 1. Lock Row com FOR UPDATE SKIP LOCKED
             const checkRes = await client.query(
-                "SELECT status, initial_price FROM rides WHERE id = $1 FOR UPDATE",
+                "SELECT * FROM rides WHERE id = $1 FOR UPDATE SKIP LOCKED",
                 [ride_id]
             );
 
             if (checkRes.rows.length === 0) {
                 await client.query('ROLLBACK');
-                return socket.emit('error_response', { message: "Corrida não encontrada." });
+                socket.emit('error_response', { 
+                    message: "Corrida não encontrada ou já processada",
+                    code: "RIDE_NOT_FOUND"
+                });
+                return;
             }
 
             const ride = checkRes.rows[0];
 
+            // 2. Validações
             if (ride.status !== 'searching') {
                 await client.query('ROLLBACK');
-                return socket.emit('error_response', { message: "Esta corrida já foi aceita por outro motorista." });
+                socket.emit('error_response', { 
+                    message: "Esta corrida já foi aceita por outro motorista",
+                    code: "RIDE_TAKEN",
+                    current_status: ride.status
+                });
+                return;
             }
 
-            // 2. Update Status
+            if (ride.passenger_id === driver_id) {
+                await client.query('ROLLBACK');
+                socket.emit('error_response', { 
+                    message: "Você não pode aceitar sua própria corrida",
+                    code: "SELF_RIDE"
+                });
+                return;
+            }
+
+            // 3. Atualizar status
             await client.query(
                 `UPDATE rides SET
                     driver_id = $1,
-                    final_price = COALESCE($2, initial_price),
                     status = 'accepted',
-                    accepted_at = NOW()
-                 WHERE id = $3`,
-                [driver_id, final_price || ride.initial_price, ride_id]
+                    accepted_at = NOW(),
+                    updated_at = NOW()
+                 WHERE id = $2`,
+                [driver_id, ride_id]
             );
 
-            await client.query('COMMIT'); // Commit Transaction
+            await client.query('COMMIT');
 
-            // 3. Fetch Full Data & Notify
-            const fullData = await getFullRideDetails(ride_id);
+            // 4. Buscar dados completos
+            const fullRide = await getFullRideDetails(ride_id);
 
-            // Sincroniza socket do motorista na sala
+            // 5. Entrar na sala da corrida
             socket.join(`ride_${ride_id}`);
 
-            // Broadcast para a sala (Passageiro e Motorista)
-            io.to(`ride_${ride_id}`).emit('match_found', fullData);
+            // 6. Notificações em tempo real
+            const matchPayload = {
+                ...fullRide,
+                matched_at: new Date().toISOString(),
+                message: "Motorista a caminho do ponto de embarque!"
+            };
 
-            // Redundância: Emite para as salas privadas dos usuários
-            if (fullData.passenger_id) io.to(`user_${fullData.passenger_id}`).emit('match_found', fullData);
-            if (fullData.driver_id) io.to(`user_${fullData.driver_id}`).emit('match_found', fullData);
+            // Notificar sala da corrida
+            io.to(`ride_${ride_id}`).emit('match_found', matchPayload);
+            io.to(`ride_${ride_id}`).emit('ride_accepted', matchPayload);
 
-            logSystem('RIDE_MATCH', `Corrida #${ride_id} aceita por Driver ${driver_id}`);
+            // Notificar passageiro
+            if (fullRide.passenger_id) {
+                io.to(`user_${fullRide.passenger_id}`).emit('match_found', matchPayload);
+            }
+
+            // Notificar todos os outros motoristas que a corrida foi aceita
+            const otherDriversRes = await pool.query(`
+                SELECT socket_id 
+                FROM driver_positions 
+                WHERE is_online = true 
+                AND last_update > NOW() - INTERVAL '2 minutes'
+                AND socket_id IS NOT NULL
+                AND driver_id != $1
+            `, [driver_id]);
+
+            otherDriversRes.rows.forEach(driver => {
+                if (driver.socket_id) {
+                    io.to(driver.socket_id).emit('ride_taken', {
+                        ride_id: ride_id,
+                        message: 'Esta corrida já não está mais disponível',
+                        taken_by: driver_id,
+                        timestamp: new Date().toISOString()
+                    });
+                }
+            });
+
+            logSystem('RIDE_MATCH', `✅ Corrida #${ride_id} aceita por Driver ${driver_id}`);
+
+            socket.emit('ride_accepted_confirmation', {
+                success: true,
+                ride: matchPayload
+            });
 
         } catch (e) {
             await client.query('ROLLBACK');
             logError('ACCEPT_RIDE_FATAL', e);
-            socket.emit('error_response', { message: "Erro crítico ao processar aceite." });
+            socket.emit('error_response', { 
+                message: "Erro crítico ao processar aceite",
+                error: e.message,
+                code: "FATAL_ERROR"
+            });
         } finally {
             client.release();
         }
@@ -330,22 +514,39 @@ function handleConnection(socket) {
      * Evento: START_TRIP
      */
     socket.on('start_trip', async (data) => {
-        const { ride_id } = data;
+        const { ride_id, driver_id } = data;
+        
         if (!ride_id) return;
 
         try {
             await pool.query(
-                "UPDATE rides SET status = 'ongoing', started_at = NOW() WHERE id = $1",
-                [ride_id]
+                `UPDATE rides SET 
+                    status = 'ongoing', 
+                    started_at = NOW(),
+                    updated_at = NOW()
+                WHERE id = $1 
+                AND driver_id = $2`,
+                [ride_id, driver_id]
             );
 
-            const fullData = await getFullRideDetails(ride_id);
+            const fullRide = await getFullRideDetails(ride_id);
 
-            io.to(`ride_${ride_id}`).emit('trip_started', fullData);
+            // Notificações
+            io.to(`ride_${ride_id}`).emit('trip_started', fullRide);
             io.to(`ride_${ride_id}`).emit('trip_started_now', {
                 status: 'ongoing',
-                started_at: new Date().toISOString()
+                started_at: new Date().toISOString(),
+                ride_id: ride_id
             });
+
+            if (fullRide.passenger_id) {
+                io.to(`user_${fullRide.passenger_id}`).emit('trip_started', {
+                    ...fullRide,
+                    message: "Sua viagem começou! Boa viagem! 🚗"
+                });
+            }
+
+            logSystem('TRIP_START', `Corrida #${ride_id} iniciada`);
 
         } catch (e) {
             logError('START_TRIP', e);
@@ -353,10 +554,55 @@ function handleConnection(socket) {
     });
 
     /**
+     * Evento: COMPLETE_RIDE
+     */
+    socket.on('complete_ride', async (data) => {
+        const { ride_id, driver_id } = data;
+
+        if (!ride_id) return;
+
+        try {
+            await pool.query(
+                `UPDATE rides SET 
+                    status = 'completed', 
+                    completed_at = NOW(),
+                    updated_at = NOW()
+                WHERE id = $1 
+                AND driver_id = $2
+                AND status = 'ongoing'`,
+                [ride_id, driver_id]
+            );
+
+            const fullRide = await getFullRideDetails(ride_id);
+
+            io.to(`ride_${ride_id}`).emit('ride_completed', {
+                ...fullRide,
+                completed_at: new Date().toISOString(),
+                message: "Viagem finalizada! Obrigado por viajar conosco!"
+            });
+
+            if (fullRide.passenger_id) {
+                io.to(`user_${fullRide.passenger_id}`).emit('ride_completed', {
+                    ride_id: ride_id,
+                    completed_at: new Date().toISOString(),
+                    message: "Sua viagem foi concluída. Avalie o motorista!"
+                });
+            }
+
+            logSystem('TRIP_COMPLETE', `Corrida #${ride_id} finalizada`);
+
+        } catch (e) {
+            logError('COMPLETE_RIDE', e);
+        }
+    });
+
+    /**
      * Evento: CANCEL_RIDE
      */
     socket.on('cancel_ride', async (data) => {
-        const { ride_id, role, reason } = data; // role: 'driver' | 'passenger'
+        const { ride_id, role, reason, user_id } = data;
+
+        if (!ride_id || !role) return;
 
         try {
             await pool.query(
@@ -364,10 +610,13 @@ function handleConnection(socket) {
                     status = 'cancelled',
                     cancelled_at = NOW(),
                     cancelled_by = $1,
-                    cancellation_reason = $2
+                    cancellation_reason = $2,
+                    updated_at = NOW()
                  WHERE id = $3`,
                 [role, reason || 'Cancelamento solicitado', ride_id]
             );
+
+            const fullRide = await getFullRideDetails(ride_id);
 
             // Mensagem amigável
             const msg = role === 'driver'
@@ -375,21 +624,46 @@ function handleConnection(socket) {
                 : "O passageiro cancelou a solicitação.";
 
             // Notifica todos na sala
-            io.to(`ride_${ride_id}`).emit('ride_terminated', {
-                reason: msg,
-                origin: role,
+            io.to(`ride_${ride_id}`).emit('ride_cancelled', {
                 ride_id: ride_id,
+                cancelled_by: role,
+                reason: msg,
                 cancelled_at: new Date().toISOString()
             });
 
-            // Garante notificação na sala do usuário oposto
-            const details = await getFullRideDetails(ride_id);
-            if (details) {
-                const targetId = role === 'driver' ? details.passenger_id : details.driver_id;
-                if (targetId) {
-                    io.to(`user_${targetId}`).emit('ride_cancelled', { reason: msg });
-                }
+            // Notifica o outro participante
+            const targetId = role === 'driver' ? fullRide?.passenger_id : fullRide?.driver_id;
+            if (targetId) {
+                io.to(`user_${targetId}`).emit('ride_cancelled', {
+                    ride_id: ride_id,
+                    cancelled_by: role,
+                    reason: msg,
+                    cancelled_at: new Date().toISOString()
+                });
             }
+
+            // Se estava buscando motorista, notifica motoristas próximos
+            if (fullRide?.status === 'searching') {
+                const driversRes = await pool.query(`
+                    SELECT socket_id 
+                    FROM driver_positions 
+                    WHERE is_online = true 
+                    AND last_update > NOW() - INTERVAL '2 minutes'
+                    AND socket_id IS NOT NULL
+                `);
+
+                driversRes.rows.forEach(driver => {
+                    if (driver.socket_id) {
+                        io.to(driver.socket_id).emit('ride_cancelled_by_passenger', {
+                            ride_id: ride_id,
+                            message: 'Esta corrida foi cancelada pelo passageiro.',
+                            timestamp: new Date().toISOString()
+                        });
+                    }
+                });
+            }
+
+            logSystem('RIDE_CANCEL', `Corrida #${ride_id} cancelada por ${role}`);
 
         } catch (e) {
             logError('CANCEL_RIDE', e);
@@ -397,116 +671,411 @@ function handleConnection(socket) {
     });
 
     // =============================================================================================
-    // 4. CHAT E COMUNICAÇÃO (ENCRIPTADO EM TRÂNSITO)
+    // 4. CHAT E COMUNICAÇÃO - CORRIGIDO
     // =============================================================================================
 
+    /**
+     * Evento: SEND_MESSAGE
+     * Envia mensagem no chat da corrida
+     */
     socket.on('send_message', async (data) => {
-        const { ride_id, sender_id, text, image_data } = data;
+        const { ride_id, sender_id, text, image_data, message_type = 'text' } = data;
 
-        if (!ride_id || !sender_id) return;
+        if (!ride_id || !sender_id) {
+            socket.emit('chat_error', { message: 'Dados incompletos' });
+            return;
+        }
 
         try {
+            // Validar se o remetente é participante da corrida
+            const rideCheck = await pool.query(
+                `SELECT passenger_id, driver_id FROM rides WHERE id = $1`,
+                [ride_id]
+            );
+
+            if (rideCheck.rows.length === 0) {
+                socket.emit('chat_error', { message: 'Corrida não encontrada' });
+                return;
+            }
+
+            const ride = rideCheck.rows[0];
+            if (ride.passenger_id !== sender_id && ride.driver_id !== sender_id) {
+                socket.emit('chat_error', { message: 'Você não é participante desta corrida' });
+                return;
+            }
+
             // Salva no banco
             const res = await pool.query(
-                `INSERT INTO chat_messages (ride_id, sender_id, text, image_url, created_at, is_read)
-                 VALUES ($1, $2, $3, $4, NOW(), false)
-                 RETURNING *`,
-                [ride_id, sender_id, text || (image_data ? '📷 Imagem' : ''), image_data || null]
+                `INSERT INTO chat_messages (
+                    ride_id, sender_id, text, image_url, 
+                    message_type, created_at, is_read
+                )
+                VALUES ($1, $2, $3, $4, $5, NOW(), false)
+                RETURNING *`,
+                [ride_id, sender_id, text || null, image_data || null, message_type]
             );
 
             const msg = res.rows[0];
 
             // Enriquece com dados do remetente
-            const senderRes = await pool.query('SELECT name, photo FROM users WHERE id = $1', [sender_id]);
+            const senderRes = await pool.query(
+                'SELECT name, photo, role FROM users WHERE id = $1', 
+                [sender_id]
+            );
+            
             const senderInfo = senderRes.rows[0];
 
             const payload = {
-                ...msg,
+                id: msg.id,
+                ride_id: msg.ride_id,
+                sender_id: msg.sender_id,
+                text: msg.text,
+                image_url: msg.image_url,
+                message_type: msg.message_type,
+                created_at: msg.created_at.toISOString(),
                 sender_name: senderInfo?.name || 'Usuário',
                 sender_photo: senderInfo?.photo || null,
-                timestamp: msg.created_at
+                sender_role: senderInfo?.role || 'user',
+                is_read: false
             };
 
             // Emite para a sala
             io.to(`ride_${ride_id}`).emit('receive_message', payload);
 
+            // Notifica o destinatário
+            const recipientId = ride.passenger_id === sender_id ? ride.driver_id : ride.passenger_id;
+            if (recipientId) {
+                io.to(`user_${recipientId}`).emit('new_message_notification', {
+                    ride_id: ride_id,
+                    message_id: msg.id,
+                    sender_name: senderInfo?.name,
+                    preview: text?.substring(0, 50) || '📷 Imagem',
+                    timestamp: msg.created_at.toISOString()
+                });
+            }
+
+            logSystem('CHAT', `Mensagem enviada na corrida #${ride_id}`);
+
         } catch (e) {
             logError('CHAT_MSG', e);
+            socket.emit('chat_error', { message: 'Erro ao enviar mensagem' });
+        }
+    });
+
+    /**
+     * Evento: MARK_MESSAGES_READ
+     * Marca mensagens como lidas
+     */
+    socket.on('mark_messages_read', async (data) => {
+        const { ride_id, user_id } = data;
+
+        if (!ride_id || !user_id) return;
+
+        try {
+            await pool.query(
+                `UPDATE chat_messages 
+                 SET is_read = true, read_at = NOW()
+                 WHERE ride_id = $1 
+                 AND sender_id != $2 
+                 AND is_read = false`,
+                [ride_id, user_id]
+            );
+
+            io.to(`ride_${ride_id}`).emit('messages_read', {
+                ride_id: ride_id,
+                read_by: user_id,
+                timestamp: new Date().toISOString()
+            });
+
+        } catch (e) {
+            logError('MARK_READ', e);
+        }
+    });
+
+    /**
+     * Evento: TYPING_INDICATOR
+     * Indicador de digitação
+     */
+    socket.on('typing_indicator', (data) => {
+        const { ride_id, user_id, is_typing } = data;
+
+        if (!ride_id || !user_id) return;
+
+        socket.to(`ride_${ride_id}`).emit('user_typing', {
+            user_id: user_id,
+            is_typing: is_typing,
+            timestamp: new Date().toISOString()
+        });
+    });
+
+    // =============================================================================================
+    // 5. UTILITÁRIOS E STATUS
+    // =============================================================================================
+
+    /**
+     * Evento: PING
+     * Manter conexão ativa
+     */
+    socket.on('ping', (callback) => {
+        if (typeof callback === 'function') {
+            callback({
+                pong: true,
+                timestamp: new Date().toISOString(),
+                socket_id: socketId
+            });
+        }
+    });
+
+    /**
+     * Evento: GET_CONNECTION_STATUS
+     * Verificar status da conexão
+     */
+    socket.on('get_connection_status', () => {
+        socket.emit('connection_status', {
+            connected: true,
+            socket_id: socketId,
+            transport: socket.conn.transport.name,
+            timestamp: new Date().toISOString()
+        });
+    });
+
+    /**
+     * Evento: LEAVE_USER
+     * Desconectar usuário manualmente
+     */
+    socket.on('leave_user', async (userId) => {
+        if (!userId) return;
+
+        const userIdStr = userId.toString();
+        const roomName = `user_${userIdStr}`;
+        
+        socket.leave(roomName);
+        userSockets.delete(userIdStr);
+        socketUsers.delete(socketId);
+
+        try {
+            await pool.query(
+                "UPDATE users SET is_online = false, socket_id = NULL WHERE id = $1",
+                [userId]
+            );
+
+            await pool.query(
+                `UPDATE driver_positions 
+                 SET is_online = false, status = 'offline' 
+                 WHERE driver_id = $1`,
+                [userId]
+            );
+
+            logSystem('SOCKET', `User ${userId} desconectado manualmente`);
+
+        } catch (e) {
+            logError('LEAVE_USER', e);
         }
     });
 
     // =============================================================================================
-    // 5. GESTÃO DE DESCONEXÃO (GRACEFUL SHUTDOWN)
+    // 6. GESTÃO DE DESCONEXÃO - CORRIGIDO
     // =============================================================================================
 
-    socket.on('disconnect', () => {
-        // Encontra quem era o usuário deste socket
-        // Como o socket.io não guarda state user_id por padrão, fazemos engenharia reversa via rooms
-        // ou assumimos que o cliente mandou 'leave'.
-        // A melhor prática aqui é consultar a tabela driver_positions pelo socket_id.
+    socket.on('disconnect', (reason) => {
+        logSystem('SOCKET', `❌ Socket ${socketId} desconectado. Razão: ${reason}`);
+        handleDisconnect(socketId, reason);
+    });
 
-        handleDisconnect(socketId);
+    socket.on('error', (error) => {
+        logError('SOCKET_ERROR', { socketId, error: error.message });
     });
 }
 
 /**
  * Lógica de Desconexão com Debounce (Buffer de 5 minutos)
  */
-async function handleDisconnect(socketId) {
+async function handleDisconnect(socketId, reason = 'unknown') {
     try {
-        // Verifica se era um motorista
-        const posRes = await pool.query('SELECT driver_id FROM driver_positions WHERE socket_id = $1', [socketId]);
+        // Recuperar userId deste socket
+        const userId = socketUsers.get(socketId);
+        
+        if (userId) {
+            // Verifica se era um motorista
+            const posRes = await pool.query(
+                'SELECT driver_id FROM driver_positions WHERE socket_id = $1',
+                [socketId]
+            );
 
-        if (posRes.rows.length > 0) {
-            const driverId = posRes.rows[0].driver_id;
+            if (posRes.rows.length > 0) {
+                const driverId = posRes.rows[0].driver_id;
 
-            // Define um timer. Se ele não reconectar em 5 minutos, marca como offline.
-            // Isso previne que motoristas "pisquem" no mapa quando o 4G cai.
-            const timeout = setTimeout(async () => {
-                try {
-                    // Verifica se o socket_id ainda é o mesmo (se reconectou, o socket_id mudou e o DB foi atualizado)
-                    const check = await pool.query('SELECT socket_id FROM driver_positions WHERE driver_id = $1', [driverId]);
+                // Define timer de 5 minutos para marcar como offline
+                const timeout = setTimeout(async () => {
+                    try {
+                        // Verifica se o socket_id ainda é o mesmo
+                        const check = await pool.query(
+                            'SELECT socket_id, is_online FROM driver_positions WHERE driver_id = $1',
+                            [driverId]
+                        );
 
-                    if (check.rows.length > 0 && check.rows[0].socket_id === socketId) {
-                        // Realmente caiu e não voltou
-                        await pool.query('UPDATE users SET is_online = false WHERE id = $1', [driverId]);
-                        await pool.query("UPDATE driver_positions SET status = 'offline' WHERE driver_id = $1", [driverId]);
-                        // logSystem('OFFLINE', `Motorista ${driverId} marcado como offline (Timeout 5min).`);
+                        if (check.rows.length > 0 && check.rows[0].socket_id === socketId) {
+                            // Realmente caiu e não voltou
+                            await pool.query(
+                                'UPDATE users SET is_online = false, socket_id = NULL WHERE id = $1',
+                                [driverId]
+                            );
+                            
+                            await pool.query(
+                                `UPDATE driver_positions 
+                                 SET is_online = false, status = 'offline' 
+                                 WHERE driver_id = $1`,
+                                [driverId]
+                            );
+                            
+                            logSystem('SOCKET', `Motorista ${driverId} marcado como offline (Timeout 5min)`);
+                        }
+                        
+                        disconnectTimers.delete(driverId);
+                        socketUsers.delete(socketId);
+                        userSockets.delete(driverId);
+                        
+                    } catch (err) {
+                        logError('DISCONNECT_TIMEOUT', err);
                     }
-                } catch (err) {
-                    logError('DISCONNECT_TIMEOUT', err);
-                }
-                disconnectTimers.delete(driverId);
-            }, 300000); // 5 minutos (300.000 ms)
+                }, 300000); // 5 minutos
 
-            disconnectTimers.set(driverId, timeout);
+                disconnectTimers.set(driverId, timeout);
+            } else {
+                // Não é motorista, marca offline imediatamente
+                await pool.query(
+                    'UPDATE users SET is_online = false, socket_id = NULL WHERE id = $1',
+                    [userId]
+                );
+                
+                socketUsers.delete(socketId);
+                userSockets.delete(userId);
+            }
         }
+
     } catch (e) {
         logError('DISCONNECT_HANDLER', e);
     }
 }
 
 // =================================================================================================
-// HELPER METHODS (EXPORTS)
+// HELPER METHODS (EXPORTS) - CORRIGIDO
 // =================================================================================================
+
+/**
+ * Obtém a instância do Socket.IO
+ */
+function getIO() {
+    return io;
+}
 
 /**
  * Emite evento para todos os sockets conectados (Global Broadcast)
  */
 function emitGlobal(event, data) {
-    if (io) io.emit(event, data);
+    if (io) {
+        io.emit(event, data);
+        logSystem('SOCKET_BROADCAST', `Evento global: ${event}`);
+    }
 }
 
 /**
  * Emite evento para um usuário específico (Targeted)
  */
 function emitToUser(userId, event, data) {
-    if (io) io.to(`user_${userId}`).emit(event, data);
+    if (!userId) {
+        logError('EMIT_TO_USER', 'UserId não fornecido');
+        return;
+    }
+
+    if (io) {
+        const roomName = `user_${userId.toString()}`;
+        io.to(roomName).emit(event, data);
+        
+        if (process.env.NODE_ENV === 'development') {
+            logSystem('SOCKET_EMIT', `📨 Evento ${event} enviado para User ${userId}`);
+        }
+    }
+}
+
+/**
+ * Emite evento para uma sala de corrida específica
+ */
+function emitToRide(rideId, event, data) {
+    if (!rideId) return;
+    
+    if (io) {
+        const roomName = `ride_${rideId}`;
+        io.to(roomName).emit(event, data);
+    }
+}
+
+/**
+ * Emite evento para uma sala específica
+ */
+function emitToRoom(room, event, data) {
+    if (io && room) {
+        io.to(room).emit(event, data);
+    }
+}
+
+/**
+ * Verifica se um usuário está online
+ */
+async function isUserOnline(userId) {
+    try {
+        const result = await pool.query(
+            'SELECT is_online FROM users WHERE id = $1',
+            [userId]
+        );
+        return result.rows[0]?.is_online || false;
+    } catch (e) {
+        logError('CHECK_ONLINE', e);
+        return false;
+    }
+}
+
+/**
+ * Obtém socket_id de um usuário
+ */
+function getUserSocket(userId) {
+    return userSockets.get(userId.toString());
+}
+
+/**
+ * Obtém todos os usuários online
+ */
+async function getOnlineUsers() {
+    try {
+        const result = await pool.query(
+            'SELECT id, name, role FROM users WHERE is_online = true'
+        );
+        return result.rows;
+    } catch (e) {
+        logError('GET_ONLINE_USERS', e);
+        return [];
+    }
 }
 
 module.exports = {
-    setupSocketIO: initializeSocket,
+    // Inicialização
     initializeSocket,
+    setupSocketIO: initializeSocket,
+    getIO,
+    
+    // Emissores principais
     emitGlobal,
-    emitToUser
+    emitToUser,
+    emitToRide,
+    emitToRoom,
+    
+    // Utilitários
+    isUserOnline,
+    getUserSocket,
+    getOnlineUsers,
+    
+    // Mapas (para debug)
+    userSockets,
+    socketUsers,
+    disconnectTimers
 };
