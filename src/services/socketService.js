@@ -14,7 +14,8 @@
  * - Dispara notificações ricas (Rich Payloads) para o Frontend Flutter.
  *
  * CORREÇÃO: Adicionado suporte completo a driver_positions e notificações de corrida
- * VERSÃO CORRIGIDA COM SUPORTE A SALAS - V3.0.1
+ * CORREÇÃO 2: Driver undefined resolvido no join_driver_room - VALIDAÇÃO REFORÇADA
+ * VERSÃO CORRIGIDA COM SUPORTE A SALAS - V3.0.2
  * =================================================================================================
  */
 
@@ -66,11 +67,11 @@ function initializeSocket(httpServer) {
     // =================================================================
     // 7. ESTATÍSTICAS PERIÓDICAS (A CADA 30 SEGUNDOS)
     // =================================================================
-    
+
     setInterval(async () => {
         const onlineDrivers = await socketController.countOnlineDrivers();
         console.log(`📊 [STATUS] Motoristas online: ${onlineDrivers}`);
-        
+
         // Emitir para todos os clientes conectados
         io.emit('drivers_online_update', {
             count: onlineDrivers,
@@ -120,10 +121,10 @@ function handleConnection(socket) {
         }
 
         try {
-            // 1. Atualizar status Online
+            // 1. Atualizar status Online - SEM socket_id (coluna não existe)
             await pool.query(
-                "UPDATE users SET is_online = true, last_login = NOW(), socket_id = $1 WHERE id = $2",
-                [socketId, userId]
+                "UPDATE users SET is_online = true, last_login = NOW() WHERE id = $1",
+                [userId]
             );
 
             // 2. Se for motorista, registrar/atualizar na tabela de radar
@@ -187,90 +188,176 @@ function handleConnection(socket) {
     });
 
     /**
-     * Evento: JOIN_DRIVER_ROOM
+     * Evento: JOIN_DRIVER_ROOM - CORRIGIDO (Driver undefined resolvido)
      * 🚗 CRÍTICO: ENTRADA DE MOTORISTA COM POSIÇÃO
      */
     socket.on('join_driver_room', async (data) => {
-        const driverId = typeof data === 'object' ? data.driver_id : data;
-        const payload = typeof data === 'object' ? data : { driver_id: data };
-        
-        // Entrar na sala global de motoristas e na sala individual
-        socket.join('drivers');
-        socket.join(`driver_${driverId}`);
-        
-        console.log(`🚗 [SOCKET] Driver ${driverId} entrou na sala de motoristas`);
-        
-        // Armazenar mapeamento
-        userSockets.set(driverId.toString(), socketId);
-        socketUsers.set(socketId, driverId.toString());
-        
         try {
-            // ✅ ATUALIZAR POSIÇÃO DO MOTORISTA NO BANCO
-            if (payload.lat && payload.lng) {
-                await socketController.updateDriverPosition({
-                    driver_id: driverId,
-                    lat: payload.lat,
-                    lng: payload.lng,
-                    heading: payload.heading || 0,
-                    speed: payload.speed || 0,
-                    status: 'online'
-                }, socket);
-                
-                // Atualizar também via query direta
-                await pool.query(
-                    `INSERT INTO driver_positions (
-                        driver_id, lat, lng, heading, speed, 
-                        last_update, socket_id, is_online, status
-                    )
-                    VALUES ($1, $2, $3, $4, $5, NOW(), $6, true, 'online')
-                    ON CONFLICT (driver_id) DO UPDATE SET
-                        lat = $2,
-                        lng = $3,
-                        heading = COALESCE($4, driver_positions.heading),
-                        speed = COALESCE($5, driver_positions.speed),
-                        last_update = NOW(),
-                        socket_id = $6,
-                        is_online = true,
-                        status = 'online'`,
-                    [driverId, payload.lat, payload.lng, payload.heading || 0, payload.speed || 0, socketId]
-                );
-            } else {
-                // Apenas registrar online sem posição
-                await pool.query(
-                    `INSERT INTO driver_positions (driver_id, socket_id, last_update, is_online, status)
-                     VALUES ($1, $2, NOW(), true, 'online')
-                     ON CONFLICT (driver_id) DO UPDATE SET
-                        socket_id = $2,
-                        last_update = NOW(),
-                        is_online = true,
-                        status = 'online'`,
-                    [driverId, socketId]
-                );
+            // ✅ VALIDAÇÃO - SE data for undefined, NÃO FAZ NADA
+            if (!data) {
+                console.error('❌ [SOCKET] join_driver_room recebido sem dados');
+                socket.emit('error', { message: 'Dados não fornecidos para join_driver_room' });
+                return;
             }
+
+            // ✅ EXTRAIR driver_id de forma segura
+            let driverId = null;
             
-            // Atualizar status do usuário
-            await pool.query(
-                "UPDATE users SET is_online = true, socket_id = $1 WHERE id = $2",
-                [socketId, driverId]
-            );
+            if (typeof data === 'object') {
+                driverId = data.driver_id || data.userId || data.id;
+            } else {
+                driverId = data; // Caso seja apenas o ID
+            }
+
+            // ✅ VALIDAÇÃO CRÍTICA - NÃO PROSSEGUIR SEM driver_id
+            if (!driverId) {
+                console.error('❌ [SOCKET] join_driver_room: driver_id não fornecido', data);
+                socket.emit('error', { message: 'driver_id não fornecido' });
+                return;
+            }
+
+            // ✅ CONVERTER PARA STRING/NÚMERO DE FORMA SEGURA
+            const driverIdStr = driverId.toString();
             
-            // ENVIAR CONFIRMAÇÃO
+            // Entrar na sala global de motoristas e na sala individual
+            socket.join('drivers');
+            socket.join(`driver_${driverIdStr}`);
+            
+            console.log(`✅ [SOCKET] Driver ${driverIdStr} entrou na sala de motoristas`);
+
+            // ✅ Armazenar mapeamento
+            userSockets.set(driverIdStr, socketId);
+            socketUsers.set(socketId, driverIdStr);
+
+            // ✅ Limpa timer de desconexão se o motorista reconectou rápido
+            if (disconnectTimers.has(driverIdStr)) {
+                clearTimeout(disconnectTimers.get(driverIdStr));
+                disconnectTimers.delete(driverIdStr);
+                logSystem('SOCKET', `🔄 Reconexão rápida detectada para Driver ${driverIdStr}`);
+            }
+
+            // ✅ ENVIAR CONFIRMAÇÃO
             socket.emit('joined_ack', { 
                 room: 'drivers', 
-                driver_id: driverId,
+                driver_id: driverIdStr,
                 status: 'online',
                 timestamp: new Date().toISOString()
             });
-            
-            // Emitir contagem atualizada
+
+            // ✅ SE TIVER COORDENADAS, ATUALIZAR POSIÇÃO
+            if (data && data.lat && data.lng) {
+                try {
+                    // Atualizar via controller
+                    await socketController.updateDriverPosition({
+                        driver_id: driverIdStr,
+                        lat: data.lat,
+                        lng: data.lng,
+                        heading: data.heading || 0,
+                        speed: data.speed || 0,
+                        status: 'online'
+                    }, socket);
+                    
+                    // ✅ VERIFICAR COLUNAS DINAMICAMENTE
+                    const checkColumns = await pool.query(`
+                        SELECT column_name 
+                        FROM information_schema.columns 
+                        WHERE table_name = 'driver_positions'
+                    `);
+                    
+                    const columns = checkColumns.rows.map(col => col.column_name);
+                    
+                    // ✅ CONSTRUIR QUERY DINAMICAMENTE BASEADO NAS COLUNAS EXISTENTES
+                    let query = `
+                        INSERT INTO driver_positions (driver_id, lat, lng, socket_id, last_update, status, is_online)
+                        VALUES ($1, $2, $3, $4, NOW(), $5, true)
+                        ON CONFLICT (driver_id) 
+                        DO UPDATE SET 
+                            lat = EXCLUDED.lat,
+                            lng = EXCLUDED.lng,
+                            socket_id = EXCLUDED.socket_id,
+                            last_update = NOW(),
+                            status = EXCLUDED.status,
+                            is_online = true
+                    `;
+                    
+                    const params = [driverIdStr, data.lat, data.lng, socket.id, 'online'];
+                    
+                    // ADICIONAR heading SE EXISTIR
+                    if (columns.includes('heading') && data.heading !== undefined) {
+                        query = query.replace(
+                            'INSERT INTO driver_positions (driver_id, lat, lng, socket_id, last_update, status, is_online)',
+                            'INSERT INTO driver_positions (driver_id, lat, lng, heading, socket_id, last_update, status, is_online)'
+                        );
+                        query = query.replace(
+                            'ON CONFLICT (driver_id) DO UPDATE SET lat = EXCLUDED.lat, lng = EXCLUDED.lng, socket_id = EXCLUDED.socket_id, last_update = NOW(), status = EXCLUDED.status, is_online = true',
+                            'ON CONFLICT (driver_id) DO UPDATE SET lat = EXCLUDED.lat, lng = EXCLUDED.lng, heading = EXCLUDED.heading, socket_id = EXCLUDED.socket_id, last_update = NOW(), status = EXCLUDED.status, is_online = true'
+                        );
+                        params.splice(3, 0, data.heading || 0);
+                    }
+                    
+                    // ADICIONAR speed SE EXISTIR
+                    if (columns.includes('speed') && data.speed !== undefined) {
+                        if (columns.includes('heading') && data.heading !== undefined) {
+                            // Já inserimos na posição 3, speed vai na posição 5
+                            query = query.replace(
+                                'INSERT INTO driver_positions (driver_id, lat, lng, heading, socket_id, last_update, status, is_online)',
+                                'INSERT INTO driver_positions (driver_id, lat, lng, heading, speed, socket_id, last_update, status, is_online)'
+                            );
+                            params.splice(4, 0, data.speed || 0);
+                        } else {
+                            // Sem heading, speed vai na posição 4
+                            query = query.replace(
+                                'INSERT INTO driver_positions (driver_id, lat, lng, socket_id, last_update, status, is_online)',
+                                'INSERT INTO driver_positions (driver_id, lat, lng, speed, socket_id, last_update, status, is_online)'
+                            );
+                            params.splice(3, 0, data.speed || 0);
+                        }
+                    }
+
+                    await pool.query(query, params);
+                    console.log(`📍 [SOCKET] Posição do driver ${driverIdStr} atualizada: (${data.lat}, ${data.lng})`);
+                    
+                } catch (dbError) {
+                    console.error('❌ [SOCKET] Erro ao atualizar posição:', dbError.message);
+                }
+            } else {
+                // ✅ APENAS REGISTRAR ONLINE SEM POSIÇÃO
+                try {
+                    await pool.query(
+                        `INSERT INTO driver_positions (driver_id, socket_id, last_update, is_online, status)
+                         VALUES ($1, $2, NOW(), true, 'online')
+                         ON CONFLICT (driver_id) DO UPDATE SET
+                            socket_id = $2,
+                            last_update = NOW(),
+                            is_online = true,
+                            status = 'online'`,
+                        [driverIdStr, socketId]
+                    );
+                    console.log(`✅ [SOCKET] Driver ${driverIdStr} registrado como online (sem posição)`);
+                } catch (dbError) {
+                    console.error('❌ [SOCKET] Erro ao registrar driver online:', dbError.message);
+                }
+            }
+
+            // ✅ ATUALIZAR STATUS DO USUÁRIO - SEM socket_id
+            try {
+                await pool.query(
+                    "UPDATE users SET is_online = true, last_seen = NOW() WHERE id = $1",
+                    [driverIdStr]
+                );
+            } catch (userError) {
+                console.error('❌ [SOCKET] Erro ao atualizar status do usuário:', userError.message);
+            }
+
+            // ✅ EMITIR CONTAGEM ATUALIZADA
             const onlineCount = await socketController.countOnlineDrivers();
             io.emit('drivers_online_count', onlineCount);
-            
-        } catch (e) {
-            logError('JOIN_DRIVER_ROOM', e);
-            socket.emit('error', { 
-                message: 'Erro ao registrar motorista', 
-                error: e.message 
+
+        } catch (error) {
+            console.error('❌ [SOCKET] Erro no join_driver_room:', error.message);
+            socket.emit('error', {
+                message: 'Erro ao registrar motorista',
+                error: error.message
             });
         }
     });
@@ -357,7 +444,7 @@ function handleConnection(socket) {
                 accuracy: accuracy || 0,
                 status: 'online'
             }, socket);
-            
+
             // 2. UPSERT Blindado direto no banco
             await pool.query(
                 `INSERT INTO driver_positions (
@@ -416,7 +503,7 @@ function handleConnection(socket) {
                     });
                 }
             }
-            
+
             // 4. Se for uma corrida ativa, atualizar também no trip
             if (ride_id) {
                 io.to(`ride_${ride_id}`).emit('driver_location_update', {
@@ -965,7 +1052,7 @@ function handleConnection(socket) {
      */
     socket.on('request_payment', (data) => {
         const { ride_id, passenger_id, amount, driver_id } = data;
-        
+
         if (ride_id && passenger_id) {
             const paymentPayload = {
                 ride_id,
@@ -975,10 +1062,10 @@ function handleConnection(socket) {
                 timestamp: new Date().toISOString(),
                 message: "Pagamento solicitado pelo motorista"
             };
-            
+
             io.to(`user_${passenger_id}`).emit('payment_requested_overlay', paymentPayload);
             console.log(`💰 [SOCKET] Pagamento solicitado para passageiro ${passenger_id} - Corrida #${ride_id}`);
-            
+
             // Notificar também a sala da corrida
             io.to(`ride_${ride_id}`).emit('payment_requested', paymentPayload);
         }
@@ -1031,7 +1118,7 @@ function handleConnection(socket) {
 
         try {
             await pool.query(
-                "UPDATE users SET is_online = false, socket_id = NULL WHERE id = $1",
+                "UPDATE users SET is_online = false, last_seen = NOW() WHERE id = $1",
                 [userId]
             );
 
@@ -1093,7 +1180,7 @@ async function handleDisconnect(socketId, reason = 'unknown') {
                         if (check.rows.length > 0 && check.rows[0].socket_id === socketId) {
                             // Realmente caiu e não voltou
                             await pool.query(
-                                'UPDATE users SET is_online = false, socket_id = NULL WHERE id = $1',
+                                'UPDATE users SET is_online = false, last_seen = NOW() WHERE id = $1',
                                 [driverId]
                             );
 
@@ -1105,7 +1192,7 @@ async function handleDisconnect(socketId, reason = 'unknown') {
                             );
 
                             logSystem('SOCKET', `Motorista ${driverId} marcado como offline (Timeout 5min)`);
-                            
+
                             // Atualizar contagem
                             const onlineCount = await socketController.countOnlineDrivers();
                             io.emit('drivers_online_count', onlineCount);
@@ -1124,7 +1211,7 @@ async function handleDisconnect(socketId, reason = 'unknown') {
             } else {
                 // Não é motorista, marca offline imediatamente
                 await pool.query(
-                    'UPDATE users SET is_online = false, socket_id = NULL WHERE id = $1',
+                    'UPDATE users SET is_online = false, last_seen = NOW() WHERE id = $1',
                     [userId]
                 );
 
@@ -1132,14 +1219,14 @@ async function handleDisconnect(socketId, reason = 'unknown') {
                 userSockets.delete(userId);
             }
         }
-        
+
         // REMOVER MOTORISTA DA TABELA DE POSIÇÕES VIA CONTROLLER
         await socketController.removeDriverPosition(socketId);
-        
+
         // ATUALIZAR CONTAGEM DE ONLINE
         const onlineCount = await socketController.countOnlineDrivers();
         console.log(`📊 [SOCKET] Motoristas online agora: ${onlineCount}`);
-        
+
         // Emitir atualização para todos
         io.emit('drivers_online_count', onlineCount);
 
@@ -1250,17 +1337,14 @@ async function getOnlineUsers() {
 /**
  * Setup Socket.IO (alias para initializeSocket para compatibilidade)
  */
-function setupSocketIO(io) {
+function setupSocketIO(httpServer) {
     console.log('🔌 [SOCKET] Inicializando serviço de tempo real...');
-    
+
     // Se receber uma instância existente, usar ela
-    if (io) {
-        io.on('connection', (socket) => {
-            handleConnection(socket);
-        });
-        return io;
+    if (httpServer && typeof httpServer.on === 'function') {
+        return initializeSocket(httpServer);
     }
-    
+
     // Caso contrário, retornar função de inicialização
     return initializeSocket;
 }
