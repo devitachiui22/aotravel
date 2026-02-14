@@ -198,7 +198,7 @@ function handleConnection(socket) {
         console.log('📦 Dados recebidos:', JSON.stringify(data, null, 2));
         console.log('🔌 Socket ID:', socket.id);
         console.log('🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴\n');
-        
+
         try {
             // ✅ VALIDAÇÃO - SE data for undefined, NÃO FAZ NADA
             if (!data) {
