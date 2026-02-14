@@ -38,7 +38,7 @@ exports.requestRide = async (req, res) => {
     console.log('📦 Body:', JSON.stringify(req.body, null, 2));
     console.log('👤 Usuário:', req.user?.id, req.user?.name);
     console.log('🔌 Socket.io disponível:', !!req.io);
-    console.log('🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴\n');
+    console.log('🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴\n');
 
     const {
         origin_lat, origin_lng, dest_lat, dest_lng,
