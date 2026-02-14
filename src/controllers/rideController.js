@@ -163,24 +163,27 @@ exports.requestRide = async (req, res) => {
         // ✅ AUMENTADO INTERVALO PARA 10 MINUTOS (Tolerância a falhas de rede)
         // ✅ Removida verificação restrita de socket_id vazio para debug
         const driversRes = await pool.query(`
-            SELECT
-                dp.driver_id,
-                dp.lat,
-                dp.lng,
-                dp.socket_id,
-                u.name,
-                u.fcm_token,
-                u.photo,
-                u.rating,
-                u.vehicle_details
-            FROM driver_positions dp
-            JOIN users u ON dp.driver_id = u.id
-            WHERE u.is_online = true
-            AND u.role = 'driver'
-            AND u.is_blocked = false
-            AND dp.last_update > NOW() - INTERVAL '10 minutes'
-        `);
+                    SELECT
+                        dp.driver_id,
+                        dp.lat,
+                        dp.lng,
+                        dp.socket_id,
+                        u.fcm_token,
+                        u.name,
+                        u.photo,
+                        u.rating,
+                        u.vehicle_details
+                    FROM driver_positions dp
+                    JOIN users u ON dp.driver_id = u.id
+                    WHERE u.is_online = true
+                    AND u.role = 'driver'
+                    AND u.is_blocked = false
+                    AND dp.last_update > NOW() - INTERVAL '10 minutes'
+                    AND dp.socket_id IS NOT NULL
+                    AND dp.socket_id != ''
+                `);
 
+        console.log(`🔎 [DISPATCH] Encontrados ${driversRes.rows.length} motoristas potenciais no DB`);
         console.log(`🔎 [DISPATCH] Analisando ${driversRes.rows.length} motoristas online no DB (últimos 10 min)...`);
         console.log(`📍 Origem da corrida: (${origin_lat}, ${origin_lng})`);
 
