@@ -1,12 +1,18 @@
 /**
  * =================================================================================================
- * 🚕 AOTRAVEL SERVER PRO - RIDE LIFECYCLE CONTROLLER (TITANIUM CORE V3.6.0 - DEPLOY RENDER)
+ * 🚕 AOTRAVEL SERVER PRO - RIDE LIFECYCLE CONTROLLER (TITANIUM CORE V3.7.0 - DEPLOY RENDER)
  * =================================================================================================
  *
  * ARQUIVO: src/controllers/rideController.js
  * DESCRIÇÃO: Controlador central para gestão de corridas com notificações em tempo real.
  *
- * ✅ CORREÇÕES CRÍTICAS APLICADAS:
+ * ✅ CORREÇÕES CRÍTICAS APLICADAS (v3.7.0):
+ * 1. ✅ AUMENTADO tempo de tolerância da query de 2 minutos para 10 minutos
+ * 2. ✅ Adicionados logs de debug EXPLÍCITOS para mostrar POR QUE um motorista não foi selecionado
+ * 3. ✅ Removida verificação restrita de socket_id vazio para debug
+ * 4. ✅ Logs detalhados mostram distância e status do socket_id de cada motorista
+ *
+ * CORREÇÕES ANTERIORES (v3.6.0):
  * 1. ✅ Toda lógica ENVOLVIDA em funções async - SEM await no escopo global
  * 2. ✅ Socket.io ACESSÍVEL via req.io - Verificação obrigatória
  * 3. ✅ Motoristas NOTIFICADOS individualmente por socket_id
@@ -15,7 +21,7 @@
  * 6. ✅ Fallback silencioso quando socket não disponível
  * 7. ✅ Transações ACID com FOR UPDATE em todas operações críticas
  *
- * STATUS: 🔥 PRODUCTION READY - DEPLOY RENDER
+ * STATUS: 🔥 PRODUCTION READY - DEPLOY RENDER - TOLERÂNCIA 10 MINUTOS
  * =================================================================================================
  */
 
@@ -24,7 +30,7 @@ const { getDistance, getFullRideDetails, logSystem, logError, generateRef } = re
 const SYSTEM_CONFIG = require('../config/appConfig');
 
 // =================================================================================================
-// 1. SOLICITAÇÃO DE CORRIDA (REQUEST) - CORRIGIDO PARA RENDER
+// 1. SOLICITAÇÃO DE CORRIDA (REQUEST) - CORRIGIDO COM 10 MINUTOS DE TOLERÂNCIA
 // =================================================================================================
 
 /**
@@ -150,15 +156,20 @@ exports.requestRide = async (req, res) => {
             logError('RIDE_CREATE_ROOM', e);
         }
 
-        // ✅ BUSCAR MOTORISTAS ONLINE E NOTIFICAR
+        // =================================================================
+        // 4. 🔥 BUSCA DE MOTORISTAS - QUERY OTIMIZADA COM LOGS EXPLÍCITOS
+        // =================================================================
+
+        // ✅ AUMENTADO INTERVALO PARA 10 MINUTOS (Tolerância a falhas de rede)
+        // ✅ Removida verificação restrita de socket_id vazio para debug
         const driversRes = await pool.query(`
             SELECT
                 dp.driver_id,
                 dp.lat,
                 dp.lng,
                 dp.socket_id,
-                u.fcm_token,
                 u.name,
+                u.fcm_token,
                 u.photo,
                 u.rating,
                 u.vehicle_details
@@ -167,72 +178,87 @@ exports.requestRide = async (req, res) => {
             WHERE u.is_online = true
             AND u.role = 'driver'
             AND u.is_blocked = false
-            AND dp.last_update > NOW() - INTERVAL '2 minutes'
-            AND dp.socket_id IS NOT NULL
-            AND dp.socket_id != ''
+            AND dp.last_update > NOW() - INTERVAL '10 minutes'
         `);
 
-        console.log(`📊 [SERVER] Motoristas online: ${driversRes.rows.length}`);
-        logSystem('RIDE_DRIVERS', `📊 Motoristas online: ${driversRes.rows.length}`);
+        console.log(`🔎 [DISPATCH] Analisando ${driversRes.rows.length} motoristas online no DB (últimos 10 min)...`);
+        console.log(`📍 Origem da corrida: (${origin_lat}, ${origin_lng})`);
 
         const maxRadius = SYSTEM_CONFIG.RIDES.MAX_RADIUS_KM || 15;
         let driversNotified = 0;
         const notifiedDrivers = [];
 
-        // 🔥 NOTIFICAR CADA MOTORISTA INDIVIDUALMENTE
+        // 🔥 NOTIFICAR CADA MOTORISTA INDIVIDUALMENTE COM LOGS DETALHADOS
         for (const driver of driversRes.rows) {
+            // 1. Verificar Distância
             const distanceToPickup = getDistance(
                 parseFloat(origin_lat), parseFloat(origin_lng),
                 parseFloat(driver.lat), parseFloat(driver.lng)
             );
 
-            if (distanceToPickup <= maxRadius) {
-                const rideOpportunity = {
-                    id: ride.id,
-                    ride_id: ride.id,
-                    passenger_id: ride.passenger_id,
-                    origin_lat: parseFloat(ride.origin_lat),
-                    origin_lng: parseFloat(ride.origin_lng),
-                    dest_lat: parseFloat(ride.dest_lat),
-                    dest_lng: parseFloat(ride.dest_lng),
-                    origin_name: ride.origin_name,
-                    dest_name: ride.dest_name,
-                    initial_price: parseFloat(ride.initial_price),
-                    ride_type: ride.ride_type,
-                    distance_km: parseFloat(ride.distance_km),
-                    distance_to_pickup: parseFloat(distanceToPickup.toFixed(2)),
-                    passenger_name: req.user.name,
-                    passenger_photo: req.user.photo,
-                    passenger_rating: req.user.rating || 4.5,
-                    estimated_arrival: Math.ceil(distanceToPickup * 3),
-                    created_at: new Date().toISOString(),
-                    status: 'searching',
-                    notified_at: new Date().toISOString()
-                };
+            const socketStatus = driver.socket_id ? 'OK' : 'MISSING';
+            console.log(`   👤 Driver ${driver.name} (ID: ${driver.driver_id}) está a ${distanceToPickup.toFixed(2)}km - Socket: ${socketStatus}`);
 
-                // ✅ NOTIFICAÇÃO SOCKET DIRETA
+            // ✅ LOG EXPLÍCITO DE POR QUE O MOTORISTA NÃO FOI SELECIONADO
+            if (distanceToPickup > maxRadius) {
+                console.log(`   ❌ EXCLUÍDO: Distância (${distanceToPickup.toFixed(2)}km) > Raio máximo (${maxRadius}km)`);
+                continue;
+            }
+
+            if (!driver.socket_id) {
+                console.log(`   ❌ EXCLUÍDO: Driver sem socket_id (offline ou não conectado)`);
+                continue;
+            }
+
+            // ✅ MOTORISTA APROVADO - ENVIAR NOTIFICAÇÃO
+            const rideOpportunity = {
+                id: ride.id,
+                ride_id: ride.id,
+                passenger_id: ride.passenger_id,
+                origin_lat: parseFloat(ride.origin_lat),
+                origin_lng: parseFloat(ride.origin_lng),
+                dest_lat: parseFloat(ride.dest_lat),
+                dest_lng: parseFloat(ride.dest_lng),
+                origin_name: ride.origin_name,
+                dest_name: ride.dest_name,
+                initial_price: parseFloat(ride.initial_price),
+                ride_type: ride.ride_type,
+                distance_km: parseFloat(ride.distance_km),
+                distance_to_pickup: parseFloat(distanceToPickup.toFixed(2)),
+                passenger_name: req.user.name,
+                passenger_photo: req.user.photo,
+                passenger_rating: req.user.rating || 4.5,
+                estimated_arrival: Math.ceil(distanceToPickup * 3),
+                created_at: new Date().toISOString(),
+                status: 'searching',
+                notified_at: new Date().toISOString()
+            };
+
+            try {
+                // ✅ TENTATIVA DE ENVIO ROBUSTA
                 if (driver.socket_id) {
-                    try {
-                        // EMITIR PARA O SOCKET ESPECÍFICO
-                        req.io.to(driver.socket_id).emit('ride_opportunity', rideOpportunity);
+                    // Envia para o socket ID específico
+                    req.io.to(driver.socket_id).emit('ride_opportunity', rideOpportunity);
 
-                        // EMITIR PARA A SALA PESSOAL DO MOTORISTA
-                        req.io.to(`user_${driver.driver_id}`).emit('new_ride_available', rideOpportunity);
+                    // Envia também para a sala do usuário (backup)
+                    req.io.to(`user_${driver.driver_id}`).emit('ride_opportunity', rideOpportunity);
+                    req.io.to(`driver_${driver.driver_id}`).emit('ride_opportunity', rideOpportunity);
 
-                        driversNotified++;
-                        notifiedDrivers.push({
-                            driver_id: driver.driver_id,
-                            name: driver.name,
-                            distance: parseFloat(distanceToPickup.toFixed(2))
-                        });
+                    driversNotified++;
+                    notifiedDrivers.push({
+                        driver_id: driver.driver_id,
+                        name: driver.name,
+                        distance: parseFloat(distanceToPickup.toFixed(2))
+                    });
 
-                        console.log(`✅ [SOCKET] Notificação enviada para motorista ${driver.driver_id} (${driver.name})`);
-                        logSystem('RIDE_NOTIFY', `✅ Notificação enviada para motorista ${driver.driver_id}`);
-                    } catch (socketError) {
-                        console.error(`❌ [SOCKET] Erro ao notificar motorista ${driver.driver_id}:`, socketError.message);
-                        logError('RIDE_SOCKET_ERROR', socketError);
-                    }
+                    console.log(`   ✅ ENVIADO para Driver ${driver.driver_id} (${driver.name})`);
+                    logSystem('RIDE_NOTIFY', `✅ Notificação enviada para motorista ${driver.driver_id}`);
+                } else {
+                    console.log(`   ❌ FALHA: Driver ${driver.driver_id} sem socket_id`);
                 }
+            } catch (socketError) {
+                console.error(`   ❌ ERRO AO ENVIAR para ${driver.driver_id}:`, socketError.message);
+                logError('RIDE_SOCKET_ERROR', socketError);
             }
         }
 
@@ -242,6 +268,12 @@ exports.requestRide = async (req, res) => {
         // ✅ SE NENHUM MOTORISTA FOI NOTIFICADO
         if (driversNotified === 0) {
             console.log(`⚠️ [SERVER] Nenhum motorista disponível para corrida #${ride.id}`);
+            console.log(`   🔍 Possíveis causas:`);
+            console.log(`   - ${driversRes.rows.length} motoristas online, mas:`);
+            console.log(`   - Distância maior que ${maxRadius}km`);
+            console.log(`   - Socket_id ausente (motoristas não conectados ao socket)`);
+            console.log(`   - Motoristas ocupados em outras corridas`);
+
             logSystem('RIDE_NO_DRIVERS', `⚠️ Nenhum motorista disponível para corrida #${ride.id}`);
 
             try {
@@ -268,7 +300,8 @@ exports.requestRide = async (req, res) => {
                 total_drivers_online: driversRes.rows.length,
                 notified: driversNotified,
                 radius_km: maxRadius,
-                notified_drivers: notifiedDrivers
+                notified_drivers: notifiedDrivers,
+                time_window_minutes: 10
             }
         });
 
@@ -411,7 +444,7 @@ exports.acceptRide = async (req, res) => {
             const otherDriversRes = await pool.query(`
                 SELECT socket_id, driver_id
                 FROM driver_positions
-                WHERE last_update > NOW() - INTERVAL '2 minutes'
+                WHERE last_update > NOW() - INTERVAL '10 minutes'
                 AND driver_id != $1
                 AND socket_id IS NOT NULL
                 AND socket_id != ''
@@ -918,7 +951,7 @@ exports.cancelRide = async (req, res) => {
                     const driversRes = await pool.query(`
                         SELECT socket_id
                         FROM driver_positions
-                        WHERE last_update > NOW() - INTERVAL '2 minutes'
+                        WHERE last_update > NOW() - INTERVAL '10 minutes'
                         AND socket_id IS NOT NULL
                         AND socket_id != ''
                     `);
