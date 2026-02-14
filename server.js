@@ -5,7 +5,7 @@
  *
  * ARQUIVO: server.js
  * DESCRIÇÃO: Servidor principal com dashboard profissional
- * 
+ *
  * ✅ CORREÇÕES:
  * 1. ✅ Rota de debug movida para cá (estava no socketService.js causando erro)
  * 2. ✅ Todas as rotas organizadas corretamente
@@ -181,10 +181,10 @@ app.get('/admin', (req, res) => {
 app.get('/api/debug/drivers-detailed', async (req, res) => {
     try {
         const pool = require('./src/config/db');
-        
+
         // 1. Verificar todos os registros
         const all = await pool.query(`
-            SELECT 
+            SELECT
                 dp.driver_id,
                 dp.lat,
                 dp.lng,
@@ -204,7 +204,7 @@ app.get('/api/debug/drivers-detailed', async (req, res) => {
 
         // 2. Verificar motoristas online (critérios do rideController)
         const online = await pool.query(`
-            SELECT 
+            SELECT
                 dp.driver_id,
                 u.name,
                 dp.last_update,
@@ -279,7 +279,7 @@ app.use(globalErrorHandler);
 (async function startServer() {
     try {
         console.clear();
-        
+
         console.log(colors.cyan + '╔══════════════════════════════════════════════════════════════╗');
         console.log('║                   AOTRAVEL TERMINAL v11.0.0                   ║');
         console.log('╚══════════════════════════════════════════════════════════════╝' + colors.reset);
@@ -314,6 +314,36 @@ app.use(globalErrorHandler);
         process.exit(1);
     }
 })();
+
+// GET /api/debug/socket-status
+app.get('/api/debug/socket-status', async (req, res) => {
+  try {
+    const drivers = await pool.query(`
+      SELECT
+        dp.driver_id,
+        u.name,
+        dp.status,
+        dp.socket_id,
+        TO_CHAR(dp.last_update, 'HH24:MI:SS') as last_update,
+        dp.lat,
+        dp.lng,
+        EXTRACT(EPOCH FROM (NOW() - dp.last_update)) as seconds_ago
+      FROM driver_positions dp
+      JOIN users u ON dp.driver_id = u.id
+      WHERE dp.last_update > NOW() - INTERVAL '5 minutes'
+      ORDER BY dp.last_update DESC
+    `);
+
+    res.json({
+      success: true,
+      online_drivers: drivers.rows.length,
+      drivers: drivers.rows,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // =================================================================================================
 // 10. GRACEFUL SHUTDOWN
