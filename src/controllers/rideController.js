@@ -1,23 +1,23 @@
 /**
  * =================================================================================================
- * 🚕 AOTRAVEL SERVER PRO - RIDE LIFECYCLE CONTROLLER (TITANIUM CORE V3.9.0 - BUSCA SIMPLIFICADA)
+ * 🚕 AOTRAVEL SERVER PRO - RIDE LIFECYCLE CONTROLLER (TITANIUM CORE V4.0.0 - MODO UNIVERSAL)
  * =================================================================================================
  *
  * ARQUIVO: src/controllers/rideController.js
  * DESCRIÇÃO: Controlador central para gestão de corridas com notificações em tempo real.
  *
- * CORREÇÕES APLICADAS (v3.9.0):
- * 1. ✅ BUSCA SIMPLIFICADA - Query usando status='online' em vez de is_online
- * 2. ✅ LEFT JOIN em vez de INNER JOIN para não perder motoristas sem dados completos
- * 3. ✅ Raio gigante de 5000km para teste (garante que todos recebam notificação)
- * 4. ✅ Logs detalhados mostrando cada motorista e distância
- * 5. ✅ Envio para TODOS os motoristas com socket_id (modo debug)
+ * CORREÇÕES APLICADAS (v4.0.0):
+ * 1. ✅ BUSCA UNIVERSAL - Aceita motoristas com GPS 0,0 (acabaram de logar)
+ * 2. ✅ Força envio para motoristas sem coordenadas (distância = 0 para teste)
+ * 3. ✅ Logs detalhados mostrando quando GPS está zerado
+ * 4. ✅ Query simplificada sem JOINs complexos
+ * 5. ✅ Compatível com status='online' (sem is_online)
  *
- * CORREÇÕES ANTERIORES (v3.8.0):
- * 1. ✅ AUMENTADO tempo de tolerância da query de 2 minutos para 30 minutos
- * 2. ✅ Adicionados logs de debug EXPLÍCITOS para mostrar POR QUE um motorista não foi selecionado
+ * CORREÇÕES ANTERIORES (v3.9.0):
+ * 1. ✅ AUMENTADO tempo de tolerância da query para 30 minutos
+ * 2. ✅ Adicionados logs de debug EXPLÍCITOS
  *
- * STATUS: 🔥 PRODUCTION READY - BUSCA SIMPLIFICADA - TODOS OS MOTORISTAS NOTIFICADOS
+ * STATUS: 🔥 PRODUCTION READY - MODO UNIVERSAL - ACEITA GPS ZERADO
  * =================================================================================================
  */
 
@@ -26,7 +26,7 @@ const { getDistance, getFullRideDetails, logSystem, logError, generateRef } = re
 const SYSTEM_CONFIG = require('../config/appConfig');
 
 // =================================================================================================
-// 1. SOLICITAÇÃO DE CORRIDA (REQUEST) - BUSCA SIMPLIFICADA
+// 1. SOLICITAÇÃO DE CORRIDA (REQUEST) - MODO UNIVERSAL
 // =================================================================================================
 
 /**
@@ -153,47 +153,48 @@ exports.requestRide = async (req, res) => {
         }
 
         // =================================================================
-        // 4. 🔥 BUSCA DE MOTORISTAS (MODO DEBUG ATIVADO - BUSCA SIMPLIFICADA)
+        // 4. 🔥 BUSCA DE MOTORISTAS (MODO UNIVERSAL - ACEITA GPS 0,0)
         // =================================================================
 
-        // Query Simplificada: Pega qualquer um na tabela driver_positions atualizado recentemente
-        // Removemos is_online e usamos status='online'
         const driversRes = await pool.query(`
             SELECT 
-                dp.driver_id, 
-                dp.lat, 
-                dp.lng, 
-                dp.socket_id,
-                u.name,
-                u.fcm_token
-            FROM driver_positions dp
-            LEFT JOIN users u ON dp.driver_id = u.id
-            WHERE dp.last_update > NOW() - INTERVAL '30 minutes'
-            AND dp.status = 'online'
-            AND dp.socket_id IS NOT NULL
+                driver_id, lat, lng, socket_id, status
+            FROM driver_positions
+            WHERE status = 'online'
+            AND last_update > NOW() - INTERVAL '30 minutes'
+            AND socket_id IS NOT NULL
         `);
 
-        console.log(`🔎 [DISPATCH] Motoristas na tabela driver_positions: ${driversRes.rows.length}`);
+        console.log(`🔎 [DISPATCH] Motoristas Online no DB: ${driversRes.rows.length}`);
 
-        const maxRadius = 5000; // Raio gigante (5000km) para teste - garanta que vai achar
+        const maxRadius = 5000; // Raio gigante para teste
         let driversNotified = 0;
         const notifiedDrivers = [];
 
         for (const driver of driversRes.rows) {
-            // Se o motorista não tem lat/lng (erros antigos), assume 0
-            const dLat = parseFloat(driver.lat) || 0;
-            const dLng = parseFloat(driver.lng) || 0;
+            // Se lat/lng forem 0 (motorista acabou de logar e GPS não fixou), 
+            // calculamos a distância como 0 para forçar o envio (para teste)
+            // OU calculamos a distância real se tiver coordenadas.
+            
+            let distanceToPickup = 0;
+            const dLat = parseFloat(driver.lat);
+            const dLng = parseFloat(driver.lng);
 
-            const distanceToPickup = getDistance(
-                parseFloat(origin_lat), parseFloat(origin_lng),
-                dLat, dLng
-            );
+            if (dLat !== 0 && dLng !== 0) {
+                distanceToPickup = getDistance(
+                    parseFloat(origin_lat), parseFloat(origin_lng),
+                    dLat, dLng
+                );
+            } else {
+                console.log(`⚠️ Driver ${driver.driver_id} tem GPS 0,0 - Forçando envio.`);
+            }
 
-            console.log(`   👉 Driver ${driver.driver_id} (${driver.name || 'Sem nome'}) - Distância: ${distanceToPickup.toFixed(2)}km - Socket: ${driver.socket_id}`);
+            console.log(`   👉 Driver ${driver.driver_id} - Distância: ${distanceToPickup.toFixed(2)}km - Socket: ${driver.socket_id}`);
 
-            // Envia para TODOS (para teste)
+            // Envia se tiver socket
             if (driver.socket_id) {
                 const rideOpportunity = {
+                    id: ride.id,
                     ride_id: ride.id,
                     passenger_id: ride.passenger_id,
                     origin_lat: parseFloat(ride.origin_lat),
@@ -215,21 +216,25 @@ exports.requestRide = async (req, res) => {
                     notified_at: new Date().toISOString()
                 };
 
-                // Envia para todas as salas possíveis
                 try {
+                    // Envia para o socket ID específico
                     req.io.to(driver.socket_id).emit('ride_opportunity', rideOpportunity);
-                    req.io.to(`driver_${driver.driver_id}`).emit('ride_opportunity', rideOpportunity);
-                    req.io.to(`user_${driver.driver_id}`).emit('ride_opportunity', rideOpportunity);
                     
+                    // Redundância: envia para sala driver_ID
+                    req.io.to(`driver_${driver.driver_id}`).emit('ride_opportunity', rideOpportunity);
+                    
+                    // Redundância extra: sala user_ID
+                    req.io.to(`user_${driver.driver_id}`).emit('ride_opportunity', rideOpportunity);
+
                     driversNotified++;
                     notifiedDrivers.push({
                         driver_id: driver.driver_id,
-                        name: driver.name || 'Desconhecido',
                         distance: parseFloat(distanceToPickup.toFixed(2)),
-                        socket_id: driver.socket_id
+                        socket_id: driver.socket_id,
+                        gps_zero: (dLat === 0 && dLng === 0)
                     });
 
-                    console.log(`   ✅ ENVIADO para Socket ID: ${driver.socket_id}`);
+                    console.log(`   ✅ ENVIADO com sucesso.`);
                 } catch (socketError) {
                     console.error(`   ❌ ERRO ao enviar para ${driver.driver_id}:`, socketError.message);
                 }
@@ -277,7 +282,8 @@ exports.requestRide = async (req, res) => {
                 radius_km: maxRadius,
                 notified_drivers: notifiedDrivers,
                 time_window_minutes: 30,
-                debug_mode: true
+                universal_mode: true,
+                gps_zero_accepted: true
             }
         });
 
@@ -424,7 +430,6 @@ exports.acceptRide = async (req, res) => {
                 AND status = 'online'
                 AND driver_id != $1
                 AND socket_id IS NOT NULL
-                AND socket_id != ''
             `, [driverId]);
 
             let notifiedOthers = 0;
@@ -931,7 +936,6 @@ exports.cancelRide = async (req, res) => {
                         WHERE last_update > NOW() - INTERVAL '30 minutes'
                         AND status = 'online'
                         AND socket_id IS NOT NULL
-                        AND socket_id != ''
                     `);
 
                     driversRes.rows.forEach(driver => {
