@@ -1,21 +1,19 @@
 /**
  * =================================================================================================
- * 🚀 AOTRAVEL SERVER PRO - TITANIUM COMMAND CENTER (DASHBOARD VISUAL)
+ * 🚀 AOTRAVEL SERVER PRO - PRODUCTION COMMAND CENTER v11.0.0
  * =================================================================================================
  *
  * ARQUIVO: server.js
- * DESCRIÇÃO: Ponto de entrada com DASHBOARD VISUAL EM TEMPO REAL.
- *            Mostra TODAS as requisições, rotas, eventos socket e estado do sistema.
+ * DESCRIÇÃO: Servidor principal com dashboard profissional estilo "Terminal Real"
  *
- * NOVIDADES:
- * 1. ✅ DASHBOARD WEB bonito em http://localhost:3000/admin
- * 2. ✅ LOGS COLORIDOS e ORGANIZADOS no terminal
- * 3. ✅ CONTADORES de requisições, corridas, motoristas online
- * 4. ✅ HISTÓRICO de todas as requisições em tempo real
- * 5. ✅ STATUS dos motoristas e passageiros conectados
- * 6. ✅ MONITORAMENTO de eventos Socket.IO
+ * ✅ CARACTERÍSTICAS:
+ * 1. Design limpo, profissional (nada "feito por IA")
+ * 2. Dashboard funcional com dados reais
+ * 3. Logs organizados e úteis
+ * 4. Monitoramento em tempo real
+ * 5. Estável e pronto para produção
  *
- * STATUS: 🔥 PRODUCTION READY - SUPREME VERSION
+ * STATUS: 🔥 PRODUCTION READY
  * =================================================================================================
  */
 
@@ -25,40 +23,46 @@ const http = require('http');
 const { Server } = require("socket.io");
 const cors = require('cors');
 const path = require('path');
-const chalk = require('chalk');
-const Table = require('cli-table3');
 const moment = require('moment');
 const os = require('os');
 
-// =================================================================================================
-// 📊 SISTEMA DE LOGGING PREMIUM
-// =================================================================================================
-const log = {
-    info: (msg) => console.log(chalk.blue('📘 [INFO]'), msg),
-    success: (msg) => console.log(chalk.green('✅ [OK]'), msg),
-    warn: (msg) => console.log(chalk.yellow('⚠️ [WARN]'), msg),
-    error: (msg) => console.log(chalk.red('❌ [ERROR]'), msg),
-    socket: (msg) => console.log(chalk.magenta('🔌 [SOCKET]'), msg),
-    ride: (msg) => console.log(chalk.cyan('🚕 [RIDE]'), msg),
-    payment: (msg) => console.log(chalk.yellow('💰 [PAYMENT]'), msg),
-    http: (msg) => console.log(chalk.gray('📡 [HTTP]'), msg),
-    db: (msg) => console.log(chalk.cyan('💾 [DB]'), msg),
-    divider: () => console.log(chalk.gray('─'.repeat(80))),
-    title: (msg) => {
-        console.log('\n' + chalk.bgBlue.white.bold(` ${msg} `));
-        console.log(chalk.blue('═'.repeat(msg.length + 2)));
-    }
+// Cores para o terminal (mantidas apenas para logs, não para o dashboard)
+const colors = {
+    reset: '\x1b[0m',
+    bright: '\x1b[1m',
+    dim: '\x1b[2m',
+    red: '\x1b[31m',
+    green: '\x1b[32m',
+    yellow: '\x1b[33m',
+    blue: '\x1b[34m',
+    magenta: '\x1b[35m',
+    cyan: '\x1b[36m',
+    white: '\x1b[37m',
+    gray: '\x1b[90m'
 };
 
 // =================================================================================================
-// 📊 ESTADO GLOBAL DO SISTEMA (DASHBOARD)
+// 📊 SISTEMA DE LOGS SIMPLES E EFICAZ
+// =================================================================================================
+const log = {
+    info: (msg) => console.log(`${colors.blue}📘${colors.reset} ${msg}`),
+    success: (msg) => console.log(`${colors.green}✅${colors.reset} ${msg}`),
+    warn: (msg) => console.log(`${colors.yellow}⚠️${colors.reset} ${msg}`),
+    error: (msg) => console.log(`${colors.red}❌${colors.reset} ${msg}`),
+    socket: (msg) => console.log(`${colors.magenta}🔌${colors.reset} ${msg}`),
+    ride: (msg) => console.log(`${colors.cyan}🚕${colors.reset} ${msg}`),
+    http: (msg) => console.log(`${colors.gray}📡${colors.reset} ${msg}`),
+    divider: () => console.log(colors.gray + '─'.repeat(60) + colors.reset)
+};
+
+// =================================================================================================
+// 📊 ESTADO GLOBAL DO SISTEMA
 // =================================================================================================
 const systemStats = {
     startTime: new Date(),
     requests: {
         total: 0,
         byMethod: { GET: 0, POST: 0, PUT: 0, DELETE: 0 },
-        byEndpoint: {},
         last10: []
     },
     rides: {
@@ -73,13 +77,7 @@ const systemStats = {
         total: 0,
         drivers: 0,
         passengers: 0,
-        admins: 0,
         rooms: 0
-    },
-    users: {
-        online: 0,
-        drivers: 0,
-        passengers: 0
     },
     performance: {
         avgResponseTime: 0,
@@ -88,7 +86,7 @@ const systemStats = {
 };
 
 // =================================================================================================
-// 1. IMPORTAÇÃO DE CONFIGURAÇÕES E BANCO
+// 1. IMPORTAÇÕES
 // =================================================================================================
 const db = require('./src/config/db');
 const appConfig = require('./src/config/appConfig');
@@ -101,7 +99,7 @@ const app = express();
 const server = http.createServer(app);
 
 // =================================================================================================
-// 2. CONFIGURAÇÃO DO SOCKET.IO COM MONITORAMENTO
+// 2. CONFIGURAÇÃO DO SOCKET.IO
 // =================================================================================================
 const io = new Server(server, {
     cors: {
@@ -114,7 +112,7 @@ const io = new Server(server, {
     transports: appConfig.SOCKET?.TRANSPORTS || ['websocket', 'polling']
 });
 
-// INJETAR io NAS REQUISIÇÕES (CRÍTICO PARA NOTIFICAÇÕES!)
+// Injetar io nas requisições
 app.use((req, res, next) => {
     req.io = io;
     req.systemStats = systemStats;
@@ -125,22 +123,22 @@ app.set('io', io);
 app.set('systemStats', systemStats);
 
 // =================================================================================================
-// 3. MIDDLEWARES GLOBAIS COM LOGGING PREMIUM
+// 3. MIDDLEWARES
 // =================================================================================================
 
 // CORS
 app.use(cors({ origin: '*' }));
 
-// Parsing de Corpo
+// Parsing
 app.use(express.json({ limit: appConfig.SERVER?.BODY_LIMIT || '100mb' }));
 app.use(express.urlencoded({ limit: appConfig.SERVER?.BODY_LIMIT || '100mb', extended: true }));
 
-// Arquivos Estáticos
+// Arquivos estáticos
 const uploadPath = appConfig.SERVER?.UPLOAD_DIR || 'uploads';
 app.use('/uploads', express.static(path.join(__dirname, uploadPath)));
 
 // =================================================================================================
-// 4. 🎨 DASHBOARD VISUAL EM TEMPO REAL (HTML + CSS + JS)
+// 4. DASHBOARD PROFISSIONAL - DESIGN LIMPO E REALISTA
 // =================================================================================================
 app.get('/admin', (req, res) => {
     const stats = systemStats;
@@ -152,264 +150,453 @@ app.get('/admin', (req, res) => {
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>🚀 AOTRAVEL TITANIUM COMMAND CENTER</title>
+        <title>AOTRAVEL · Terminal</title>
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
         <style>
-            * { margin: 0; padding: 0; box-sizing: border-box; }
-            body {
-                font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                min-height: 100vh;
-                padding: 30px;
-                color: #fff;
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
             }
-            .container {
+
+            body {
+                font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+                background: #f5f7fb;
+                color: #1a1f36;
+                line-height: 1.5;
+            }
+
+            .dashboard {
                 max-width: 1400px;
                 margin: 0 auto;
-            }
-            .header {
-                background: rgba(255,255,255,0.1);
-                backdrop-filter: blur(10px);
-                border-radius: 20px;
                 padding: 30px;
-                margin-bottom: 30px;
-                border: 1px solid rgba(255,255,255,0.2);
-                box-shadow: 0 20px 40px rgba(0,0,0,0.2);
             }
+
+            /* Header */
+            .header {
+                margin-bottom: 40px;
+            }
+
             .header h1 {
-                font-size: 2.5em;
-                margin-bottom: 10px;
+                font-size: 24px;
+                font-weight: 600;
+                color: #1a1f36;
                 display: flex;
                 align-items: center;
-                gap: 15px;
+                gap: 12px;
             }
+
             .header h1 span {
-                background: rgba(255,255,255,0.2);
-                padding: 5px 15px;
-                border-radius: 50px;
-                font-size: 0.5em;
-                font-weight: normal;
+                background: #eef2f6;
+                color: #4a5568;
+                font-size: 14px;
+                font-weight: 500;
+                padding: 4px 10px;
+                border-radius: 20px;
             }
+
+            .header .uptime {
+                color: #64748b;
+                font-size: 14px;
+                margin-top: 8px;
+            }
+
+            .header .uptime strong {
+                color: #1a1f36;
+                font-weight: 600;
+            }
+
+            /* Stats Grid */
             .stats-grid {
                 display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-                gap: 25px;
+                grid-template-columns: repeat(4, 1fr);
+                gap: 20px;
                 margin-bottom: 30px;
             }
+
             .stat-card {
-                background: rgba(255,255,255,0.1);
-                backdrop-filter: blur(10px);
-                border-radius: 20px;
-                padding: 25px;
-                border: 1px solid rgba(255,255,255,0.2);
-                transition: transform 0.3s ease;
+                background: white;
+                border-radius: 16px;
+                padding: 24px;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+                border: 1px solid #eef2f6;
             }
-            .stat-card:hover {
-                transform: translateY(-5px);
-                background: rgba(255,255,255,0.15);
-            }
+
             .stat-card h3 {
-                font-size: 1.1em;
-                opacity: 0.9;
-                margin-bottom: 15px;
+                font-size: 14px;
+                font-weight: 500;
+                color: #64748b;
+                margin-bottom: 12px;
                 display: flex;
                 align-items: center;
-                gap: 10px;
+                gap: 8px;
             }
+
             .stat-number {
-                font-size: 2.8em;
-                font-weight: bold;
-                margin-bottom: 10px;
+                font-size: 32px;
+                font-weight: 600;
+                color: #1a1f36;
+                margin-bottom: 8px;
             }
+
             .stat-label {
-                font-size: 0.9em;
-                opacity: 0.8;
+                font-size: 13px;
+                color: #94a3b8;
             }
-            .progress-bar {
-                width: 100%;
-                height: 8px;
-                background: rgba(255,255,255,0.1);
-                border-radius: 4px;
-                margin-top: 15px;
-                overflow: hidden;
+
+            .stat-label span {
+                color: #1a1f36;
+                font-weight: 500;
             }
-            .progress-fill {
-                height: 100%;
-                background: linear-gradient(90deg, #00d2ff, #3a7bd5);
-                border-radius: 4px;
-                transition: width 0.3s ease;
+
+            /* Two Column Layout */
+            .two-column {
+                display: grid;
+                grid-template-columns: 1.5fr 1fr;
+                gap: 20px;
+                margin-bottom: 30px;
             }
+
+            /* Tables */
             .table-container {
-                background: rgba(255,255,255,0.1);
-                backdrop-filter: blur(10px);
-                border-radius: 20px;
-                padding: 25px;
-                border: 1px solid rgba(255,255,255,0.2);
-                margin-top: 30px;
+                background: white;
+                border-radius: 16px;
+                padding: 24px;
+                border: 1px solid #eef2f6;
             }
+
+            .table-container h2 {
+                font-size: 16px;
+                font-weight: 600;
+                color: #1a1f36;
+                margin-bottom: 20px;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
+
+            .table-container h2 .badge {
+                background: #eef2f6;
+                color: #4a5568;
+                font-size: 12px;
+                font-weight: 500;
+                padding: 2px 8px;
+                border-radius: 12px;
+            }
+
             table {
                 width: 100%;
                 border-collapse: collapse;
             }
+
             th {
                 text-align: left;
-                padding: 12px;
-                font-weight: 600;
-                border-bottom: 2px solid rgba(255,255,255,0.2);
+                padding: 12px 0;
+                font-size: 13px;
+                font-weight: 500;
+                color: #64748b;
+                border-bottom: 1px solid #eef2f6;
             }
+
             td {
-                padding: 12px;
-                border-bottom: 1px solid rgba(255,255,255,0.1);
+                padding: 12px 0;
+                font-size: 14px;
+                color: #1a1f36;
+                border-bottom: 1px solid #f1f5f9;
             }
-            .badge {
+
+            td:last-child {
+                font-family: 'SF Mono', 'Monaco', monospace;
+                font-size: 13px;
+            }
+
+            .method-badge {
                 display: inline-block;
-                padding: 4px 12px;
-                border-radius: 50px;
-                font-size: 0.85em;
-                font-weight: 600;
+                padding: 4px 8px;
+                border-radius: 6px;
+                font-size: 12px;
+                font-weight: 500;
             }
-            .badge-success { background: #10b981; color: white; }
-            .badge-warning { background: #f59e0b; color: white; }
-            .badge-danger { background: #ef4444; color: white; }
-            .badge-info { background: #3b82f6; color: white; }
-            .refresh-btn {
-                background: rgba(255,255,255,0.2);
-                color: white;
-                border: 1px solid rgba(255,255,255,0.3);
-                padding: 10px 25px;
-                border-radius: 50px;
-                cursor: pointer;
-                font-size: 1em;
-                transition: all 0.3s ease;
+
+            .method-get { background: #e6f7ff; color: #0066cc; }
+            .method-post { background: #e6f7e6; color: #00875a; }
+            .method-put { background: #fff4e6; color: #b45b0a; }
+            .method-delete { background: #ffe6e6; color: #cc0000; }
+
+            .status-badge {
+                display: inline-block;
+                padding: 4px 8px;
+                border-radius: 6px;
+                font-size: 12px;
+                font-weight: 500;
             }
-            .refresh-btn:hover {
-                background: rgba(255,255,255,0.3);
-                transform: scale(1.05);
+
+            .status-2xx { background: #e6f7e6; color: #00875a; }
+            .status-3xx { background: #fff4e6; color: #b45b0a; }
+            .status-4xx { background: #ffe6e6; color: #cc0000; }
+            .status-5xx { background: #ffe6e6; color: #cc0000; }
+
+            .ride-status {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 16px;
+                margin-top: 16px;
             }
-            .footer {
+
+            .ride-status-item {
+                flex: 1;
+                background: #f8fafc;
+                border-radius: 12px;
+                padding: 16px;
                 text-align: center;
-                margin-top: 50px;
-                opacity: 0.7;
-                font-size: 0.9em;
+            }
+
+            .ride-status-item .label {
+                font-size: 12px;
+                color: #64748b;
+                margin-bottom: 4px;
+            }
+
+            .ride-status-item .value {
+                font-size: 20px;
+                font-weight: 600;
+                color: #1a1f36;
+            }
+
+            .progress-bar {
+                width: 100%;
+                height: 4px;
+                background: #eef2f6;
+                border-radius: 2px;
+                margin: 16px 0 8px 0;
+                overflow: hidden;
+            }
+
+            .progress-fill {
+                height: 100%;
+                background: #3b82f6;
+                border-radius: 2px;
+                transition: width 0.3s ease;
+            }
+
+            .footer {
+                margin-top: 40px;
+                padding-top: 20px;
+                border-top: 1px solid #eef2f6;
+                font-size: 13px;
+                color: #94a3b8;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            }
+
+            .footer .pid {
+                font-family: 'SF Mono', monospace;
+                background: #f1f5f9;
+                padding: 4px 10px;
+                border-radius: 20px;
+                color: #475569;
+            }
+
+            .refresh-btn {
+                background: white;
+                border: 1px solid #e2e8f0;
+                color: #475569;
+                font-size: 13px;
+                font-weight: 500;
+                padding: 8px 16px;
+                border-radius: 8px;
+                cursor: pointer;
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+                transition: all 0.2s;
+            }
+
+            .refresh-btn:hover {
+                background: #f8fafc;
+                border-color: #cbd5e1;
+            }
+
+            @media (max-width: 1024px) {
+                .stats-grid {
+                    grid-template-columns: repeat(2, 1fr);
+                }
+                .two-column {
+                    grid-template-columns: 1fr;
+                }
             }
         </style>
     </head>
     <body>
-        <div class="container">
+        <div class="dashboard">
+            <!-- Header -->
             <div class="header">
                 <h1>
-                    🚀 AOTRAVEL TITANIUM COMMAND CENTER
+                    AOTRAVEL TERMINAL
                     <span>v11.0.0</span>
                 </h1>
-                <p style="font-size: 1.2em; opacity: 0.9;">${uptime} de operação contínua</p>
-                <button class="refresh-btn" onclick="location.reload()">🔄 Atualizar Agora</button>
+                <div class="uptime">
+                    <strong>${uptime}</strong> de operação · 
+                    Iniciado às ${moment(stats.startTime).format('HH:mm:ss')} de ${moment(stats.startTime).format('DD/MM/YYYY')}
+                </div>
             </div>
 
+            <!-- Stats Cards -->
             <div class="stats-grid">
                 <div class="stat-card">
-                    <h3>👥 USUÁRIOS ONLINE</h3>
+                    <h3>👥 Usuários Online</h3>
                     <div class="stat-number">${stats.sockets.total}</div>
                     <div class="stat-label">
-                        🚗 Motoristas: ${stats.sockets.drivers} |
-                        👤 Passageiros: ${stats.sockets.passengers}
-                    </div>
-                    <div class="progress-bar">
-                        <div class="progress-fill" style="width: ${Math.min((stats.sockets.total / 100) * 100, 100)}%"></div>
+                        <span>${stats.sockets.drivers}</span> motoristas · 
+                        <span>${stats.sockets.passengers}</span> passageiros
                     </div>
                 </div>
 
                 <div class="stat-card">
-                    <h3>🚕 CORRIDAS HOJE</h3>
+                    <h3>🚕 Corridas Hoje</h3>
                     <div class="stat-number">${stats.rides.total}</div>
                     <div class="stat-label">
-                        ✅ Completas: ${stats.rides.completed} |
-                        🔍 Buscando: ${stats.rides.searching}
-                    </div>
-                    <div class="progress-bar">
-                        <div class="progress-fill" style="width: ${stats.rides.completed > 0 ? (stats.rides.completed / stats.rides.total * 100) : 0}%"></div>
+                        <span>${stats.rides.completed}</span> completas · 
+                        <span>${stats.rides.searching}</span> buscando
                     </div>
                 </div>
 
                 <div class="stat-card">
-                    <h3>📡 REQUISIÇÕES</h3>
+                    <h3>📡 Requisições</h3>
                     <div class="stat-number">${stats.requests.total}</div>
                     <div class="stat-label">
-                        📤 POST: ${stats.requests.byMethod.POST} |
-                        📥 GET: ${stats.requests.byMethod.GET}
-                    </div>
-                    <div class="progress-bar">
-                        <div class="progress-fill" style="width: 100%"></div>
+                        <span>${stats.requests.byMethod.POST || 0}</span> POST · 
+                        <span>${stats.requests.byMethod.GET || 0}</span> GET
                     </div>
                 </div>
 
                 <div class="stat-card">
-                    <h3>💾 SISTEMA</h3>
-                    <div class="stat-number">${process.pid}</div>
+                    <h3>⏱️ Resposta Média</h3>
+                    <div class="stat-number">${Math.round(stats.performance.avgResponseTime)}ms</div>
                     <div class="stat-label">
-                        🖥️ PID | ${os.platform()} | ${os.arch()}
-                    </div>
-                    <div class="progress-bar">
-                        <div class="progress-fill" style="width: ${(process.memoryUsage().heapUsed / process.memoryUsage().heapTotal * 100).toFixed(1)}%"></div>
+                        PID <span>${process.pid}</span> · ${os.platform()}
                     </div>
                 </div>
             </div>
 
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <h3>💰 TRANSAÇÕES</h3>
-                    <div class="stat-number">${stats.rides.completed}</div>
-                    <div class="stat-label">Pagamentos processados</div>
-                </div>
-                <div class="stat-card">
-                    <h3>🔌 SOCKETS ATIVOS</h3>
-                    <div class="stat-number">${stats.sockets.rooms}</div>
-                    <div class="stat-label">Salas de corrida ativas</div>
-                </div>
-                <div class="stat-card">
-                    <h3>⏱️ RESPOSTA MÉDIA</h3>
-                    <div class="stat-number">${stats.performance.avgResponseTime.toFixed(0)}ms</div>
-                    <div class="stat-label">Latência da API</div>
-                </div>
-                <div class="stat-card">
-                    <h3>📅 INICIADO</h3>
-                    <div class="stat-number">${moment(stats.startTime).format('HH:mm:ss')}</div>
-                    <div class="stat-label">${moment(stats.startTime).format('DD/MM/YYYY')}</div>
-                </div>
-            </div>
-
-            <div class="table-container">
-                <h2 style="margin-bottom: 20px;">📋 ÚLTIMAS 10 REQUISIÇÕES</h2>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Hora</th>
-                            <th>Método</th>
-                            <th>Endpoint</th>
-                            <th>Status</th>
-                            <th>Tempo</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${stats.requests.last10.map(req => `
+            <!-- Two Column Layout -->
+            <div class="two-column">
+                <!-- Últimas Requisições -->
+                <div class="table-container">
+                    <h2>
+                        📋 Últimas Requisições
+                        <span class="badge">${stats.requests.last10.length}/10</span>
+                    </h2>
+                    <table>
+                        <thead>
                             <tr>
-                                <td>${moment(req.time).format('HH:mm:ss')}</td>
-                                <td><span class="badge ${req.method === 'POST' ? 'badge-success' : req.method === 'GET' ? 'badge-info' : 'badge-warning'}">${req.method}</span></td>
-                                <td>${req.url}</td>
-                                <td><span class="badge ${req.statusCode < 300 ? 'badge-success' : req.statusCode < 400 ? 'badge-warning' : 'badge-danger'}">${req.statusCode}</span></td>
-                                <td>${req.duration}ms</td>
+                                <th>Hora</th>
+                                <th>Método</th>
+                                <th>Endpoint</th>
+                                <th>Status</th>
+                                <th>ms</th>
                             </tr>
-                        `).join('')}
-                    </tbody>
-                </table>
+                        </thead>
+                        <tbody>
+                            ${stats.requests.last10.map(req => {
+                                const methodClass = {
+                                    'GET': 'method-get',
+                                    'POST': 'method-post',
+                                    'PUT': 'method-put',
+                                    'DELETE': 'method-delete'
+                                }[req.method] || 'method-get';
+
+                                const statusClass = req.statusCode < 300 ? 'status-2xx' :
+                                                   req.statusCode < 400 ? 'status-3xx' : 'status-4xx';
+
+                                return `
+                                    <tr>
+                                        <td>${moment(req.time).format('HH:mm:ss')}</td>
+                                        <td><span class="method-badge ${methodClass}">${req.method}</span></td>
+                                        <td>${req.url.length > 30 ? req.url.substring(0, 30) + '...' : req.url}</td>
+                                        <td><span class="status-badge ${statusClass}">${req.statusCode}</span></td>
+                                        <td>${req.duration}</td>
+                                    </tr>
+                                `;
+                            }).join('')}
+                            ${stats.requests.last10.length === 0 ? `
+                                <tr>
+                                    <td colspan="5" style="text-align: center; color: #94a3b8; padding: 40px;">
+                                        Nenhuma requisição ainda
+                                    </td>
+                                </tr>
+                            ` : ''}
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Status das Corridas -->
+                <div class="table-container">
+                    <h2>🚦 Status das Corridas</h2>
+                    
+                    <div class="ride-status">
+                        <div class="ride-status-item">
+                            <div class="label">Buscando</div>
+                            <div class="value">${stats.rides.searching}</div>
+                        </div>
+                        <div class="ride-status-item">
+                            <div class="label">Aceitas</div>
+                            <div class="value">${stats.rides.accepted}</div>
+                        </div>
+                        <div class="ride-status-item">
+                            <div class="label">Em Andamento</div>
+                            <div class="value">${stats.rides.ongoing}</div>
+                        </div>
+                        <div class="ride-status-item">
+                            <div class="label">Completas</div>
+                            <div class="value">${stats.rides.completed}</div>
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 24px;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                            <span style="font-size: 13px; color: #64748b;">Progresso Hoje</span>
+                            <span style="font-size: 13px; font-weight: 500;">
+                                ${stats.rides.total > 0 ? Math.round((stats.rides.completed / stats.rides.total) * 100) : 0}%
+                            </span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" style="width: ${stats.rides.total > 0 ? (stats.rides.completed / stats.rides.total * 100) : 0}%"></div>
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 24px;">
+                        <div style="font-size: 13px; color: #64748b; margin-bottom: 8px;">Salas Ativas</div>
+                        <div style="font-size: 24px; font-weight: 600;">${stats.sockets.rooms}</div>
+                    </div>
+                </div>
             </div>
 
+            <!-- Footer -->
             <div class="footer">
-                <p>⚡ AOTRAVEL TITANIUM CORE | Socket.IO: ${io.engine?.clientsCount || 0} conexões ativas</p>
-                <p style="margin-top: 10px;">🛡️ Desenvolvido por Augusto Neves • Engenharia de Precisão</p>
+                <div>
+                    <span class="pid">PID ${process.pid}</span>
+                    <span style="margin-left: 16px;">Socket.IO: ${io.engine?.clientsCount || 0} conexões</span>
+                </div>
+                <button class="refresh-btn" onclick="location.reload()">
+                    <span>↻</span> Atualizar
+                </button>
             </div>
         </div>
+
         <script>
-            // Auto-refresh a cada 5 segundos
-            setTimeout(() => location.reload(), 5000);
+            // Auto-refresh silencioso (apenas se a aba estiver ativa)
+            let timeout;
+            function scheduleRefresh() {
+                if (timeout) clearTimeout(timeout);
+                if (!document.hidden) {
+                    timeout = setTimeout(() => location.reload(), 5000);
+                }
+            }
+            
+            document.addEventListener('visibilitychange', scheduleRefresh);
+            scheduleRefresh();
         </script>
     </body>
     </html>
@@ -417,13 +604,12 @@ app.get('/admin', (req, res) => {
 });
 
 // =================================================================================================
-// 5. MIDDLEWARE DE LOGGING PREMIUM (CAPTURA TODAS AS REQUISIÇÕES)
+// 5. MIDDLEWARE DE LOGGING
 // =================================================================================================
 app.use((req, res, next) => {
     const start = Date.now();
     const originalSend = res.send;
 
-    // Intercepta o send para capturar status code
     res.send = function(body) {
         const duration = Date.now() - start;
 
@@ -431,10 +617,7 @@ app.use((req, res, next) => {
         systemStats.requests.total++;
         systemStats.requests.byMethod[req.method] = (systemStats.requests.byMethod[req.method] || 0) + 1;
 
-        const endpoint = req.originalUrl.split('?')[0];
-        systemStats.requests.byEndpoint[endpoint] = (systemStats.requests.byEndpoint[endpoint] || 0) + 1;
-
-        // Adiciona às últimas 10 requisições
+        // Adiciona às últimas 10
         systemStats.requests.last10.unshift({
             time: new Date(),
             method: req.method,
@@ -444,36 +627,22 @@ app.use((req, res, next) => {
         });
         if (systemStats.requests.last10.length > 10) systemStats.requests.last10.pop();
 
-        // Atualiza tempo médio de resposta
+        // Atualiza tempo médio
         systemStats.performance.totalResponseTime += duration;
         systemStats.performance.avgResponseTime = systemStats.performance.totalResponseTime / systemStats.requests.total;
 
-        // LOG PREMIUM COLORIDO
-        const methodColor = {
-            'GET': chalk.green,
-            'POST': chalk.blue,
-            'PUT': chalk.yellow,
-            'DELETE': chalk.red
-        }[req.method] || chalk.white;
-
-        const statusColor = res.statusCode < 300 ? chalk.green :
-                           res.statusCode < 400 ? chalk.yellow :
-                           chalk.red;
-
+        // Log no terminal (apenas método e status)
+        const statusColor = res.statusCode < 300 ? colors.green :
+                           res.statusCode < 400 ? colors.yellow :
+                           colors.red;
+        
         console.log(
-            chalk.gray(moment().format('HH:mm:ss')) + ' ' +
-            methodColor(req.method.padEnd(6)) + ' ' +
-            chalk.white(req.originalUrl.padEnd(40)) + ' ' +
-            statusColor(res.statusCode.toString()) + ' ' +
-            chalk.gray(`${duration}ms`)
+            moment().format('HH:mm:ss') + ' ' +
+            req.method.padEnd(6) + ' ' +
+            req.originalUrl.padEnd(40) + ' ' +
+            statusColor + res.statusCode + colors.reset + ' ' +
+            colors.dim + duration + 'ms' + colors.reset
         );
-
-        // Log especial para endpoints de corrida
-        if (req.originalUrl.includes('/rides/')) {
-            if (req.originalUrl.includes('/request')) log.ride(`NOVA CORRIDA solicitada`);
-            if (req.originalUrl.includes('/accept')) log.ride(`CORRIDA ACEITA`);
-            if (req.originalUrl.includes('/complete')) log.ride(`CORRIDA FINALIZADA`);
-        }
 
         originalSend.call(this, body);
     };
@@ -485,35 +654,22 @@ app.use((req, res, next) => {
 // 6. HEALTH CHECK
 // =================================================================================================
 app.get('/', (req, res) => {
-    res.send(`
-        <html>
-            <head><title>AOTRAVEL Titanium Core</title></head>
-            <body style="font-family: system-ui; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0;">
-                <div style="text-align: center;">
-                    <h1 style="font-size: 3em; margin-bottom: 20px;">🚀 AOtravel Backend</h1>
-                    <p style="font-size: 1.2em; opacity: 0.9;">Titanium Core • v11.0.0</p>
-                    <div style="margin-top: 40px;">
-                        <a href="/admin" style="background: rgba(255,255,255,0.2); color: white; padding: 15px 30px; border-radius: 50px; text-decoration: none; font-weight: bold;">📊 ACESSAR COMMAND CENTER</a>
-                    </div>
-                </div>
-            </body>
-        </html>
-    `);
+    res.json({
+        service: 'AOTRAVEL Backend',
+        version: '11.0.0',
+        status: 'online',
+        timestamp: new Date().toISOString(),
+        dashboard: '/admin'
+    });
 });
 
 // =================================================================================================
-// 7. MAPEAMENTO DE ROTAS
+// 7. ROTAS DA API
 // =================================================================================================
 app.use('/api', routes);
 
 // =================================================================================================
-// 8. HANDLERS DE ERRO
-// =================================================================================================
-app.use(notFoundHandler);
-app.use(globalErrorHandler);
-
-// =================================================================================================
-// 🚨 ROTA DE TESTE - VERIFICAR MOTORISTAS ONLINE
+// 8. DEBUG - MOTORISTAS ONLINE
 // =================================================================================================
 app.get('/api/debug/drivers', async (req, res) => {
     try {
@@ -524,10 +680,9 @@ app.get('/api/debug/drivers', async (req, res) => {
                 dp.lat,
                 dp.lng,
                 dp.socket_id,
-                dp.last_update,
+                TO_CHAR(dp.last_update, 'HH24:MI:SS') as last_update,
                 dp.status,
                 u.name,
-                u.phone,
                 u.is_online
             FROM driver_positions dp
             JOIN users u ON dp.driver_id = u.id
@@ -535,7 +690,6 @@ app.get('/api/debug/drivers', async (req, res) => {
             ORDER BY dp.last_update DESC
         `);
 
-        console.log(`🚨 [DEBUG] Motoristas online: ${result.rows.length}`);
         res.json({
             success: true,
             count: result.rows.length,
@@ -543,118 +697,78 @@ app.get('/api/debug/drivers', async (req, res) => {
             timestamp: new Date().toISOString()
         });
     } catch (error) {
-        console.error('❌ [DEBUG] Erro:', error);
         res.status(500).json({ error: error.message });
     }
 });
 
 // =================================================================================================
-// 9. PROCESSO DE BOOT COM DASHBOARD NO TERMINAL
+// 9. HANDLERS DE ERRO
+// =================================================================================================
+app.use(notFoundHandler);
+app.use(globalErrorHandler);
+
+// =================================================================================================
+// 10. INICIALIZAÇÃO DO SERVIDOR
 // =================================================================================================
 (async function startServer() {
     try {
         console.clear();
-        console.log(chalk.cyan(`
-╔══════════════════════════════════════════════════════════════════════════════╗
-║                                                                              ║
-║   █████╗  ██████╗ ████████╗██████╗  █████╗ ██╗   ██╗███████╗██╗             ║
-║  ██╔══██╗██╔═══██╗╚══██╔══╝██╔══██╗██╔══██╗██║   ██║██╔════╝██║             ║
-║  ███████║██║   ██║   ██║   ██████╔╝███████║██║   ██║█████╗  ██║             ║
-║  ██╔══██║██║   ██║   ██║   ██╔══██╗██╔══██║╚██╗ ██╔╝██╔══╝  ██║             ║
-║  ██║  ██║╚██████╔╝   ██║   ██║  ██║██║  ██║ ╚████╔╝ ███████╗███████╗        ║
-║  ╚═╝  ╚═╝ ╚═════╝    ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═╝  ╚═══╝  ╚══════╝╚══════╝        ║
-║                                                                              ║
-║                    🚀 TITANIUM COMMAND CENTER v11.0.0                       ║
-║                                                                              ║
-╚══════════════════════════════════════════════════════════════════════════════╝
-        `));
+        
+        // Banner simples
+        console.log(colors.cyan + '╔══════════════════════════════════════════════════════════════╗');
+        console.log('║                   AOTRAVEL TERMINAL v11.0.0                   ║');
+        console.log('╚══════════════════════════════════════════════════════════════╝' + colors.reset);
+        console.log();
 
-        console.log(chalk.blue.bold('\n┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓'));
-        console.log(chalk.blue.bold('┃                    🚀 INICIANDO SERVIDOR                         ┃'));
-        console.log(chalk.blue.bold('┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n'));
-
-        // 1. Banco de Dados
-        log.db('Verificando integridade do banco de dados...');
+        // Inicializa banco
+        log.info('Verificando banco de dados...');
         await bootstrapDatabase();
-        log.success('Banco de Dados sincronizado com sucesso.');
+        log.success('Banco de dados OK');
 
-        // 2. Socket.IO
-        log.socket('Inicializando motor de tempo real...');
+        // Inicializa Socket
+        log.socket('Iniciando Socket.IO...');
         setupSocketIO(io);
+        log.success('Socket.IO pronto');
 
-        // Monitoramento de sockets
+        // Monitora conexões socket
         io.engine.on('connection', (socket) => {
             systemStats.sockets.total = io.engine.clientsCount;
         });
 
-        log.success('Socket.IO inicializado com monitoramento em tempo real.');
-
-        // 3. Servidor HTTP
+        // Inicia servidor
         const PORT = process.env.PORT || appConfig.SERVER?.PORT || 3000;
         server.listen(PORT, '0.0.0.0', () => {
-            console.log(chalk.green('\n┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓'));
-            console.log(chalk.green('┃                    ✅ SERVIDOR ONLINE                             ┃'));
-            console.log(chalk.green('┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛\n'));
-
-            // Tabela de endpoints
-            const table = new Table({
-                head: [chalk.white('🌐 ENDPOINT'), chalk.white('📡 MÉTODO'), chalk.white('📝 DESCRIÇÃO')],
-                colWidths: [50, 15, 40],
-                style: { head: ['cyan'], border: ['gray'] }
-            });
-
-            table.push(
-                ['/', 'GET', 'Health Check'],
-                ['/admin', 'GET', 'Dashboard Visual em Tempo Real'],
-                ['/api/rides/request', 'POST', 'Solicitar nova corrida'],
-                ['/api/rides/accept', 'POST', 'Aceitar corrida (motorista)'],
-                ['/api/rides/start', 'POST', 'Iniciar viagem'],
-                ['/api/rides/complete', 'POST', 'Finalizar corrida'],
-                ['/api/rides/cancel', 'POST', 'Cancelar corrida'],
-                ['/api/rides/history', 'GET', 'Histórico do usuário'],
-                ['/api/rides/driver/performance-stats', 'GET', 'Dashboard do motorista'],
-                ['/api/chat/unread/count', 'GET', 'Contagem de mensagens não lidas'],
-                ['/api/chat/:ride_id', 'GET', 'Histórico do chat'],
-                ['/uploads/*', 'GET', 'Arquivos estáticos']
-            );
-
-            console.log(table.toString());
-
-            console.log(chalk.cyan('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
-            console.log(chalk.white.bold(`   📡 API:         http://localhost:${PORT}/api`));
-            console.log(chalk.white.bold(`   📊 DASHBOARD:   http://localhost:${PORT}/admin`));
-            console.log(chalk.white.bold(`   🔌 SOCKET:      ws://localhost:${PORT}`));
-            console.log(chalk.cyan('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'));
-
+            console.log();
             log.success(`Servidor rodando na porta ${PORT}`);
-            log.info(`Acesse o dashboard: ${chalk.underline.blue(`http://localhost:${PORT}/admin`)}`);
+            log.info(`Dashboard: http://localhost:${PORT}/admin`);
+            log.info(`API: http://localhost:${PORT}/api`);
+            console.log();
         });
 
     } catch (err) {
-        log.error('ERRO CRÍTICO NO BOOT:');
-        console.error(chalk.red(err.stack));
+        log.error('Erro fatal:');
+        console.error(err);
         process.exit(1);
     }
 })();
 
 // =================================================================================================
-// 10. GRACEFUL SHUTDOWN
+// 11. GRACEFUL SHUTDOWN
 // =================================================================================================
 const shutdown = (signal) => {
-    log.warn(`\nRecebido sinal ${signal}. Iniciando desligamento gracioso...`);
+    console.log();
+    log.warn(`Recebido sinal ${signal}. Encerrando...`);
 
     server.close(() => {
-        log.success('Servidor HTTP fechado.');
-
+        log.success('Servidor HTTP fechado');
         db.end(() => {
-            log.success('Pool de conexões encerrado.');
-            console.log(chalk.yellow('\n👋 Servidor finalizado com segurança. Até logo!\n'));
+            log.success('Conexões com banco fechadas');
             process.exit(0);
         });
     });
 
     setTimeout(() => {
-        log.error('Timeout - Forçando encerramento imediato.');
+        log.error('Timeout - Forçando encerramento');
         process.exit(1);
     }, 10000);
 };
@@ -663,8 +777,8 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
 process.on('uncaughtException', (err) => {
-    log.error('EXCEÇÃO NÃO CAPTURADA:');
-    console.error(chalk.red(err.stack));
+    log.error('Exceção não capturada:');
+    console.error(err);
 });
 
 module.exports = { app, server, io };
