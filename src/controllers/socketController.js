@@ -56,9 +56,9 @@ exports.updateDriverPosition = async (data, socket) => {
 
         // ✅ ATUALIZAR USUÁRIO COMO ONLINE - SEM socket_id
         await pool.query(
-            `UPDATE users SET 
-                is_online = true, 
-                last_seen = NOW() 
+            `UPDATE users SET
+                is_online = true,
+                last_seen = NOW()
              WHERE id = $1`,
             [driver_id]
         );
@@ -95,9 +95,9 @@ exports.removeDriverPosition = async (socketId) => {
 
             // Atualizar status do usuário para offline - SEM socket_id
             await pool.query(
-                `UPDATE users SET 
-                    is_online = false, 
-                    last_seen = NOW() 
+                `UPDATE users SET
+                    is_online = false,
+                    last_seen = NOW()
                  WHERE id = $1`,
                 [driverId]
             );
@@ -116,8 +116,8 @@ exports.removeDriverPosition = async (socketId) => {
 exports.countOnlineDrivers = async () => {
     try {
         const result = await pool.query(`
-            SELECT COUNT(*) as total 
-            FROM driver_positions 
+            SELECT COUNT(*) as total
+            FROM driver_positions
             WHERE last_update > NOW() - INTERVAL '2 minutes'
         `);
         return parseInt(result.rows[0].total) || 0;
@@ -133,7 +133,7 @@ exports.countOnlineDrivers = async () => {
 exports.getDriverPosition = async (driverId) => {
     try {
         const result = await pool.query(`
-            SELECT 
+            SELECT
                 dp.driver_id,
                 dp.lat,
                 dp.lng,
@@ -165,7 +165,7 @@ exports.getNearbyDrivers = async (lat, lng, radiusKm = 15) => {
     try {
         // Consulta otimizada com cálculo de distância aproximada
         const result = await pool.query(`
-            SELECT 
+            SELECT
                 dp.driver_id,
                 dp.lat,
                 dp.lng,
@@ -177,10 +177,10 @@ exports.getNearbyDrivers = async (lat, lng, radiusKm = 15) => {
                 u.vehicle_details,
                 (
                     6371 * acos(
-                        cos(radians($1)) * 
-                        cos(radians(dp.lat)) * 
-                        cos(radians(dp.lng) - radians($2)) + 
-                        sin(radians($1)) * 
+                        cos(radians($1)) *
+                        cos(radians(dp.lat)) *
+                        cos(radians(dp.lng) - radians($2)) +
+                        sin(radians($1)) *
                         sin(radians(dp.lat))
                     )
                 ) AS distance
@@ -209,8 +209,8 @@ exports.getNearbyDrivers = async (lat, lng, radiusKm = 15) => {
 exports.updateDriverActivity = async (driverId) => {
     try {
         await pool.query(
-            `UPDATE driver_positions 
-             SET last_update = NOW() 
+            `UPDATE driver_positions
+             SET last_update = NOW()
              WHERE driver_id = $1`,
             [driverId]
         );
@@ -229,23 +229,23 @@ exports.cleanInactiveDrivers = async () => {
     try {
         // Buscar motoristas inativos há mais de 5 minutos
         const inactiveDrivers = await pool.query(`
-            SELECT driver_id 
-            FROM driver_positions 
+            SELECT driver_id
+            FROM driver_positions
             WHERE last_update < NOW() - INTERVAL '5 minutes'
         `);
 
         // Remover posições inativas
         await pool.query(`
-            DELETE FROM driver_positions 
+            DELETE FROM driver_positions
             WHERE last_update < NOW() - INTERVAL '5 minutes'
         `);
 
         // Atualizar status dos usuários
         for (const row of inactiveDrivers.rows) {
             await pool.query(
-                `UPDATE users SET 
-                    is_online = false, 
-                    last_seen = NOW() 
+                `UPDATE users SET
+                    is_online = false,
+                    last_seen = NOW()
                  WHERE id = $1`,
                 [row.driver_id]
             );
@@ -265,7 +265,7 @@ exports.cleanInactiveDrivers = async () => {
 exports.getDriverStats = async () => {
     try {
         const result = await pool.query(`
-            SELECT 
+            SELECT
                 COUNT(*) as total_online,
                 COUNT(CASE WHEN status = 'active' THEN 1 END) as active,
                 COUNT(CASE WHEN status = 'busy' THEN 1 END) as busy,
@@ -295,9 +295,9 @@ exports.isDriverOnline = async (driverId) => {
     try {
         const result = await pool.query(`
             SELECT EXISTS(
-                SELECT 1 
-                FROM driver_positions 
-                WHERE driver_id = $1 
+                SELECT 1
+                FROM driver_positions
+                WHERE driver_id = $1
                 AND last_update > NOW() - INTERVAL '2 minutes'
             ) as online
         `, [driverId]);
