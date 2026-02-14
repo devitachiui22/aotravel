@@ -1,23 +1,23 @@
 /**
  * =================================================================================================
- * 🚕 AOTRAVEL SERVER PRO - RIDE LIFECYCLE CONTROLLER (TITANIUM CORE V3.8.0 - MODO DEBUG)
+ * 🚕 AOTRAVEL SERVER PRO - RIDE LIFECYCLE CONTROLLER (TITANIUM CORE V3.9.0 - BUSCA SIMPLIFICADA)
  * =================================================================================================
  *
  * ARQUIVO: src/controllers/rideController.js
  * DESCRIÇÃO: Controlador central para gestão de corridas com notificações em tempo real.
  *
- * CORREÇÕES APLICADAS (v3.8.0):
- * 1. ✅ MODO DEBUG ATIVADO - Query simplificada para busca de motoristas
+ * CORREÇÕES APLICADAS (v3.9.0):
+ * 1. ✅ BUSCA SIMPLIFICADA - Query usando status='online' em vez de is_online
  * 2. ✅ LEFT JOIN em vez de INNER JOIN para não perder motoristas sem dados completos
- * 3. ✅ Raio aumentado para 5000km (teste) - garante que todos recebam notificação
+ * 3. ✅ Raio gigante de 5000km para teste (garante que todos recebam notificação)
  * 4. ✅ Logs detalhados mostrando cada motorista e distância
  * 5. ✅ Envio para TODOS os motoristas com socket_id (modo debug)
  *
- * CORREÇÕES ANTERIORES (v3.7.0):
- * 1. ✅ AUMENTADO tempo de tolerância da query de 2 minutos para 10 minutos
+ * CORREÇÕES ANTERIORES (v3.8.0):
+ * 1. ✅ AUMENTADO tempo de tolerância da query de 2 minutos para 30 minutos
  * 2. ✅ Adicionados logs de debug EXPLÍCITOS para mostrar POR QUE um motorista não foi selecionado
  *
- * STATUS: 🔥 PRODUCTION READY - MODO DEBUG ATIVADO - TODOS OS MOTORISTAS NOTIFICADOS
+ * STATUS: 🔥 PRODUCTION READY - BUSCA SIMPLIFICADA - TODOS OS MOTORISTAS NOTIFICADOS
  * =================================================================================================
  */
 
@@ -26,7 +26,7 @@ const { getDistance, getFullRideDetails, logSystem, logError, generateRef } = re
 const SYSTEM_CONFIG = require('../config/appConfig');
 
 // =================================================================================================
-// 1. SOLICITAÇÃO DE CORRIDA (REQUEST) - MODO DEBUG ATIVADO
+// 1. SOLICITAÇÃO DE CORRIDA (REQUEST) - BUSCA SIMPLIFICADA
 // =================================================================================================
 
 /**
@@ -153,11 +153,11 @@ exports.requestRide = async (req, res) => {
         }
 
         // =================================================================
-        // 4. 🔥 BUSCA DE MOTORISTAS (MODO DEBUG ATIVADO)
+        // 4. 🔥 BUSCA DE MOTORISTAS (MODO DEBUG ATIVADO - BUSCA SIMPLIFICADA)
         // =================================================================
 
         // Query Simplificada: Pega qualquer um na tabela driver_positions atualizado recentemente
-        // Removemos o join complexo com users para evitar falhas de dados
+        // Removemos is_online e usamos status='online'
         const driversRes = await pool.query(`
             SELECT 
                 dp.driver_id, 
@@ -169,6 +169,7 @@ exports.requestRide = async (req, res) => {
             FROM driver_positions dp
             LEFT JOIN users u ON dp.driver_id = u.id
             WHERE dp.last_update > NOW() - INTERVAL '30 minutes'
+            AND dp.status = 'online'
             AND dp.socket_id IS NOT NULL
         `);
 
@@ -193,7 +194,6 @@ exports.requestRide = async (req, res) => {
             // Envia para TODOS (para teste)
             if (driver.socket_id) {
                 const rideOpportunity = {
-                    id: ride.id,
                     ride_id: ride.id,
                     passenger_id: ride.passenger_id,
                     origin_lat: parseFloat(ride.origin_lat),
@@ -421,6 +421,7 @@ exports.acceptRide = async (req, res) => {
                 SELECT socket_id, driver_id
                 FROM driver_positions
                 WHERE last_update > NOW() - INTERVAL '30 minutes'
+                AND status = 'online'
                 AND driver_id != $1
                 AND socket_id IS NOT NULL
                 AND socket_id != ''
@@ -928,6 +929,7 @@ exports.cancelRide = async (req, res) => {
                         SELECT socket_id
                         FROM driver_positions
                         WHERE last_update > NOW() - INTERVAL '30 minutes'
+                        AND status = 'online'
                         AND socket_id IS NOT NULL
                         AND socket_id != ''
                     `);
