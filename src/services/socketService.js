@@ -73,7 +73,7 @@ function initializeSocket(httpServer) {
     setInterval(async () => {
         const onlineDrivers = await socketController.countOnlineDrivers();
         if (onlineDrivers > 0) console.log(`📊 [STATUS] Motoristas online: ${onlineDrivers}`);
-        io.emit('drivers_online_update', { 
+        io.emit('drivers_online_update', {
             count: onlineDrivers,
             timestamp: new Date().toISOString()
         });
@@ -226,7 +226,7 @@ function handleConnection(socket) {
         // Armazenar mapeamento
         userSockets.set(driverIdStr, socketId);
         socketUsers.set(socketId, driverIdStr);
-        
+
         console.log(`🚗 [SOCKET] Driver ${driverIdStr} REGISTRADO (Socket: ${socketId})`);
 
         // Limpa timer de desconexão se o motorista reconectou rápido
@@ -247,19 +247,19 @@ function handleConnection(socket) {
                 speed: speed,
                 status: 'online'
             }, socket);
-            
+
             console.log(`💾 [DB] Driver ${driverIdStr} salvo como ONLINE no banco (lat: ${lat}, lng: ${lng})`);
-            
+
         } catch (e) {
             console.error(`❌ [DB ERROR] Falha ao salvar driver ${driverIdStr}:`, e.message);
         }
 
         // 4. Enviar confirmação
-        socket.emit('joined_ack', { 
+        socket.emit('joined_ack', {
             room: 'drivers',
             driver_id: driverIdStr,
-            status: 'online', 
-            timestamp: new Date().toISOString() 
+            status: 'online',
+            timestamp: new Date().toISOString()
         });
 
         // 5. Emitir contagem atualizada
@@ -318,7 +318,7 @@ function handleConnection(socket) {
      */
     socket.on('update_location', async (data) => {
         const driverId = data.driver_id || data.user_id || data.id;
-        
+
         if (!driverId || !data.lat || !data.lng) {
             // Log silencioso para não poluir
             return;
@@ -1167,6 +1167,83 @@ function setupSocketIO(httpServer) {
     // Caso contrário, retornar função de inicialização
     return initializeSocket;
 }
+
+/**
+ * =================================================================================================
+ * 🚨 ROTA DE DEBUG - VERIFICAR MOTORISTAS ONLINE
+ * =================================================================================================
+ */
+
+// Adicionar no server.js ou criar uma rota temporária
+app.get('/api/debug/drivers-detailed', async (req, res) => {
+    try {
+        const pool = require('./src/config/db');
+        
+        // 1. Verificar todos os registros
+        const all = await pool.query(`
+            SELECT 
+                dp.driver_id,
+                dp.lat,
+                dp.lng,
+                dp.socket_id,
+                TO_CHAR(dp.last_update, 'YYYY-MM-DD HH24:MI:SS') as last_update,
+                EXTRACT(EPOCH FROM (NOW() - dp.last_update)) as seconds_ago,
+                dp.status,
+                u.name,
+                u.is_online,
+                u.is_blocked,
+                u.role
+            FROM driver_positions dp
+            RIGHT JOIN users u ON dp.driver_id = u.id
+            WHERE u.role = 'driver'
+            ORDER BY dp.last_update DESC NULLS LAST
+        `);
+
+        // 2. Verificar motoristas online (critérios do rideController)
+        const online = await pool.query(`
+            SELECT 
+                dp.driver_id,
+                u.name,
+                dp.last_update,
+                EXTRACT(EPOCH FROM (NOW() - dp.last_update)) as seconds_ago
+            FROM driver_positions dp
+            JOIN users u ON dp.driver_id = u.id
+            WHERE dp.status = 'online'
+                AND dp.last_update > NOW() - INTERVAL '2 minutes'
+                AND u.is_online = true
+                AND u.is_blocked = false
+                AND u.role = 'driver'
+                AND dp.socket_id IS NOT NULL
+                AND (dp.lat != 0 OR dp.lng != 0)
+        `);
+
+        res.json({
+            success: true,
+            timestamp: new Date().toISOString(),
+            stats: {
+                total_drivers: all.rows.length,
+                online_by_criteria: online.rows.length
+            },
+            all_drivers: all.rows,
+            online_drivers: online.rows,
+            queries: {
+                all: all.rows.map(r => ({
+                    id: r.driver_id,
+                    name: r.name,
+                    last_update: r.last_update,
+                    seconds_ago: Math.round(r.seconds_ago),
+                    status: r.status,
+                    socket: r.socket_id ? 'OK' : 'NULO',
+                    gps: r.lat && r.lng ? `(${r.lat}, ${r.lng})` : 'NULO',
+                    is_online: r.is_online,
+                    is_blocked: r.is_blocked
+                }))
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
 
 module.exports = {
     // Inicialização
