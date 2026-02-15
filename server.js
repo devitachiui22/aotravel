@@ -1,21 +1,16 @@
 /**
  * =================================================================================================
- * 🚀 AOTRAVEL SERVER PRO - PRODUCTION COMMAND CENTER v11.2.0 (CORREÇÃO FINAL)
+ * 🚀 AOTRAVEL SERVER PRO - PRODUCTION COMMAND CENTER v11.1.0 (FULLY UPDATED)
  * =================================================================================================
  *
  * ✅ CORREÇÕES APLICADAS:
- * 1. ✅ Removida duplicação da função 'setupSocketIO'
- * 2. ✅ Dashboard interativo com atualização em tempo real
- * 3. ✅ Debug de motoristas funcionando perfeitamente
- * 4. ✅ Socket.IO integrado corretamente
- * 5. ✅ Todas as rotas funcionando
- *
- * STATUS: 🔥 100% PRODUCTION READY - ZERO ERROS
+ * 1. Exposição global do `io` para ser acessível em controllers e serviços
+ * 2. Middleware para injetar `io` em todas as requisições
+ * 3. Rotas de debug detalhadas para monitoramento
+ * 4. Sistema de shutdown gracefull
+ * 5. Dashboard profissional com estatísticas em tempo real
  */
-// =================================================================================================
-// 🕷️ ATIVAR VENOM DEBUGGER (COMENTAR EM PRODUÇÃO)
-// =================================================================================================
-require('./src/venom')(); // <-- ADICIONE ISTO NO INÍCIO
+
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
@@ -41,7 +36,7 @@ const colors = {
 };
 
 // =================================================================================================
-// 📊 SISTEMA DE LOGS PROFISSIONAL
+// 📊 SISTEMA DE LOGS
 // =================================================================================================
 const log = {
     info: (msg) => console.log(`${colors.blue}📘${colors.reset} ${msg}`),
@@ -79,25 +74,25 @@ const systemStats = {
     },
     performance: {
         avgResponseTime: 0,
-        totalResponseTime: 0,
-        requestCount: 0
+        totalResponseTime: 0
     }
 };
 
 // =================================================================================================
-// 1. IMPORTAÇÕES
+// 1. IMPORTAÇÕES E INICIALIZAÇÃO
 // =================================================================================================
 const db = require('./src/config/db');
 const appConfig = require('./src/config/appConfig');
 const { bootstrapDatabase } = require('./src/utils/dbBootstrap');
 const { globalErrorHandler, notFoundHandler } = require('./src/middleware/errorMiddleware');
 const routes = require('./src/routes');
+const { setupSocketIO } = require('./src/services/socketService');
 
 const app = express();
 const server = http.createServer(app);
 
 // =================================================================================================
-// 2. CONFIGURAÇÃO DO SOCKET.IO
+// 2. CONFIGURAÇÃO DO SOCKET.IO (COM EXPOSIÇÃO GLOBAL)
 // =================================================================================================
 const io = new Server(server, {
     cors: {
@@ -107,10 +102,7 @@ const io = new Server(server, {
     },
     pingTimeout: appConfig.SOCKET?.PING_TIMEOUT || 60000,
     pingInterval: appConfig.SOCKET?.PING_INTERVAL || 25000,
-    transports: appConfig.SOCKET?.TRANSPORTS || ['websocket', 'polling'],
-    allowEIO3: true,
-    connectTimeout: 10000,
-    maxHttpBufferSize: 1e6
+    transports: appConfig.SOCKET?.TRANSPORTS || ['websocket', 'polling']
 });
 
 // 🔥 EXPOR GLOBALMENTE - CRÍTICO PARA OS CONTROLLERS
@@ -122,25 +114,27 @@ app.use((req, res, next) => {
     req.systemStats = systemStats;
 
     // Registrar requisição para estatísticas
+    systemStats.requests.total++;
+    systemStats.requests.byMethod[req.method] = (systemStats.requests.byMethod[req.method] || 0) + 1;
+
+    // Medir tempo de resposta
     const start = Date.now();
     res.on('finish', () => {
         const duration = Date.now() - start;
-        systemStats.requests.total++;
-        systemStats.requests.byMethod[req.method] = (systemStats.requests.byMethod[req.method] || 0) + 1;
-
         systemStats.performance.totalResponseTime += duration;
-        systemStats.performance.requestCount++;
         systemStats.performance.avgResponseTime =
-            systemStats.performance.totalResponseTime / systemStats.performance.requestCount;
+            systemStats.performance.totalResponseTime / systemStats.requests.total;
 
+        // Manter últimas 10 requisições
         systemStats.requests.last10.unshift({
             method: req.method,
-            path: req.path,
-            status: res.statusCode,
-            duration: duration,
-            time: new Date().toISOString()
+            url: req.url,
+            duration,
+            timestamp: new Date().toISOString()
         });
-        if (systemStats.requests.last10.length > 10) systemStats.requests.last10.pop();
+        if (systemStats.requests.last10.length > 10) {
+            systemStats.requests.last10.pop();
+        }
     });
 
     next();
@@ -152,59 +146,49 @@ app.set('systemStats', systemStats);
 // =================================================================================================
 // 3. MIDDLEWARES
 // =================================================================================================
-
-// CORS
 app.use(cors({ origin: '*' }));
-
-// Parsing
 app.use(express.json({ limit: appConfig.SERVER?.BODY_LIMIT || '100mb' }));
 app.use(express.urlencoded({ limit: appConfig.SERVER?.BODY_LIMIT || '100mb', extended: true }));
 
-// Arquivos estáticos
 const uploadPath = appConfig.SERVER?.UPLOAD_DIR || 'uploads';
 app.use('/uploads', express.static(path.join(__dirname, uploadPath)));
 
 // =================================================================================================
-// 4. DASHBOARD ADMIN INTERATIVO
+// 4. DASHBOARD ADMIN PROFISSIONAL
 // =================================================================================================
 app.get('/admin', (req, res) => {
     const stats = systemStats;
     const uptime = moment.duration(moment().diff(moment(stats.startTime))).humanize();
-    const memoryUsage = process.memoryUsage();
-    const memoryMB = Math.round(memoryUsage.rss / 1024 / 1024);
-    const cpuUsage = os.loadavg()[0].toFixed(2);
+    const memory = process.memoryUsage();
+    const cpu = os.loadavg();
 
     res.send(`<!DOCTYPE html>
     <html>
     <head>
-        <title>AOTRAVEL Command Center</title>
+        <title>AOTRAVEL Dashboard</title>
         <meta http-equiv="refresh" content="5">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
             body {
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                min-height: 100vh;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+                background: #0f172a;
+                color: #e2e8f0;
                 padding: 20px;
+            }
+            .container { max-width: 1400px; margin: 0 auto; }
+            h1 {
+                font-size: 28px;
+                margin-bottom: 20px;
+                background: linear-gradient(135deg, #60a5fa, #a78bfa);
+                -webkit-background-clip: text;
+                -webkit-text-fill-color: transparent;
             }
             .header {
-                background: white;
-                border-radius: 15px;
+                background: #1e293b;
                 padding: 20px;
+                border-radius: 12px;
                 margin-bottom: 20px;
-                box-shadow: 0 10px 40px rgba(0,0,0,0.1);
-            }
-            .header h1 {
-                color: #333;
-                font-size: 24px;
-                margin-bottom: 10px;
-            }
-            .header .status {
-                display: flex;
-                gap: 20px;
-                color: #666;
-                font-size: 14px;
+                border: 1px solid #334155;
             }
             .stats-grid {
                 display: grid;
@@ -213,195 +197,195 @@ app.get('/admin', (req, res) => {
                 margin-bottom: 20px;
             }
             .card {
-                background: white;
-                border-radius: 15px;
-                padding: 20px;
-                box-shadow: 0 5px 20px rgba(0,0,0,0.1);
+                background: #1e293b;
+                padding: 24px;
+                border-radius: 12px;
+                border: 1px solid #334155;
                 transition: transform 0.2s;
             }
-            .card:hover { transform: translateY(-5px); }
-            .card-title {
-                color: #666;
-                font-size: 12px;
+            .card:hover { transform: translateY(-2px); border-color: #4b5563; }
+            .card h3 {
+                font-size: 14px;
+                color: #94a3b8;
+                margin-bottom: 8px;
                 text-transform: uppercase;
-                letter-spacing: 1px;
-                margin-bottom: 10px;
+                letter-spacing: 0.05em;
             }
-            .card-number {
-                font-size: 36px;
+            .number {
+                font-size: 42px;
                 font-weight: bold;
-                color: #333;
-                margin-bottom: 5px;
+                color: #f0f9ff;
+                line-height: 1.2;
             }
-            .card-label { color: #999; font-size: 12px; }
-            .online-badge {
-                display: inline-block;
-                width: 10px;
-                height: 10px;
-                background: #4caf50;
-                border-radius: 50%;
-                margin-right: 5px;
+            .label { color: #94a3b8; font-size: 14px; margin-top: 4px; }
+            .progress-bar {
+                width: 100%;
+                height: 8px;
+                background: #334155;
+                border-radius: 4px;
+                margin-top: 16px;
             }
-            .driver-row {
-                display: flex;
-                align-items: center;
-                padding: 10px;
-                border-bottom: 1px solid #eee;
+            .progress-fill {
+                height: 100%;
+                background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+                border-radius: 4px;
+                width: 75%;
             }
-            .driver-row:last-child { border-bottom: none; }
-            .driver-name { flex: 1; font-weight: 500; }
-            .driver-status {
-                padding: 4px 12px;
+            .grid-2 {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 20px;
+                margin-bottom: 20px;
+            }
+            .table {
+                background: #1e293b;
+                border-radius: 12px;
+                border: 1px solid #334155;
+                overflow: hidden;
+            }
+            .table-header {
+                padding: 16px;
+                background: #2d3a4f;
+                font-weight: 600;
+                color: #f0f9ff;
+            }
+            .table-row {
+                padding: 12px 16px;
+                border-top: 1px solid #334155;
+                display: grid;
+                grid-template-columns: 1fr 1fr 1fr 1fr;
+                font-size: 14px;
+            }
+            .table-row:hover { background: #2d3a4f; }
+            .badge {
+                padding: 4px 8px;
                 border-radius: 20px;
                 font-size: 12px;
                 font-weight: 600;
-                text-transform: uppercase;
             }
-            .status-online { background: #e8f5e8; color: #2e7d32; }
-            .status-offline { background: #ffebee; color: #c62828; }
-            .status-away { background: #fff3e0; color: #ef6c00; }
-            .debug-links {
-                display: flex;
-                gap: 10px;
-                margin-top: 20px;
-            }
-            .debug-btn {
-                background: #667eea;
-                color: white;
-                padding: 12px 24px;
-                border-radius: 8px;
-                text-decoration: none;
-                font-weight: 500;
-                transition: background 0.2s;
-            }
-            .debug-btn:hover { background: #5a67d8; }
-            .table {
-                background: white;
-                border-radius: 15px;
-                overflow: hidden;
-                margin-top: 20px;
-            }
-            .table table {
-                width: 100%;
-                border-collapse: collapse;
-            }
-            .table th {
-                background: #f5f5f5;
-                padding: 12px;
-                text-align: left;
-                font-weight: 600;
-                color: #333;
-            }
-            .table td {
-                padding: 12px;
-                border-bottom: 1px solid #eee;
-            }
-            .badge {
-                padding: 4px 8px;
-                border-radius: 4px;
+            .badge-success { background: #065f46; color: #d1fae5; }
+            .badge-warning { background: #92400e; color: #fef3c7; }
+            .badge-info { background: #1e3a8a; color: #dbeafe; }
+            .footer {
+                margin-top: 40px;
+                text-align: center;
+                color: #64748b;
                 font-size: 12px;
-                font-weight: 600;
             }
-            .badge-success { background: #e8f5e8; color: #2e7d32; }
-            .badge-warning { background: #fff3e0; color: #ef6c00; }
-            .badge-danger { background: #ffebee; color: #c62828; }
-            .badge-info { background: #e3f2fd; color: #1565c0; }
         </style>
     </head>
     <body>
-        <div class="header">
-            <h1>🚀 AOTRAVEL Command Center v11.2.0</h1>
-            <div class="status">
-                <span><span class="online-badge"></span> Online</span>
-                <span>Uptime: ${uptime}</span>
-                <span>${moment().format('MM/DD/YYYY, h:mm:ss A')}</span>
-            </div>
-        </div>
+        <div class="container">
+            <h1>AOTRAVEL Terminal v11.1.0</h1>
 
-        <div class="stats-grid">
-            <div class="card">
-                <div class="card-title">Usuários Online</div>
-                <div class="card-number">${stats.sockets.total}</div>
-                <div class="card-label">${stats.sockets.drivers} motoristas • ${stats.sockets.passengers} passageiros</div>
+            <div class="header">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <span style="color: #4ade80;">●</span> Online
+                        <span style="margin-left: 20px;">Uptime: ${uptime}</span>
+                    </div>
+                    <div>${new Date().toLocaleString()}</div>
+                </div>
             </div>
-            <div class="card">
-                <div class="card-title">Corridas Hoje</div>
-                <div class="card-number">${stats.rides.total}</div>
-                <div class="card-label">${stats.rides.ongoing} em andamento</div>
-            </div>
-            <div class="card">
-                <div class="card-title">Requisições</div>
-                <div class="card-number">${stats.requests.total}</div>
-                <div class="card-label">${Math.round(stats.performance.avgResponseTime)}ms média</div>
-            </div>
-            <div class="card">
-                <div class="card-title">Memória</div>
-                <div class="card-number">${memoryMB}MB</div>
-                <div class="card-label">CPU: ${cpuUsage}%</div>
-            </div>
-        </div>
 
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px;">
-            <div class="card">
-                <div class="card-title">Últimas Requisições</div>
-                <div style="margin-top: 15px;">
+            <div class="stats-grid">
+                <div class="card">
+                    <h3>Usuários Online</h3>
+                    <div class="number">${stats.sockets.total}</div>
+                    <div class="label">${stats.sockets.drivers} motoristas • ${stats.sockets.passengers} passageiros</div>
+                </div>
+
+                <div class="card">
+                    <h3>Corridas Hoje</h3>
+                    <div class="number">${stats.rides.total}</div>
+                    <div class="label">${stats.rides.ongoing} em andamento</div>
+                </div>
+
+                <div class="card">
+                    <h3>Requisições</h3>
+                    <div class="number">${stats.requests.total}</div>
+                    <div class="label">${Math.round(stats.performance.avgResponseTime)}ms média</div>
+                </div>
+
+                <div class="card">
+                    <h3>Memória</h3>
+                    <div class="number">${Math.round(memory.heapUsed / 1024 / 1024)}MB</div>
+                    <div class="label">CPU: ${cpu[0].toFixed(2)}%</div>
+                </div>
+            </div>
+
+            <div class="grid-2">
+                <div class="table">
+                    <div class="table-header">Últimas Requisições</div>
                     ${stats.requests.last10.map(req => `
-                        <div class="driver-row">
-                            <span style="width: 50px; font-weight: bold;">${req.method}</span>
-                            <span style="flex: 1; color: #666;">${req.path}</span>
-                            <span style="width: 50px; text-align: right; ${req.duration < 200 ? 'color: #4caf50;' : req.duration < 500 ? 'color: #ff9800;' : 'color: #f44336;'}">${req.duration}ms</span>
+                        <div class="table-row">
+                            <span><span class="badge badge-info">${req.method}</span></span>
+                            <span>${req.url.substring(0, 30)}</span>
+                            <span>${req.duration}ms</span>
+                            <span>${new Date(req.timestamp).toLocaleTimeString()}</span>
                         </div>
                     `).join('')}
                 </div>
-            </div>
-            <div class="card">
-                <div class="card-title">Status das Corridas</div>
-                <div style="margin-top: 15px;">
-                    <div class="driver-row">
-                        <span>Buscando</span>
-                        <span style="font-weight: bold; color: #ff9800;">${stats.rides.searching}</span>
-                    </div>
-                    <div class="driver-row">
-                        <span>Aceitas</span>
-                        <span style="font-weight: bold; color: #2196f3;">${stats.rides.accepted}</span>
-                    </div>
-                    <div class="driver-row">
-                        <span>Em Andamento</span>
-                        <span style="font-weight: bold; color: #4caf50;">${stats.rides.ongoing}</span>
-                    </div>
-                    <div class="driver-row">
-                        <span>Concluídas</span>
-                        <span style="font-weight: bold; color: #9c27b0;">${stats.rides.completed}</span>
-                    </div>
-                    <div class="driver-row">
-                        <span>Canceladas</span>
-                        <span style="font-weight: bold; color: #f44336;">${stats.rides.cancelled}</span>
+
+                <div class="table">
+                    <div class="table-header">Status das Corridas</div>
+                    <div style="padding: 16px;">
+                        <div style="margin-bottom: 12px;">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                                <span>Buscando</span>
+                                <span>${stats.rides.searching}</span>
+                            </div>
+                            <div class="progress-bar"><div class="progress-fill" style="width: ${(stats.rides.searching / (stats.rides.total || 1)) * 100}%"></div></div>
+                        </div>
+                        <div style="margin-bottom: 12px;">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                                <span>Aceitas</span>
+                                <span>${stats.rides.accepted}</span>
+                            </div>
+                            <div class="progress-bar"><div class="progress-fill" style="width: ${(stats.rides.accepted / (stats.rides.total || 1)) * 100}%"></div></div>
+                        </div>
+                        <div style="margin-bottom: 12px;">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                                <span>Em Andamento</span>
+                                <span>${stats.rides.ongoing}</span>
+                            </div>
+                            <div class="progress-bar"><div class="progress-fill" style="width: ${(stats.rides.ongoing / (stats.rides.total || 1)) * 100}%"></div></div>
+                        </div>
+                        <div>
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                                <span>Concluídas</span>
+                                <span>${stats.rides.completed}</span>
+                            </div>
+                            <div class="progress-bar"><div class="progress-fill" style="width: ${(stats.rides.completed / (stats.rides.total || 1)) * 100}%"></div></div>
+                        </div>
                     </div>
                 </div>
             </div>
-        </div>
 
-        <div class="debug-links">
-            <a href="/api/debug/drivers-detailed" target="_blank" class="debug-btn">🔍 Debug Motoristas</a>
-            <a href="/api/debug/socket-status" target="_blank" class="debug-btn">🔌 Status Socket</a>
-            <a href="/" target="_blank" class="debug-btn">❤️ Health Check</a>
-        </div>
+            <div style="margin-top: 20px; display: flex; gap: 10px;">
+                <a href="/api/debug/drivers-detailed" style="background: #1e293b; color: #94a3b8; padding: 8px 16px; border-radius: 8px; text-decoration: none; border: 1px solid #334155;">🔍 Debug Motoristas</a>
+                <a href="/api/debug/socket-status" style="background: #1e293b; color: #94a3b8; padding: 8px 16px; border-radius: 8px; text-decoration: none; border: 1px solid #334155;">🔌 Status Socket</a>
+                <a href="/api/health" style="background: #1e293b; color: #94a3b8; padding: 8px 16px; border-radius: 8px; text-decoration: none; border: 1px solid #334155;">❤️ Health Check</a>
+            </div>
 
-        <div class="card" style="margin-top: 20px; text-align: center; color: #666;">
-            AOTRAVEL Server v11.2.0 • Atualizado a cada 5 segundos
+            <div class="footer">
+                AOTRAVEL Server v11.1.0 • Atualizado a cada 5 segundos
+            </div>
         </div>
     </body>
     </html>`);
 });
 
 // =================================================================================================
-// 5. 🚨 ROTA DE DEBUG - MOTORISTAS ONLINE
+// 5. 🚨 ROTAS DE DEBUG DETALHADAS
 // =================================================================================================
+
+// Rota detalhada de motoristas online
 app.get('/api/debug/drivers-detailed', async (req, res) => {
     try {
         const pool = require('./src/config/db');
 
-        // Buscar todos os motoristas
+        // Todos os motoristas
         const all = await pool.query(`
             SELECT
                 dp.driver_id,
@@ -421,7 +405,7 @@ app.get('/api/debug/drivers-detailed', async (req, res) => {
             ORDER BY dp.last_update DESC NULLS LAST
         `);
 
-        // Motoristas que atendem aos critérios do rideController
+        // Motoristas online por critério
         const online = await pool.query(`
             SELECT
                 dp.driver_id,
@@ -439,51 +423,57 @@ app.get('/api/debug/drivers-detailed', async (req, res) => {
                 AND (dp.lat != 0 OR dp.lng != 0)
         `);
 
+        // Contagem via Socket.IO
+        const socketDrivers = [];
+        if (global.io) {
+            const sockets = await global.io.fetchSockets();
+            sockets.forEach(socket => {
+                if (socket.data?.user?.role === 'driver') {
+                    socketDrivers.push({
+                        id: socket.data.user.id,
+                        name: socket.data.user.name,
+                        socketId: socket.id,
+                        rooms: Array.from(socket.rooms)
+                    });
+                }
+            });
+        }
+
         res.json({
             success: true,
             timestamp: new Date().toISOString(),
             stats: {
                 total_drivers: all.rows.length,
-                online_by_criteria: online.rows.length
+                online_by_criteria: online.rows.length,
+                socket_connected: socketDrivers.length
             },
-            all_drivers: all.rows.map(r => ({
-                ...r,
-                seconds_ago: r.seconds_ago ? Math.round(parseFloat(r.seconds_ago)) : null
-            })),
-            online_drivers: online.rows.map(r => ({
-                ...r,
-                seconds_ago: Math.round(parseFloat(r.seconds_ago))
-            })),
+            all_drivers: all.rows,
+            online_drivers: online.rows,
+            socket_drivers: socketDrivers,
             queries: {
                 all: all.rows.map(r => ({
                     id: r.driver_id,
                     name: r.name,
                     last_update: r.last_update,
-                    seconds_ago: r.seconds_ago ? Math.round(parseFloat(r.seconds_ago)) : null,
-                    status: r.status || 'offline',
+                    seconds_ago: Math.round(r.seconds_ago),
+                    status: r.status,
                     socket: r.socket_id ? 'OK' : 'NULO',
-                    gps: (r.lat && r.lng && r.lat != 0 && r.lng != 0) ? `(${r.lat}, ${r.lng})` : 'NULO',
+                    gps: r.lat && r.lng ? `(${r.lat}, ${r.lng})` : 'NULO',
                     is_online: r.is_online,
                     is_blocked: r.is_blocked
                 }))
             }
         });
     } catch (error) {
-        res.status(500).json({ error: error.message, stack: error.stack });
+        res.status(500).json({ error: error.message });
     }
 });
 
-// =================================================================================================
-// 6. ROTA DE STATUS DO SOCKET
-// =================================================================================================
+// Rota de status do Socket
 app.get('/api/debug/socket-status', async (req, res) => {
     try {
         const pool = require('./src/config/db');
 
-        // Atualizar estatísticas do socket
-        systemStats.sockets.total = io?.engine?.clientsCount || 0;
-
-        // Buscar motoristas ativos nos últimos 5 minutos
         const drivers = await pool.query(`
             SELECT
                 dp.driver_id,
@@ -500,96 +490,117 @@ app.get('/api/debug/socket-status', async (req, res) => {
             ORDER BY dp.last_update DESC
         `);
 
-        // Contar drivers e passengers online
-        let driversCount = 0;
-        let passengersCount = 0;
+        // Informações do Socket.IO
+        const socketInfo = {
+            connected: global.io?.engine?.clientsCount || 0,
+            rooms: [],
+            drivers: []
+        };
 
-        if (io) {
-            const rooms = io.sockets.adapter.rooms;
-            rooms.forEach((sockets, room) => {
-                if (room.startsWith('driver_')) driversCount++;
-                if (room.startsWith('user_') && !room.startsWith('user_driver')) passengersCount++;
-            });
+        if (global.io) {
+            const sockets = await global.io.fetchSockets();
+            socketInfo.drivers = sockets
+                .filter(s => s.data?.user?.role === 'driver')
+                .map(s => ({
+                    id: s.data.user.id,
+                    name: s.data.user.name,
+                    socketId: s.id,
+                    rooms: Array.from(s.rooms)
+                }));
         }
-
-        systemStats.sockets.drivers = driversCount;
-        systemStats.sockets.passengers = passengersCount;
-        systemStats.sockets.rooms = io?.sockets?.adapter?.rooms?.size || 0;
 
         res.json({
             success: true,
-            online_drivers: drivers.rows.length,
-            total_connected: systemStats.sockets.total,
-            driver_rooms: driversCount,
-            passenger_rooms: passengersCount,
-            drivers: drivers.rows.map(d => ({
-                ...d,
-                seconds_ago: Math.round(parseFloat(d.seconds_ago))
-            })),
-            timestamp: new Date().toISOString()
+            timestamp: new Date().toISOString(),
+            stats: {
+                db_drivers: drivers.rows.length,
+                socket_connected: socketInfo.drivers.length
+            },
+            db_drivers: drivers.rows,
+            socket_drivers: socketInfo.drivers
         });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
-// =================================================================================================
-// 7. HEALTH CHECK
-// =================================================================================================
-app.get('/', (req, res) => {
+// Health Check completo
+app.get('/api/health', (req, res) => {
     res.json({
         service: 'AOTRAVEL Backend',
-        version: '11.2.0',
+        version: '11.1.0',
         status: 'online',
         timestamp: new Date().toISOString(),
         uptime: process.uptime(),
         memory: process.memoryUsage(),
         stats: {
-            total_requests: systemStats.requests.total,
-            online_users: systemStats.sockets.total,
-            active_rides: systemStats.rides.ongoing
+            requests: systemStats.requests.total,
+            sockets: systemStats.sockets.total,
+            avgResponse: Math.round(systemStats.performance.avgResponseTime) + 'ms'
         },
         endpoints: {
             dashboard: '/admin',
             debug_drivers: '/api/debug/drivers-detailed',
             debug_socket: '/api/debug/socket-status',
-            api: '/api'
+            health: '/api/health'
         }
     });
 });
 
+// Rota raiz
+app.get('/', (req, res) => {
+    res.redirect('/admin');
+});
+
 // =================================================================================================
-// 8. ROTAS DA API
+// 6. ROTAS DA API
 // =================================================================================================
 app.use('/api', routes);
 
 // =================================================================================================
-// 9. INICIALIZAÇÃO DO SOCKET SERVICE (ÚNICA VEZ - CORRIGIDO)
-// =================================================================================================
-const { setupSocketIO } = require('./src/services/socketService');
-setupSocketIO(io);
-
-// Middleware para logging de requisições
-app.use((req, res, next) => {
-    log.info(`${req.method} ${req.path}`);
-    next();
-});
-
-// =================================================================================================
-// 10. HANDLERS DE ERRO
+// 7. HANDLERS DE ERRO
 // =================================================================================================
 app.use(notFoundHandler);
 app.use(globalErrorHandler);
 
 // =================================================================================================
-// 11. INICIALIZAÇÃO DO SERVIDOR
+// 8. INICIALIZAÇÃO DO SOCKET SERVICE
+// =================================================================================================
+const { setupSocketIO } = require('./src/services/socketService');
+setupSocketIO(io);
+
+// Monitorar conexões socket para estatísticas
+io.engine.on('connection', (socket) => {
+    systemStats.sockets.total = io.engine.clientsCount;
+});
+
+io.on('connection', (socket) => {
+    // Atualizar contagem por role quando o usuário se autenticar
+    socket.on('authenticated', (user) => {
+        if (user.role === 'driver') {
+            systemStats.sockets.drivers++;
+        } else if (user.role === 'passenger') {
+            systemStats.sockets.passengers++;
+        }
+    });
+
+    socket.on('disconnect', () => {
+        systemStats.sockets.total = io.engine.clientsCount;
+        // Recalcular roles (simplificado - poderia ser mais preciso)
+        systemStats.sockets.drivers = 0;
+        systemStats.sockets.passengers = 0;
+    });
+});
+
+// =================================================================================================
+// 9. INICIALIZAÇÃO DO SERVIDOR
 // =================================================================================================
 (async function startServer() {
     try {
         console.clear();
 
         console.log(colors.cyan + '╔══════════════════════════════════════════════════════════════╗');
-        console.log('║              AOTRAVEL TERMINAL v11.2.0 (CORRIGIDO)             ║');
+        console.log('║              AOTRAVEL TERMINAL v11.1.0 (FULLY UPDATED)         ║');
         console.log('╚══════════════════════════════════════════════════════════════╝' + colors.reset);
         console.log();
 
@@ -597,52 +608,22 @@ app.use(globalErrorHandler);
         await bootstrapDatabase();
         log.success('Banco de dados OK');
 
-        // Atualizar estatísticas periodicamente
-        setInterval(async () => {
-            try {
-                const pool = require('./src/config/db');
-
-                // Atualizar contagem de corridas
-                const rides = await pool.query(`
-                    SELECT
-                        COUNT(*) as total,
-                        COUNT(CASE WHEN status = 'searching' THEN 1 END) as searching,
-                        COUNT(CASE WHEN status = 'accepted' THEN 1 END) as accepted,
-                        COUNT(CASE WHEN status = 'ongoing' THEN 1 END) as ongoing,
-                        COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed,
-                        COUNT(CASE WHEN status = 'cancelled' THEN 1 END) as cancelled
-                    FROM rides
-                    WHERE created_at > NOW() - INTERVAL '24 hours'
-                `);
-
-                if (rides.rows[0]) {
-                    systemStats.rides.total = parseInt(rides.rows[0].total) || 0;
-                    systemStats.rides.searching = parseInt(rides.rows[0].searching) || 0;
-                    systemStats.rides.accepted = parseInt(rides.rows[0].accepted) || 0;
-                    systemStats.rides.ongoing = parseInt(rides.rows[0].ongoing) || 0;
-                    systemStats.rides.completed = parseInt(rides.rows[0].completed) || 0;
-                    systemStats.rides.cancelled = parseInt(rides.rows[0].cancelled) || 0;
-                }
-
-                // Atualizar contagem de sockets
-                if (io) {
-                    systemStats.sockets.total = io.engine.clientsCount;
-                }
-
-            } catch (e) {
-                // Silencia erro para não poluir logs
-            }
-        }, 5000);
+        log.socket('Iniciando Socket.IO...');
+        log.success('Socket.IO pronto com exposição global');
 
         const PORT = process.env.PORT || appConfig.SERVER?.PORT || 3000;
         server.listen(PORT, '0.0.0.0', () => {
             console.log();
-            log.success(`🚀 Servidor rodando na porta ${PORT}`);
+            log.success(`Servidor rodando na porta ${PORT}`);
             log.info(`📊 Dashboard: http://localhost:${PORT}/admin`);
             log.info(`🔍 Debug Motoristas: http://localhost:${PORT}/api/debug/drivers-detailed`);
-            log.info(`🔌 Status Socket: http://localhost:${PORT}/api/debug/socket-status`);
-            log.info(`❤️ Health Check: http://localhost:${PORT}/`);
+            log.info(`🔌 Debug Socket: http://localhost:${PORT}/api/debug/socket-status`);
+            log.info(`❤️  Health Check: http://localhost:${PORT}/api/health`);
             console.log();
+
+            log.divider();
+            log.info('Sistema pronto para receber conexões');
+            log.divider();
         });
 
     } catch (err) {
@@ -653,40 +634,49 @@ app.use(globalErrorHandler);
 })();
 
 // =================================================================================================
-// 12. GRACEFUL SHUTDOWN
+// 10. GRACEFUL SHUTDOWN
 // =================================================================================================
 const shutdown = (signal) => {
     console.log();
-    log.warn(`📡 Recebido sinal ${signal}. Encerrando servidor...`);
+    log.warn(`Recebido sinal ${signal}. Encerrando...`);
+
+    // Fechar todas as conexões socket
+    if (global.io) {
+        log.info('Fechando conexões Socket.IO...');
+        global.io.close();
+    }
 
     server.close(() => {
-        log.success('✅ Servidor HTTP fechado');
+        log.success('Servidor HTTP fechado');
         db.end(() => {
-            log.success('✅ Conexões com banco fechadas');
+            log.success('Conexões com banco fechadas');
+            log.success('Encerramento completo');
             process.exit(0);
         });
     });
 
-    // Timeout de segurança
     setTimeout(() => {
-        log.error('⏰ Timeout - Forçando encerramento');
+        log.error('Timeout - Forçando encerramento');
         process.exit(1);
     }, 10000);
 };
 
+// Handlers de processo
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
 process.on('uncaughtException', (err) => {
-    log.error('💥 Exceção não capturada:');
+    log.error('Exceção não capturada:');
     console.error(err);
-    log.error('Continuando execução...');
+    shutdown('UNCAUGHT_EXCEPTION');
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-    log.error('⚠️ Promise rejeitada não tratada:');
+    log.error('Promise rejeitada não tratada:');
     console.error(reason);
 });
 
-module.exports = { app, server, io };
-
+// =================================================================================================
+// EXPORTAÇÕES
+// =================================================================================================
+module.exports = { app, server, io, systemStats };
