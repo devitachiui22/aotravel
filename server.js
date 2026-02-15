@@ -1,14 +1,15 @@
 /**
  * =================================================================================================
- * 🚀 AOTRAVEL SERVER PRO - PRODUCTION COMMAND CENTER v11.1.0 (FULLY UPDATED)
+ * 🚀 AOTRAVEL SERVER PRO - PRODUCTION COMMAND CENTER v11.1.0 (FULLY UPDATED - CORRIGIDO)
  * =================================================================================================
  *
  * ✅ CORREÇÕES APLICADAS:
- * 1. Exposição global do `io` para ser acessível em controllers e serviços
- * 2. Middleware para injetar `io` em todas as requisições
- * 3. Rotas de debug detalhadas para monitoramento
- * 4. Sistema de shutdown gracefull
- * 5. Dashboard profissional com estatísticas em tempo real
+ * 1. ✅ Removida duplicação da importação do setupSocketIO
+ * 2. ✅ Exposição global do `io` para ser acessível em controllers e serviços
+ * 3. ✅ Middleware para injetar `io` em todas as requisições
+ * 4. ✅ Rotas de debug detalhadas para monitoramento
+ * 5. ✅ Sistema de shutdown gracefull
+ * 6. ✅ Dashboard profissional com estatísticas em tempo real
  */
 
 require('dotenv').config();
@@ -86,7 +87,7 @@ const appConfig = require('./src/config/appConfig');
 const { bootstrapDatabase } = require('./src/utils/dbBootstrap');
 const { globalErrorHandler, notFoundHandler } = require('./src/middleware/errorMiddleware');
 const routes = require('./src/routes');
-const { setupSocketIO } = require('./src/services/socketService');
+const { setupSocketIO } = require('./src/services/socketService'); // ✅ APENAS UMA VEZ
 
 const app = express();
 const server = http.createServer(app);
@@ -564,10 +565,9 @@ app.use(notFoundHandler);
 app.use(globalErrorHandler);
 
 // =================================================================================================
-// 8. INICIALIZAÇÃO DO SOCKET SERVICE
+// 8. INICIALIZAÇÃO DO SOCKET SERVICE (CHAMADA ÚNICA)
 // =================================================================================================
-const { setupSocketIO } = require('./src/services/socketService');
-setupSocketIO(io);
+setupSocketIO(io); // ✅ APENAS UMA CHAMADA
 
 // Monitorar conexões socket para estatísticas
 io.engine.on('connection', (socket) => {
