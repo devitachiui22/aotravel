@@ -147,9 +147,12 @@ function handleConnection(socket) {
     });
 
     // =====================================================================
-    // 2. JOIN DRIVER ROOM (CRÍTICO)
+    // 2. JOIN DRIVER ROOM (VERSÃO CORRIGIDA COM LOGS DETALHADOS)
     // =====================================================================
     socket.on('join_driver_room', async (data) => {
+        console.log('\n🔴🔴🔴🔴🔴 JOIN DRIVER ROOM 🔴🔴🔴🔴🔴');
+        console.log('Dados recebidos:', JSON.stringify(data, null, 2));
+
         let driverId = null;
         let lat = 0.0;
         let lng = 0.0;
@@ -188,7 +191,8 @@ function handleConnection(socket) {
         }
 
         try {
-            // Usar o controller para salvar no banco
+            // 🔴 CHAMADA DIRETA AO CONTROLLER
+            console.log('🔄 Chamando socketController.joinDriverRoom...');
             await socketController.joinDriverRoom({
                 driver_id: driverIdStr,
                 user_id: driverIdStr,
@@ -198,9 +202,11 @@ function handleConnection(socket) {
                 speed: speed,
                 status: 'online'
             }, socket);
+            console.log('✅ Controller executado com sucesso');
 
         } catch (e) {
             console.error(`❌ [DB ERROR] Falha ao salvar driver ${driverIdStr}:`, e.message);
+            console.error(e.stack);
         }
 
         socket.emit('joined_ack', {
@@ -212,6 +218,8 @@ function handleConnection(socket) {
 
         const onlineCount = await socketController.countOnlineDrivers();
         io.emit('drivers_online_count', onlineCount);
+
+        console.log('🔴🔴🔴🔴🔴 FIM JOIN DRIVER ROOM 🔴🔴🔴🔴🔴\n');
     });
 
     // =====================================================================
@@ -356,7 +364,7 @@ function handleConnection(socket) {
                 status: (code) => ({
                     json: (response) => {
                         console.log(`📦 [SOCKET] Resposta do controller (${code}):`, response);
-                        
+
                         // Emitir para o passageiro
                         io.to(`user_${data.passenger_id}`).emit('ride_request_response', {
                             success: code === 201,
@@ -380,7 +388,7 @@ function handleConnection(socket) {
 
         } catch (error) {
             console.error('❌ [SOCKET] Erro ao processar request_ride:', error);
-            
+
             io.to(`user_${data.passenger_id}`).emit('ride_request_error', {
                 message: 'Erro ao processar solicitação',
                 error: error.message
