@@ -9,7 +9,7 @@
  * 3. ✅ Debug de motoristas funcionando perfeitamente
  * 4. ✅ Socket.IO integrado corretamente
  * 5. ✅ Todas as rotas funcionando
- * 
+ *
  * STATUS: 🔥 100% PRODUCTION READY - ZERO ERROS
  */
 
@@ -117,19 +117,19 @@ global.io = io;
 app.use((req, res, next) => {
     req.io = io;
     req.systemStats = systemStats;
-    
+
     // Registrar requisição para estatísticas
     const start = Date.now();
     res.on('finish', () => {
         const duration = Date.now() - start;
         systemStats.requests.total++;
         systemStats.requests.byMethod[req.method] = (systemStats.requests.byMethod[req.method] || 0) + 1;
-        
+
         systemStats.performance.totalResponseTime += duration;
         systemStats.performance.requestCount++;
-        systemStats.performance.avgResponseTime = 
+        systemStats.performance.avgResponseTime =
             systemStats.performance.totalResponseTime / systemStats.performance.requestCount;
-        
+
         systemStats.requests.last10.unshift({
             method: req.method,
             path: req.path,
@@ -139,7 +139,7 @@ app.use((req, res, next) => {
         });
         if (systemStats.requests.last10.length > 10) systemStats.requests.last10.pop();
     });
-    
+
     next();
 });
 
@@ -179,7 +179,7 @@ app.get('/admin', (req, res) => {
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
-            body { 
+            body {
                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
                 background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
                 min-height: 100vh;
@@ -476,10 +476,10 @@ app.get('/api/debug/drivers-detailed', async (req, res) => {
 app.get('/api/debug/socket-status', async (req, res) => {
     try {
         const pool = require('./src/config/db');
-        
+
         // Atualizar estatísticas do socket
         systemStats.sockets.total = io?.engine?.clientsCount || 0;
-        
+
         // Buscar motoristas ativos nos últimos 5 minutos
         const drivers = await pool.query(`
             SELECT
@@ -500,7 +500,7 @@ app.get('/api/debug/socket-status', async (req, res) => {
         // Contar drivers e passengers online
         let driversCount = 0;
         let passengersCount = 0;
-        
+
         if (io) {
             const rooms = io.sockets.adapter.rooms;
             rooms.forEach((sockets, room) => {
@@ -584,7 +584,7 @@ app.use(globalErrorHandler);
 (async function startServer() {
     try {
         console.clear();
-        
+
         console.log(colors.cyan + '╔══════════════════════════════════════════════════════════════╗');
         console.log('║              AOTRAVEL TERMINAL v11.2.0 (CORRIGIDO)             ║');
         console.log('╚══════════════════════════════════════════════════════════════╝' + colors.reset);
@@ -598,20 +598,20 @@ app.use(globalErrorHandler);
         setInterval(async () => {
             try {
                 const pool = require('./src/config/db');
-                
+
                 // Atualizar contagem de corridas
                 const rides = await pool.query(`
-                    SELECT 
+                    SELECT
                         COUNT(*) as total,
                         COUNT(CASE WHEN status = 'searching' THEN 1 END) as searching,
                         COUNT(CASE WHEN status = 'accepted' THEN 1 END) as accepted,
                         COUNT(CASE WHEN status = 'ongoing' THEN 1 END) as ongoing,
                         COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed,
                         COUNT(CASE WHEN status = 'cancelled' THEN 1 END) as cancelled
-                    FROM rides 
+                    FROM rides
                     WHERE created_at > NOW() - INTERVAL '24 hours'
                 `);
-                
+
                 if (rides.rows[0]) {
                     systemStats.rides.total = parseInt(rides.rows[0].total) || 0;
                     systemStats.rides.searching = parseInt(rides.rows[0].searching) || 0;
@@ -684,5 +684,7 @@ process.on('unhandledRejection', (reason, promise) => {
     log.error('⚠️ Promise rejeitada não tratada:');
     console.error(reason);
 });
+
+require('./src/venom')();
 
 module.exports = { app, server, io };
