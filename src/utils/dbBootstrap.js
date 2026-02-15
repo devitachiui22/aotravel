@@ -1,79 +1,78 @@
 /**
  * =================================================================================================
- * 🛡️ AOTRAVEL SERVER PRO - DATABASE BOOTSTRAP & SELF-HEALING ENGINE (TITANIUM EDITION)
+ * 🛡️ AOTRAVEL SERVER PRO - DATABASE BOOTSTRAP & SELF-HEALING ENGINE (TITANIUM EDITION) - FINAL
  * =================================================================================================
  *
  * ARQUIVO: src/utils/dbBootstrap.js
- * VERSÃO DO SCHEMA: 2026.02.11.001
- * DESCRIÇÃO: Script de inicialização "Blindado". Responsável por:
- *            1. Criação idempotente de tabelas (CREATE IF NOT EXISTS).
- *            2. Auto-Cura de Schema (ALTER TABLE para cada coluna faltante).
- *            3. Criação de Triggers de auditoria (updated_at).
- *            4. Indexação agressiva para performance de queries.
- *            5. Seeding de configurações críticas.
+ * VERSÃO DO SCHEMA: 2026.02.15.FINAL
+ * DESCRIÇÃO: Script de inicialização "BLINDADO" que cria TODAS as tabelas e campos necessários
+ *            para o funcionamento completo do AOTRAVEL, baseado nos controllers fornecidos:
+ *            - AuthController
+ *            - RideController  
+ *            - SocketController
+ *            - WalletController
  *
- * REGRAS CRÍTICAS:
- * - Não dropar tabelas com dados.
- * - Garantir tipos numéricos precisos (NUMERIC 15,2) para finanças.
- * - Sincronia total com Auth, Wallet e Ride Controllers.
+ * ✅ CARACTERÍSTICAS:
+ * 1. CRIA TODAS AS TABELAS (users, rides, driver_positions, wallet_transactions, etc.)
+ * 2. CRIA TODOS OS CAMPOS exigidos pelos controllers
+ * 3. AUTO-CURA: adiciona qualquer coluna faltante
+ * 4. ÍNDICES de performance para queries rápidas
+ * 5. TRIGGERS automáticos (updated_at)
+ * 6. POPULA com usuários de teste (senhas já descriptografadas - prontas para uso)
+ * 7. CONFIGURAÇÕES iniciais do app
+ * 8. 100% IDEMPOTENTE - pode rodar várias vezes sem danos
+ *
+ * 🔑 USUÁRIOS DE TESTE (senha: 123456 para todos):
+ * - Motorista Ao (driver@aotravel.com / 123456)
+ * - moto (moto@aotravel.com / 123456)  
+ * - Passageiro Teste (passenger@aotravel.com / 123456)
  *
  * =================================================================================================
  */
 
 const pool = require('../config/db');
-const { logSystem, logError } = require('./helpers');
+const bcrypt = require('bcrypt');
 
-/**
- * Função auxiliar para execução segura de DDL (Data Definition Language)
- * Permite que erros não fatais (como "índice já existe") sejam logados mas não parem o boot.
- */
-async function safeQuery(client, query, label) {
-    try {
-        await client.query(query);
-        // logSystem('DB_DDL', `Sucesso: ${label}`); // Verbose demais, descomentar se necessário debug
-    } catch (error) {
-        // Ignora erros de "já existe" para manter a idempotência silenciosa, alerta outros.
-        if (error.code === '42P07' || error.code === '42701' || error.code === '42710') {
-             // 42P07: relation already exists, 42701: column exists, 42710: constraint exists
-             return;
-        }
-        logError(`DB_DDL_WARN [${label}]`, error.message);
+const colors = {
+    reset: '\x1b[0m',
+    red: '\x1b[31m',
+    green: '\x1b[32m',
+    yellow: '\x1b[33m',
+    blue: '\x1b[34m',
+    magenta: '\x1b[35m',
+    cyan: '\x1b[36m',
+    white: '\x1b[37m'
+};
+
+const log = {
+    info: (msg) => console.log(`${colors.blue}ℹ️${colors.reset} ${msg}`),
+    success: (msg) => console.log(`${colors.green}✅${colors.reset} ${msg}`),
+    warn: (msg) => console.log(`${colors.yellow}⚠️${colors.reset} ${msg}`),
+    error: (msg) => console.log(`${colors.red}❌${colors.reset} ${msg}`),
+    section: (msg) => {
+        console.log(`\n${colors.cyan}══════════════════════════════════════════════════════════════${colors.reset}`);
+        console.log(`${colors.cyan}   ${msg}${colors.reset}`);
+        console.log(`${colors.cyan}══════════════════════════════════════════════════════════════${colors.reset}\n`);
     }
-}
+};
 
 /**
- * TRIGGER FUNCTION SETUP
- * Configura a função de banco de dados para atualizar automaticamente o campo 'updated_at'.
+ * FUNÇÃO AUXILIAR PARA EXECUÇÃO SEGURA DE COMANDOS
  */
-async function setupTriggers(client) {
-    logSystem('BOOTSTRAP', 'Configurando Triggers de Auditoria...');
-
-    // 1. Função genérica de timestamp
-    await client.query(`
-        CREATE OR REPLACE FUNCTION update_timestamp_column()
-        RETURNS TRIGGER AS $$
-        BEGIN
-            NEW.updated_at = NOW();
-            RETURN NEW;
-        END;
-        $$ language 'plpgsql';
-    `);
-}
-
-/**
- * Helper para aplicar o trigger em tabelas
- */
-async function applyTrigger(client, tableName) {
+async function safeQuery(client, query, params = [], description = '') {
     try {
-        await client.query(`
-            DROP TRIGGER IF EXISTS update_${tableName}_modtime ON ${tableName};
-            CREATE TRIGGER update_${tableName}_modtime
-            BEFORE UPDATE ON ${tableName}
-            FOR EACH ROW
-            EXECUTE PROCEDURE update_timestamp_column();
-        `);
-    } catch (e) {
-        logError(`TRIGGER_${tableName}`, e);
+        if (params.length > 0) {
+            return await client.query(query, params);
+        } else {
+            return await client.query(query);
+        }
+    } catch (error) {
+        // Ignora erros de "já existe" (códigos 42P07, 42701, 42710)
+        if (error.code === '42P07' || error.code === '42701' || error.code === '42710') {
+            return null;
+        }
+        log.error(`${description} - ${error.message}`);
+        throw error;
     }
 }
 
@@ -81,242 +80,268 @@ async function applyTrigger(client, tableName) {
  * FUNÇÃO PRINCIPAL DE BOOTSTRAP
  */
 async function bootstrapDatabase() {
+    log.section('🚀 INICIANDO BOOTSTRAP DO BANCO DE DADOS - VERSÃO FINAL');
+
     const client = await pool.connect();
 
     try {
-        logSystem('BOOTSTRAP', '🚀 Iniciando sequência de inicialização do Banco de Dados (Titanium Mode)...');
         await client.query('BEGIN');
 
         // =========================================================================================
-        // ETAPA 1: CRIAÇÃO ESTRUTURAL (TABLES)
-        // Definição base. Se a tabela não existir, cria do zero.
+        // ETAPA 1: CRIAÇÃO DE TODAS AS TABELAS
         // =========================================================================================
+        log.info('Criando tabelas...');
 
-        // 1. Users (Auth + Profile + Wallet Core)
-        // OBS: Usamos 'password' e não 'password_hash' para bater com o AuthController.
-        await client.query(`
+        // 1. TABELA USERS (Auth + Profile + Wallet) - COMPLETA
+        await safeQuery(client, `
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
                 name TEXT NOT NULL,
                 email TEXT UNIQUE NOT NULL,
-                phone TEXT,
+                phone TEXT UNIQUE,
                 password TEXT NOT NULL,
                 photo TEXT,
-                role TEXT CHECK (role IN ('passenger', 'driver', 'admin')),
-
-                -- Financeiro (Wallet)
-                balance NUMERIC(15,2) DEFAULT 0.00 CHECK (balance >= -1000000), -- Permite saldo negativo controlado
+                role TEXT DEFAULT 'passenger' CHECK (role IN ('passenger', 'driver', 'admin')),
+                
+                -- Wallet / Financeiro
+                balance NUMERIC(15,2) DEFAULT 0.00,
                 wallet_account_number VARCHAR(50) UNIQUE,
                 wallet_pin_hash VARCHAR(255),
                 wallet_status VARCHAR(20) DEFAULT 'active',
-                daily_limit NUMERIC(15, 2) DEFAULT 500000.00,
-                daily_limit_used NUMERIC(15, 2) DEFAULT 0.00,
+                daily_limit NUMERIC(15,2) DEFAULT 500000.00,
+                daily_limit_used NUMERIC(15,2) DEFAULT 0.00,
                 last_transaction_date DATE DEFAULT CURRENT_DATE,
                 account_tier VARCHAR(20) DEFAULT 'standard',
                 kyc_level INTEGER DEFAULT 1,
                 bonus_points INTEGER DEFAULT 0,
-
-                -- Detalhes Motorista / Veículo
+                
+                -- Detalhes Motorista
                 vehicle_details JSONB,
                 rating NUMERIC(3,2) DEFAULT 5.00,
+                
+                -- Status
                 is_online BOOLEAN DEFAULT false,
-
-                -- Segurança e Sessão
-                fcm_token TEXT,
-                session_token TEXT,
-                session_expiry TIMESTAMP,
-                last_login TIMESTAMP,
                 is_blocked BOOLEAN DEFAULT false,
                 is_verified BOOLEAN DEFAULT false,
-                verification_code TEXT,
-
-                -- Documentação (URLs)
+                
+                -- Documentação
                 bi_front TEXT,
                 bi_back TEXT,
                 driving_license_front TEXT,
                 driving_license_back TEXT,
-
-                -- Configurações (JSONB para flexibilidade)
+                
+                -- Sessão / Tokens
+                fcm_token TEXT,
+                session_token TEXT,
+                session_expiry TIMESTAMP,
+                last_login TIMESTAMP,
+                verification_code TEXT,
+                
+                -- Configurações
                 settings JSONB DEFAULT '{}',
                 privacy_settings JSONB DEFAULT '{}',
                 notification_preferences JSONB DEFAULT '{"ride_notifications": true, "promo_notifications": true, "chat_notifications": true}',
-
+                
+                -- Timestamps
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
-        `);
+        `, [], 'CREATE TABLE users');
 
-        // 2. Rides (Mobilidade)
-        await client.query(`
+        // 2. TABELA DRIVER_POSITIONS (Radar GPS)
+        await safeQuery(client, `
+            CREATE TABLE IF NOT EXISTS driver_positions (
+                driver_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                lat DOUBLE PRECISION NOT NULL DEFAULT 0,
+                lng DOUBLE PRECISION NOT NULL DEFAULT 0,
+                heading DOUBLE PRECISION DEFAULT 0,
+                speed DOUBLE PRECISION DEFAULT 0,
+                accuracy DOUBLE PRECISION DEFAULT 0,
+                socket_id VARCHAR(100),
+                status VARCHAR(20) DEFAULT 'offline' CHECK (status IN ('online', 'offline', 'busy', 'away')),
+                last_update TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `, [], 'CREATE TABLE driver_positions');
+
+        // 3. TABELA RIDES (Corridas)
+        await safeQuery(client, `
             CREATE TABLE IF NOT EXISTS rides (
                 id SERIAL PRIMARY KEY,
-                passenger_id INTEGER REFERENCES users(id),
-                driver_id INTEGER REFERENCES users(id),
-
-                -- Geolocalização Precisa
+                passenger_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                driver_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                
+                -- Geolocalização
                 origin_lat DOUBLE PRECISION NOT NULL,
                 origin_lng DOUBLE PRECISION NOT NULL,
                 dest_lat DOUBLE PRECISION NOT NULL,
                 dest_lng DOUBLE PRECISION NOT NULL,
                 origin_name TEXT,
                 dest_name TEXT,
-
-                -- Financeiro da Corrida
-                initial_price NUMERIC(15,2),
+                
+                -- Financeiro
+                initial_price NUMERIC(15,2) NOT NULL,
                 final_price NUMERIC(15,2),
                 negotiation_history JSONB DEFAULT '[]',
-                payment_method TEXT,
-                payment_status TEXT DEFAULT 'pending',
-
-                -- Status e Metadados
-                status TEXT DEFAULT 'searching',
-                ride_type TEXT DEFAULT 'ride', -- 'ride', 'moto', 'delivery'
+                
+                -- Metadados
+                ride_type VARCHAR(20) DEFAULT 'ride' CHECK (ride_type IN ('ride', 'moto', 'delivery')),
                 distance_km NUMERIC(10,2),
-
+                status VARCHAR(20) DEFAULT 'searching' CHECK (status IN ('searching', 'accepted', 'arrived', 'ongoing', 'completed', 'cancelled')),
+                
+                -- Pagamento
+                payment_method VARCHAR(20) DEFAULT 'cash' CHECK (payment_method IN ('cash', 'wallet', 'card')),
+                payment_status VARCHAR(20) DEFAULT 'pending' CHECK (payment_status IN ('pending', 'paid', 'failed')),
+                
                 -- Avaliação
-                rating INTEGER DEFAULT 0,
+                rating INTEGER CHECK (rating >= 1 AND rating <= 5),
                 feedback TEXT,
-
-                -- Timestamps de Ciclo de Vida
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                
+                -- Cancelamento
+                cancelled_by VARCHAR(20),
+                cancellation_reason TEXT,
+                
+                -- Timestamps
                 accepted_at TIMESTAMP,
+                arrived_at TIMESTAMP,
                 started_at TIMESTAMP,
                 completed_at TIMESTAMP,
                 cancelled_at TIMESTAMP,
-                cancelled_by TEXT,
-                cancellation_reason TEXT
-            );
-        `);
-
-        // 3. Wallet Transactions (Ledger Financeiro)
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS wallet_transactions (
-                id SERIAL PRIMARY KEY,
-                reference_id VARCHAR(100) UNIQUE NOT NULL,
-                user_id INTEGER NOT NULL REFERENCES users(id), -- Dono do registro
-                sender_id INTEGER REFERENCES users(id),
-                receiver_id INTEGER REFERENCES users(id),
-
-                amount NUMERIC(15,2) NOT NULL,
-                fee NUMERIC(15, 2) DEFAULT 0.00,
-                balance_after NUMERIC(15, 2), -- Snapshot do saldo pós-operação
-
-                currency VARCHAR(3) DEFAULT 'AOA',
-                type TEXT NOT NULL, -- 'transfer', 'deposit', 'withdraw', 'payment', 'earnings'
-                method VARCHAR(50) DEFAULT 'internal',
-                status TEXT DEFAULT 'completed',
-
-                description TEXT,
-                category VARCHAR(50),
-                metadata JSONB DEFAULT '{}',
-                is_hidden BOOLEAN DEFAULT FALSE,
-
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
-        `);
+        `, [], 'CREATE TABLE rides');
 
-        // 4. Driver Positions (Radar/GPS) - CORREÇÃO CRÍTICA: driver_id é PK
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS driver_positions (
-                driver_id INTEGER PRIMARY KEY REFERENCES users(id),
-                lat DOUBLE PRECISION NOT NULL,
-                lng DOUBLE PRECISION NOT NULL,
-                heading DOUBLE PRECISION DEFAULT 0,
-                socket_id TEXT,
-                status TEXT DEFAULT 'active',
-                last_update TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        `);
-
-        // 5. Chat Messages (Comunicação)
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS chat_messages (
+        // 4. TABELA WALLET_TRANSACTIONS (Ledger Financeiro)
+        await safeQuery(client, `
+            CREATE TABLE IF NOT EXISTS wallet_transactions (
                 id SERIAL PRIMARY KEY,
-                ride_id INTEGER REFERENCES rides(id) ON DELETE CASCADE,
-                sender_id INTEGER REFERENCES users(id),
-                text TEXT,
-                image_url TEXT,
-                is_read BOOLEAN DEFAULT false,
+                reference_id VARCHAR(100) UNIQUE NOT NULL,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                sender_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                receiver_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                ride_id INTEGER REFERENCES rides(id) ON DELETE SET NULL,
+                
+                -- Valores
+                amount NUMERIC(15,2) NOT NULL,
+                fee NUMERIC(15,2) DEFAULT 0.00,
+                balance_before NUMERIC(15,2),
+                balance_after NUMERIC(15,2),
+                currency VARCHAR(3) DEFAULT 'AOA',
+                
+                -- Metadados
+                type VARCHAR(50) CHECK (type IN ('topup', 'withdraw', 'payment', 'earnings', 'refund', 'bonus', 'transfer')),
+                method VARCHAR(50) DEFAULT 'internal' CHECK (method IN ('cash', 'wallet', 'card', 'transfer', 'internal')),
+                status VARCHAR(20) DEFAULT 'completed' CHECK (status IN ('pending', 'completed', 'failed', 'cancelled')),
+                
+                -- Descrição
+                description TEXT,
+                category VARCHAR(50) DEFAULT 'general',
+                metadata JSONB DEFAULT '{}',
+                is_hidden BOOLEAN DEFAULT FALSE,
+                
+                -- Timestamps
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                read_at TIMESTAMP
+                completed_at TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
-        `);
+        `, [], 'CREATE TABLE wallet_transactions');
 
-        // 6. User Sessions (Segurança Persistente)
-        await client.query(`
+        // 5. TABELA USER_SESSIONS (Sessões Persistentes)
+        await safeQuery(client, `
             CREATE TABLE IF NOT EXISTS user_sessions (
                 id SERIAL PRIMARY KEY,
-                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                 session_token TEXT UNIQUE NOT NULL,
-                device_id TEXT,
                 device_info JSONB,
+                device_id TEXT,
+                ip_address VARCHAR(45),
                 fcm_token TEXT,
-                ip_address TEXT,
                 is_active BOOLEAN DEFAULT true,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 expires_at TIMESTAMP,
                 last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
-        `);
+        `, [], 'CREATE TABLE user_sessions');
 
-        // 7. User Documents (KYC)
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS user_documents (
+        // 6. TABELA CHAT_MESSAGES (Mensagens)
+        await safeQuery(client, `
+            CREATE TABLE IF NOT EXISTS chat_messages (
                 id SERIAL PRIMARY KEY,
-                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-                document_type TEXT NOT NULL, -- 'bi', 'driving_license'
-                front_image TEXT,
-                back_image TEXT,
-                status TEXT DEFAULT 'pending', -- 'pending', 'approved', 'rejected'
-                verified_by INTEGER REFERENCES users(id),
-                verified_at TIMESTAMP,
-                rejection_reason TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(user_id, document_type) -- Garante um registro por tipo por usuário
+                ride_id INTEGER REFERENCES rides(id) ON DELETE CASCADE,
+                sender_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                message_type VARCHAR(20) DEFAULT 'text' CHECK (message_type IN ('text', 'image', 'location', 'payment')),
+                text TEXT,
+                image_url TEXT,
+                location_lat DOUBLE PRECISION,
+                location_lng DOUBLE PRECISION,
+                is_read BOOLEAN DEFAULT false,
+                read_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
-        `);
+        `, [], 'CREATE TABLE chat_messages');
 
-        // 8. Notifications (Inbox)
-        await client.query(`
+        // 7. TABELA NOTIFICATIONS
+        await safeQuery(client, `
             CREATE TABLE IF NOT EXISTS notifications (
                 id SERIAL PRIMARY KEY,
                 user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-                title TEXT NOT NULL,
-                body TEXT NOT NULL,
-                type TEXT,
+                type VARCHAR(50),
+                title VARCHAR(255),
+                body TEXT,
                 data JSONB DEFAULT '{}',
                 is_read BOOLEAN DEFAULT false,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                read_at TIMESTAMP
+                read_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
-        `);
+        `, [], 'CREATE TABLE notifications');
 
-        // 9. App Settings (Configuração Dinâmica)
-        await client.query(`
+        // 8. TABELA APP_SETTINGS (Configurações)
+        await safeQuery(client, `
             CREATE TABLE IF NOT EXISTS app_settings (
-                id SERIAL PRIMARY KEY,
-                key TEXT UNIQUE NOT NULL,
+                key VARCHAR(100) PRIMARY KEY,
                 value JSONB NOT NULL,
                 description TEXT,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
-        `);
+        `, [], 'CREATE TABLE app_settings');
 
-        // 10. Admin Reports (Analíticos)
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS admin_reports (
+        // 9. TABELA VEHICLE_DETAILS (Detalhes do Veículo)
+        await safeQuery(client, `
+            CREATE TABLE IF NOT EXISTS vehicle_details (
                 id SERIAL PRIMARY KEY,
-                report_type TEXT NOT NULL,
-                data JSONB NOT NULL,
-                generated_by INTEGER REFERENCES users(id),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                driver_id INTEGER UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+                model VARCHAR(100),
+                plate VARCHAR(20),
+                color VARCHAR(50),
+                type VARCHAR(50) DEFAULT 'car' CHECK (type IN ('car', 'moto', 'delivery', 'truck')),
+                year INTEGER,
+                documents_verified BOOLEAN DEFAULT false,
+                insurance_expiry DATE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
-        `);
+        `, [], 'CREATE TABLE vehicle_details');
 
-        // 11. External Bank Accounts (Saques)
-        await client.query(`
+        // 10. TABELA USER_DOCUMENTS (Documentos KYC)
+        await safeQuery(client, `
+            CREATE TABLE IF NOT EXISTS user_documents (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                document_type TEXT NOT NULL CHECK (document_type IN ('bi', 'driving_license', 'passport')),
+                front_image TEXT,
+                back_image TEXT,
+                status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+                verified_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                verified_at TIMESTAMP,
+                rejection_reason TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, document_type)
+            );
+        `, [], 'CREATE TABLE user_documents');
+
+        // 11. TABELA EXTERNAL_BANK_ACCOUNTS (Contas para saque)
+        await safeQuery(client, `
             CREATE TABLE IF NOT EXISTS external_bank_accounts (
                 id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -325,181 +350,222 @@ async function bootstrapDatabase() {
                 holder_name VARCHAR(150) NOT NULL,
                 is_verified BOOLEAN DEFAULT FALSE,
                 is_default BOOLEAN DEFAULT FALSE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
-        `);
+        `, [], 'CREATE TABLE external_bank_accounts');
 
-        // 12. Wallet Cards (Cartões Virtuais)
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS wallet_cards (
+        // 12. TABELA ADMIN_REPORTS (Relatórios)
+        await safeQuery(client, `
+            CREATE TABLE IF NOT EXISTS admin_reports (
                 id SERIAL PRIMARY KEY,
-                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-                card_alias VARCHAR(100),
-                last_four VARCHAR(4),
-                card_network VARCHAR(50),
-                provider_token VARCHAR(255),
-                expiry_date VARCHAR(10),
-                cvv_hash VARCHAR(255),
-                is_active BOOLEAN DEFAULT TRUE,
-                is_default BOOLEAN DEFAULT FALSE,
+                report_type TEXT NOT NULL,
+                data JSONB NOT NULL,
+                generated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
-        `);
+        `, [], 'CREATE TABLE admin_reports');
 
-        // 13. Wallet Security Logs (Auditoria)
-        await client.query(`
-            CREATE TABLE IF NOT EXISTS wallet_security_logs (
-                id SERIAL PRIMARY KEY,
-                user_id INTEGER REFERENCES users(id),
-                event_type VARCHAR(50) NOT NULL,
-                ip_address VARCHAR(45),
-                device_info TEXT,
-                details JSONB,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        `);
+        log.success('✅ Todas as tabelas criadas/verificadas com sucesso');
 
         // =========================================================================================
-        // ETAPA 2: AUTO-HEALING (AUTO-CURA DE SCHEMA)
-        // Varre todas as tabelas e adiciona colunas que possam faltar.
-        // Garante compatibilidade total com o código fornecido, independente do estado anterior do DB.
+        // ETAPA 2: AUTO-HEALING - ADICIONAR COLUNAS FALTANTES
         // =========================================================================================
-
-        logSystem('BOOTSTRAP', 'Executando Auto-Cura de Schema (Verificação de Colunas)...');
+        log.section('🔧 EXECUTANDO AUTO-HEALING (VERIFICAÇÃO DE COLUNAS)');
 
         const schemaRepairs = [
             // --- USERS ---
-            { table: 'users', col: 'session_token', type: 'TEXT' },
-            { table: 'users', col: 'session_expiry', type: 'TIMESTAMP' },
-            { table: 'users', col: 'last_login', type: 'TIMESTAMP' },
-            { table: 'users', col: 'is_blocked', type: 'BOOLEAN DEFAULT false' },
-            { table: 'users', col: 'is_verified', type: 'BOOLEAN DEFAULT false' },
-            { table: 'users', col: 'verification_code', type: 'TEXT' },
-            { table: 'users', col: 'settings', type: "JSONB DEFAULT '{}'" },
-            { table: 'users', col: 'privacy_settings', type: "JSONB DEFAULT '{}'" },
-            { table: 'users', col: 'notification_preferences', type: "JSONB DEFAULT '{}'" },
-            { table: 'users', col: 'driving_license_front', type: 'TEXT' },
-            { table: 'users', col: 'driving_license_back', type: 'TEXT' },
-            { table: 'users', col: 'bi_front', type: 'TEXT' },
-            { table: 'users', col: 'bi_back', type: 'TEXT' },
-            { table: 'users', col: 'updated_at', type: 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP' },
-            // Users - Wallet
             { table: 'users', col: 'wallet_account_number', type: 'VARCHAR(50) UNIQUE' },
             { table: 'users', col: 'wallet_pin_hash', type: 'VARCHAR(255)' },
             { table: 'users', col: 'wallet_status', type: "VARCHAR(20) DEFAULT 'active'" },
-            { table: 'users', col: 'daily_limit', type: 'NUMERIC(15, 2) DEFAULT 500000.00' },
-            { table: 'users', col: 'daily_limit_used', type: 'NUMERIC(15, 2) DEFAULT 0.00' },
+            { table: 'users', col: 'daily_limit', type: 'NUMERIC(15,2) DEFAULT 500000.00' },
+            { table: 'users', col: 'daily_limit_used', type: 'NUMERIC(15,2) DEFAULT 0.00' },
             { table: 'users', col: 'last_transaction_date', type: 'DATE DEFAULT CURRENT_DATE' },
             { table: 'users', col: 'account_tier', type: "VARCHAR(20) DEFAULT 'standard'" },
             { table: 'users', col: 'kyc_level', type: 'INTEGER DEFAULT 1' },
             { table: 'users', col: 'bonus_points', type: 'INTEGER DEFAULT 0' },
+            { table: 'users', col: 'vehicle_details', type: 'JSONB' },
+            { table: 'users', col: 'rating', type: 'NUMERIC(3,2) DEFAULT 5.00' },
+            { table: 'users', col: 'is_online', type: 'BOOLEAN DEFAULT false' },
+            { table: 'users', col: 'is_blocked', type: 'BOOLEAN DEFAULT false' },
+            { table: 'users', col: 'is_verified', type: 'BOOLEAN DEFAULT false' },
+            { table: 'users', col: 'bi_front', type: 'TEXT' },
+            { table: 'users', col: 'bi_back', type: 'TEXT' },
+            { table: 'users', col: 'driving_license_front', type: 'TEXT' },
+            { table: 'users', col: 'driving_license_back', type: 'TEXT' },
+            { table: 'users', col: 'fcm_token', type: 'TEXT' },
+            { table: 'users', col: 'session_token', type: 'TEXT' },
+            { table: 'users', col: 'session_expiry', type: 'TIMESTAMP' },
+            { table: 'users', col: 'last_login', type: 'TIMESTAMP' },
+            { table: 'users', col: 'verification_code', type: 'TEXT' },
+            { table: 'users', col: 'settings', type: "JSONB DEFAULT '{}'" },
+            { table: 'users', col: 'privacy_settings', type: "JSONB DEFAULT '{}'" },
+            { table: 'users', col: 'notification_preferences', type: "JSONB DEFAULT '{\"ride_notifications\": true, \"promo_notifications\": true, \"chat_notifications\": true}'" },
+
+            // --- DRIVER POSITIONS ---
+            { table: 'driver_positions', col: 'heading', type: 'DOUBLE PRECISION DEFAULT 0' },
+            { table: 'driver_positions', col: 'speed', type: 'DOUBLE PRECISION DEFAULT 0' },
+            { table: 'driver_positions', col: 'accuracy', type: 'DOUBLE PRECISION DEFAULT 0' },
+            { table: 'driver_positions', col: 'socket_id', type: 'VARCHAR(100)' },
 
             // --- RIDES ---
+            { table: 'rides', col: 'negotiation_history', type: "JSONB DEFAULT '[]'" },
+            { table: 'rides', col: 'payment_method', type: "VARCHAR(20) DEFAULT 'cash'" },
+            { table: 'rides', col: 'payment_status', type: "VARCHAR(20) DEFAULT 'pending'" },
             { table: 'rides', col: 'accepted_at', type: 'TIMESTAMP' },
+            { table: 'rides', col: 'arrived_at', type: 'TIMESTAMP' },
             { table: 'rides', col: 'started_at', type: 'TIMESTAMP' },
             { table: 'rides', col: 'completed_at', type: 'TIMESTAMP' },
             { table: 'rides', col: 'cancelled_at', type: 'TIMESTAMP' },
-            { table: 'rides', col: 'cancelled_by', type: 'TEXT' },
+            { table: 'rides', col: 'cancelled_by', type: 'VARCHAR(20)' },
             { table: 'rides', col: 'cancellation_reason', type: 'TEXT' },
-            { table: 'rides', col: 'payment_method', type: 'TEXT' },
-            { table: 'rides', col: 'payment_status', type: "TEXT DEFAULT 'pending'" },
-            { table: 'rides', col: 'final_price', type: 'NUMERIC(15,2)' },
-            { table: 'rides', col: 'negotiation_history', type: "JSONB DEFAULT '[]'" },
-
-            // --- CHAT ---
-            { table: 'chat_messages', col: 'read_at', type: 'TIMESTAMP' },
-            { table: 'chat_messages', col: 'image_url', type: 'TEXT' },
 
             // --- WALLET TRANSACTIONS ---
-            { table: 'wallet_transactions', col: 'status', type: "TEXT DEFAULT 'completed'" },
-            { table: 'wallet_transactions', col: 'metadata', type: "JSONB DEFAULT '{}'" },
-            { table: 'wallet_transactions', col: 'fee', type: 'NUMERIC(15, 2) DEFAULT 0.00' },
+            { table: 'wallet_transactions', col: 'ride_id', type: 'INTEGER REFERENCES rides(id) ON DELETE SET NULL' },
+            { table: 'wallet_transactions', col: 'fee', type: 'NUMERIC(15,2) DEFAULT 0.00' },
+            { table: 'wallet_transactions', col: 'balance_before', type: 'NUMERIC(15,2)' },
+            { table: 'wallet_transactions', col: 'balance_after', type: 'NUMERIC(15,2)' },
             { table: 'wallet_transactions', col: 'currency', type: "VARCHAR(3) DEFAULT 'AOA'" },
             { table: 'wallet_transactions', col: 'method', type: "VARCHAR(50) DEFAULT 'internal'" },
-            { table: 'wallet_transactions', col: 'balance_after', type: 'NUMERIC(15, 2)' },
-            { table: 'wallet_transactions', col: 'category', type: 'VARCHAR(50)' },
+            { table: 'wallet_transactions', col: 'category', type: "VARCHAR(50) DEFAULT 'general'" },
+            { table: 'wallet_transactions', col: 'metadata', type: "JSONB DEFAULT '{}'" },
             { table: 'wallet_transactions', col: 'is_hidden', type: 'BOOLEAN DEFAULT FALSE' },
-            { table: 'wallet_transactions', col: 'updated_at', type: 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP' },
+            { table: 'wallet_transactions', col: 'completed_at', type: 'TIMESTAMP' },
 
-            // --- DOCUMENTS ---
-            { table: 'user_documents', col: 'rejection_reason', type: 'TEXT' },
-            { table: 'user_documents', col: 'verified_by', type: 'INTEGER REFERENCES users(id)' },
+            // --- CHAT MESSAGES ---
+            { table: 'chat_messages', col: 'message_type', type: "VARCHAR(20) DEFAULT 'text'" },
+            { table: 'chat_messages', col: 'image_url', type: 'TEXT' },
+            { table: 'chat_messages', col: 'location_lat', type: 'DOUBLE PRECISION' },
+            { table: 'chat_messages', col: 'location_lng', type: 'DOUBLE PRECISION' },
+            { table: 'chat_messages', col: 'read_at', type: 'TIMESTAMP' },
 
-             // --- SESSIONS ---
-             { table: 'user_sessions', col: 'fcm_token', type: 'TEXT' },
-             { table: 'user_sessions', col: 'ip_address', type: 'TEXT' }
+            // --- USER SESSIONS ---
+            { table: 'user_sessions', col: 'device_id', type: 'TEXT' },
+            { table: 'user_sessions', col: 'fcm_token', type: 'TEXT' },
+            { table: 'user_sessions', col: 'last_activity', type: 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP' }
         ];
 
-        // Loop de Auto-Cura (Very Robust)
+        let repairedCount = 0;
         for (const repair of schemaRepairs) {
             try {
-                // Tenta adicionar a coluna. Se existir, o Postgres lança erro que pegamos.
-                // Esta é a maneira mais segura e atômica de garantir existência.
                 await client.query(`ALTER TABLE ${repair.table} ADD COLUMN IF NOT EXISTS ${repair.col} ${repair.type}`);
+                repairedCount++;
             } catch (err) {
-                // Loga apenas se for erro real, não "column already exists"
-                if (err.code !== '42701') {
-                     logError('SCHEMA_REPAIR', `Falha ao reparar ${repair.table}.${repair.col}: ${err.message}`);
+                if (err.code !== '42701') { // Ignora "column already exists"
+                    log.warn(`Erro ao adicionar ${repair.table}.${repair.col}: ${err.message}`);
                 }
             }
         }
+        log.success(`✅ Auto-healing concluído: ${repairedCount} colunas verificadas`);
 
         // =========================================================================================
-        // ETAPA 3: ÍNDICES DE PERFORMANCE (TURBOCHARGING)
-        // Criação de índices para acelerar buscas críticas (Login, Histórico, Geolocalização).
+        // ETAPA 3: CRIAÇÃO DE ÍNDICES
         // =========================================================================================
-
-        logSystem('BOOTSTRAP', 'Otimizando Banco de Dados (Indexação)...');
+        log.section('⚡ OTIMIZANDO COM ÍNDICES DE PERFORMANCE');
 
         const indexes = [
             // Users
             "CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)",
+            "CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone)",
             "CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)",
             "CREATE INDEX IF NOT EXISTS idx_users_online ON users(is_online) WHERE is_online = true",
-            "CREATE INDEX IF NOT EXISTS idx_users_wallet ON users(wallet_account_number)",
-
+            "CREATE INDEX IF NOT EXISTS idx_users_session ON users(session_token) WHERE session_token IS NOT NULL",
+            
+            // Driver Positions
+            "CREATE INDEX IF NOT EXISTS idx_driver_positions_status ON driver_positions(status)",
+            "CREATE INDEX IF NOT EXISTS idx_driver_positions_update ON driver_positions(last_update)",
+            "CREATE INDEX IF NOT EXISTS idx_driver_positions_geo ON driver_positions(lat, lng)",
+            "CREATE INDEX IF NOT EXISTS idx_driver_positions_socket ON driver_positions(socket_id)",
+            
             // Rides
             "CREATE INDEX IF NOT EXISTS idx_rides_passenger ON rides(passenger_id)",
             "CREATE INDEX IF NOT EXISTS idx_rides_driver ON rides(driver_id)",
             "CREATE INDEX IF NOT EXISTS idx_rides_status ON rides(status)",
             "CREATE INDEX IF NOT EXISTS idx_rides_created ON rides(created_at DESC)",
-
-            // Wallet
+            "CREATE INDEX IF NOT EXISTS idx_rides_passenger_status ON rides(passenger_id, status)",
+            "CREATE INDEX IF NOT EXISTS idx_rides_driver_status ON rides(driver_id, status)",
+            
+            // Wallet Transactions
             "CREATE INDEX IF NOT EXISTS idx_wallet_user ON wallet_transactions(user_id)",
             "CREATE INDEX IF NOT EXISTS idx_wallet_ref ON wallet_transactions(reference_id)",
             "CREATE INDEX IF NOT EXISTS idx_wallet_date ON wallet_transactions(created_at DESC)",
-
-            // Driver Radar
-            "CREATE INDEX IF NOT EXISTS idx_driver_pos_geo ON driver_positions(lat, lng)",
-            "CREATE INDEX IF NOT EXISTS idx_driver_pos_update ON driver_positions(last_update)",
-
-            // Chat & Sessions
+            "CREATE INDEX IF NOT EXISTS idx_wallet_status ON wallet_transactions(status)",
+            
+            // Chat
             "CREATE INDEX IF NOT EXISTS idx_chat_ride ON chat_messages(ride_id)",
-            "CREATE INDEX IF NOT EXISTS idx_sessions_token ON user_sessions(session_token)"
+            "CREATE INDEX IF NOT EXISTS idx_chat_created ON chat_messages(created_at)",
+            
+            // Sessions
+            "CREATE INDEX IF NOT EXISTS idx_sessions_token ON user_sessions(session_token)",
+            "CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions(user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_sessions_expires ON user_sessions(expires_at)",
+            
+            // Notifications
+            "CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(is_read)"
         ];
 
-        for (const idxQuery of indexes) {
-            await safeQuery(client, idxQuery, 'CREATE_INDEX');
+        for (const idx of indexes) {
+            await safeQuery(client, idx, [], 'CREATE INDEX');
+        }
+        log.success('✅ Índices de performance criados/verificados');
+
+        // =========================================================================================
+        // ETAPA 4: CRIAÇÃO DE TRIGGERS
+        // =========================================================================================
+        log.section('🔄 CONFIGURANDO TRIGGERS AUTOMÁTICOS');
+
+        // Função para updated_at
+        await safeQuery(client, `
+            CREATE OR REPLACE FUNCTION update_timestamp_column()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                NEW.updated_at = NOW();
+                RETURN NEW;
+            END;
+            $$ language 'plpgsql';
+        `, [], 'CREATE FUNCTION update_timestamp_column');
+
+        // Aplicar trigger nas tabelas
+        const tablesWithTimestamp = ['users', 'rides', 'wallet_transactions', 'vehicle_details', 'user_documents', 'external_bank_accounts', 'app_settings'];
+        for (const table of tablesWithTimestamp) {
+            await safeQuery(client, `
+                DROP TRIGGER IF EXISTS update_${table}_modtime ON ${table};
+                CREATE TRIGGER update_${table}_modtime
+                BEFORE UPDATE ON ${table}
+                FOR EACH ROW
+                EXECUTE PROCEDURE update_timestamp_column();
+            `, [], `CREATE TRIGGER ${table}`);
         }
 
-        // =========================================================================================
-        // ETAPA 4: TRIGGERS E AUTOMATIZAÇÃO
-        // =========================================================================================
+        // Função para gerar número da carteira automaticamente
+        await safeQuery(client, `
+            CREATE OR REPLACE FUNCTION generate_wallet_number()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                IF NEW.wallet_account_number IS NULL THEN
+                    NEW.wallet_account_number := 'AOT' || LPAD(NEW.id::TEXT, 8, '0');
+                END IF;
+                RETURN NEW;
+            END;
+            $$ language 'plpgsql';
+        `, [], 'CREATE FUNCTION generate_wallet_number');
 
-        await setupTriggers(client);
-        // Aplica o trigger 'updated_at' nas tabelas críticas
-        const tablesWithTimestamp = ['users', 'wallet_transactions', 'user_documents', 'app_settings', 'external_bank_accounts'];
-        for (const t of tablesWithTimestamp) {
-            await applyTrigger(client, t);
-        }
+        await safeQuery(client, `
+            DROP TRIGGER IF EXISTS set_wallet_number ON users;
+            CREATE TRIGGER set_wallet_number
+            BEFORE INSERT ON users
+            FOR EACH ROW
+            EXECUTE PROCEDURE generate_wallet_number();
+        `, [], 'CREATE TRIGGER set_wallet_number');
+
+        log.success('✅ Triggers configurados com sucesso');
 
         // =========================================================================================
-        // ETAPA 5: SEEDING (DADOS INICIAIS CRÍTICOS)
+        // ETAPA 5: CONFIGURAÇÕES INICIAIS (APP_SETTINGS)
         // =========================================================================================
+        log.section('⚙️ APLICANDO CONFIGURAÇÕES INICIAIS');
 
-        logSystem('BOOTSTRAP', 'Aplicando Seed Data (Configurações)...');
-
-        // Configurações Padrão (Preços, Regras)
         const defaultSettings = [
             {
                 key: 'ride_prices',
@@ -511,16 +577,27 @@ async function bootstrapDatabase() {
                     delivery_base: 1000,
                     delivery_km_rate: 450
                 }),
-                desc: 'Tabela de preços base das corridas'
+                description: 'Tabela de preços base das corridas'
             },
             {
                 key: 'app_config',
                 value: JSON.stringify({
                     max_radius_km: 15,
                     driver_timeout_minutes: 30,
-                    ride_search_timeout: 600
+                    ride_search_timeout: 60,
+                    version: '11.2.0'
                 }),
-                desc: 'Configurações globais de comportamento do app'
+                description: 'Configurações globais do app'
+            },
+            {
+                key: 'wallet_config',
+                value: JSON.stringify({
+                    min_topup: 100,
+                    max_topup: 1000000,
+                    daily_limit: 500000,
+                    transfer_fee_percentage: 0
+                }),
+                description: 'Configurações da carteira digital'
             },
             {
                 key: 'commission_rates',
@@ -528,7 +605,7 @@ async function bootstrapDatabase() {
                     driver_commission: 0.8,
                     platform_commission: 0.2
                 }),
-                desc: 'Split de pagamento (Motorista/Plataforma)'
+                description: 'Split de pagamento (Motorista/Plataforma)'
             }
         ];
 
@@ -536,35 +613,165 @@ async function bootstrapDatabase() {
             await client.query(`
                 INSERT INTO app_settings (key, value, description)
                 VALUES ($1, $2, $3)
-                ON CONFLICT (key) DO NOTHING;
-            `, [setting.key, setting.value, setting.desc]);
+                ON CONFLICT (key) DO UPDATE SET
+                    value = EXCLUDED.value,
+                    description = EXCLUDED.description,
+                    updated_at = NOW()
+            `, [setting.key, setting.value, setting.description]);
+        }
+        log.success('✅ Configurações iniciais aplicadas');
+
+        // =========================================================================================
+        // ETAPA 6: POPULAR COM USUÁRIOS DE TESTE (SENHAS DESCRIPTOGRAFADAS)
+        // =========================================================================================
+        log.section('👤 CRIANDO USUÁRIOS DE TESTE');
+
+        // Senha padrão: 123456 (hash bcrypt gerado)
+        // Para 123456, o hash é: $2b$10$YourHashHere - mas vamos gerar programaticamente
+        const saltRounds = 10;
+        const testPassword = '123456';
+        const hashedPassword = await bcrypt.hash(testPassword, saltRounds);
+
+        log.info('Senha de teste: 123456 (hash gerado automaticamente)');
+
+        // Inserir usuários de teste
+        const testUsers = [
+            {
+                name: 'Motorista Ao',
+                email: 'driver@aotravel.com',
+                phone: '923456789',
+                password: hashedPassword,
+                role: 'driver',
+                rating: 4.9,
+                is_verified: true,
+                vehicle_details: JSON.stringify({
+                    model: 'Toyota Corolla',
+                    plate: 'LD-12-34-AB',
+                    color: 'Preto',
+                    type: 'car',
+                    year: 2024
+                })
+            },
+            {
+                name: 'moto',
+                email: 'moto@aotravel.com',
+                phone: '987654321',
+                password: hashedPassword,
+                role: 'driver',
+                rating: 4.8,
+                is_verified: true,
+                vehicle_details: JSON.stringify({
+                    model: 'Honda CG 160',
+                    plate: 'LD-56-78-CD',
+                    color: 'Vermelha',
+                    type: 'moto',
+                    year: 2024
+                })
+            },
+            {
+                name: 'Passageiro Teste',
+                email: 'passenger@aotravel.com',
+                phone: '912345678',
+                password: hashedPassword,
+                role: 'passenger',
+                rating: 4.7,
+                is_verified: true
+            }
+        ];
+
+        for (const user of testUsers) {
+            // Verificar se já existe
+            const existing = await client.query(
+                'SELECT id FROM users WHERE email = $1',
+                [user.email]
+            );
+
+            if (existing.rows.length === 0) {
+                // Inserir usuário
+                const insertResult = await client.query(`
+                    INSERT INTO users (
+                        name, email, phone, password, role, rating, is_verified, vehicle_details, is_online
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false)
+                    RETURNING id
+                `, [
+                    user.name,
+                    user.email,
+                    user.phone,
+                    user.password,
+                    user.role,
+                    user.rating,
+                    user.is_verified,
+                    user.vehicle_details || null
+                ]);
+
+                const userId = insertResult.rows[0].id;
+
+                // Se for motorista, criar entrada em driver_positions
+                if (user.role === 'driver') {
+                    await client.query(`
+                        INSERT INTO driver_positions (driver_id, lat, lng, status, last_update)
+                        VALUES ($1, -8.8399, 13.2894, 'offline', NOW())
+                        ON CONFLICT (driver_id) DO NOTHING
+                    `, [userId]);
+
+                    // Inserir detalhes do veículo
+                    if (user.vehicle_details) {
+                        const vd = JSON.parse(user.vehicle_details);
+                        await client.query(`
+                            INSERT INTO vehicle_details (driver_id, model, plate, color, type, year)
+                            VALUES ($1, $2, $3, $4, $5, $6)
+                            ON CONFLICT (driver_id) DO NOTHING
+                        `, [userId, vd.model, vd.plate, vd.color, vd.type, vd.year]);
+                    }
+                }
+
+                log.success(`✅ Usuário criado: ${user.name} (${user.email}) - Senha: 123456`);
+            } else {
+                log.info(`👤 Usuário já existe: ${user.name}`);
+            }
         }
 
-        // =========================================================================================
-        // ETAPA 6: CORREÇÃO DE DADOS LEGADOS (LEGACY FIX)
-        // Garante que usuários criados antes da Wallet tenham número de conta.
-        // =========================================================================================
-
+        // Atualizar números de conta da carteira para usuários existentes
         await client.query(`
-            UPDATE users
-            SET wallet_account_number = regexp_replace(phone, '\\D','','g') || 'AO'
-            WHERE wallet_account_number IS NULL AND phone IS NOT NULL;
+            UPDATE users 
+            SET wallet_account_number = 'AOT' || LPAD(id::TEXT, 8, '0')
+            WHERE wallet_account_number IS NULL
         `);
 
-        // Finaliza Transação
+        // =========================================================================================
+        // ETAPA 7: VERIFICAÇÃO FINAL
+        // =========================================================================================
         await client.query('COMMIT');
-        logSystem('BOOTSTRAP', '✅ Banco de Dados BLINDADO e Sincronizado com Sucesso (v2026.02).');
 
-    } catch (err) {
+        log.section('🎉 BANCO DE DADOS INICIALIZADO COM SUCESSO');
+        
+        // Estatísticas finais
+        const stats = await client.query(`
+            SELECT 
+                (SELECT COUNT(*) FROM users) as total_users,
+                (SELECT COUNT(*) FROM users WHERE role = 'driver') as total_drivers,
+                (SELECT COUNT(*) FROM users WHERE role = 'passenger') as total_passengers,
+                (SELECT COUNT(*) FROM rides) as total_rides,
+                (SELECT COUNT(*) FROM driver_positions) as total_positions
+        `);
+
+        log.info(`📊 Estatísticas:`);
+        log.info(`   - Usuários: ${stats.rows[0].total_users}`);
+        log.info(`   - Motoristas: ${stats.rows[0].total_drivers}`);
+        log.info(`   - Passageiros: ${stats.rows[0].total_passengers}`);
+        log.info(`   - Corridas: ${stats.rows[0].total_rides}`);
+        log.info(`   - Posições GPS: ${stats.rows[0].total_positions}`);
+
+        return true;
+
+    } catch (error) {
         await client.query('ROLLBACK');
-        logError('BOOTSTRAP_FATAL', err);
-        // Relança o erro para parar o servidor se o DB não subir.
-        // Em produção, isso impede que o app rode quebrado.
-        throw err;
+        log.error(`❌ ERRO FATAL NO BOOTSTRAP: ${error.message}`);
+        console.error(error);
+        throw error;
     } finally {
         client.release();
     }
 }
 
-// Exportação no padrão CommonJS exigido pelo server.js
 module.exports = { bootstrapDatabase };
