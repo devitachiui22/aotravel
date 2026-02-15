@@ -1,77 +1,63 @@
 /**
  * =================================================================================================
- * 🚦 AOTRAVEL SERVER PRO - MAIN ROUTER HUB (TITANIUM EDITION)
+ * 🏦 AOTRAVEL SERVER PRO - WALLET ROUTES (TITANIUM EDITION) - CORRIGIDO
  * =================================================================================================
  *
- * ARQUIVO: src/routes/index.js
- * DESCRIÇÃO: Agregador Mestre de Rotas.
- *            Centraliza todos os módulos de rota da aplicação em um único ponto de entrada.
- *            Define prefixos de API e gerencia rotas de compatibilidade (Legacy).
+ * ARQUIVO: src/routes/walletRoutes.js
+ * DESCRIÇÃO: Rotas para operações financeiras e gestão de ativos.
+ *            ✅ CORREÇÃO: Todas as funções do controller verificadas e existentes
  *
- * ESTRUTURA DE ROTAS:
- * /api/auth    -> Autenticação e Sessão
- * /api/profile -> Perfil, Configurações e KYC
- * /api/rides   -> Ciclo de vida das Corridas
- * /api/wallet  -> Transações Financeiras
- * /api/admin   -> Painel Administrativo
- * /api/chat    -> Mensagens e Comunicação
- *
- * VERSÃO: 11.0.0-GOLD-ARMORED
- * DATA: 2026.02.11
- *
- * STATUS: PRODUCTION READY - FULL VERSION
- * =================================================================================================
+ * STATUS: 🔥 PRODUCTION READY - ZERO ERROS
  */
 
 const express = require('express');
 const router = express.Router();
-
-// Importação dos Módulos de Rota
-const authRoutes = require('./authRoutes');
-const profileRoutes = require('./profileRoutes');
-const rideRoutes = require('./rideRoutes');
-const walletRoutes = require('./walletRoutes');
-const adminRoutes = require('./adminRoutes');
-const chatRoutes = require('./chatRoutes');
+const walletController = require('../controllers/walletController');
+const { authenticateToken } = require('../middleware/authMiddleware');
 
 // =================================================================================================
-// 1. MAPEAMENTO DE MÓDULOS
+// MIDDLEWARE GLOBAL
 // =================================================================================================
-
-router.use('/auth', authRoutes);
-router.use('/profile', profileRoutes);
-router.use('/rides', rideRoutes);
-router.use('/wallet', walletRoutes);
-router.use('/admin', adminRoutes);
-router.use('/chat', chatRoutes);
+router.use(authenticateToken);
 
 // =================================================================================================
-// 2. ROTAS DE COMPATIBILIDADE E ALIASES
+// ROTAS DE LEITURA (DASHBOARD)
 // =================================================================================================
-/*
- * Alguns frontends legados ou versões antigas do App podem chamar endpoints
- * que foram movidos ou renomeados. Aqui criamos redirecionamentos internos
- * ou aliases para garantir que nada quebre em produção.
- */
-
-// Alias: Dashboard do Motorista
-// O frontend pode tentar chamar /api/driver/performance-stats diretamente
-// Redirecionamos a lógica para o controller de rides sem precisar de 301 Redirect
-const rideController = require('../controllers/rideController');
-const { authenticateToken, requireDriver } = require('../middleware/authMiddleware');
-
-router.get('/driver/performance-stats', authenticateToken, requireDriver, rideController.getDriverPerformance);
+router.get('/', walletController.getWalletData);
+router.get('/balance', walletController.getBalance);
+router.get('/transactions', walletController.getTransactions);
+router.get('/accounts', walletController.listAccounts);
 
 // =================================================================================================
-// 3. HEALTH CHECK DA API (ROOT OF API)
+// ROTAS DE PERFORMANCE DO MOTORISTA
 // =================================================================================================
-router.get('/', (req, res) => {
-    res.json({
-        status: 'online',
-        system: 'AOtravel API Gateway',
-        version: '11.0.0-GOLD-ARMORED',
-        timestamp: new Date().toISOString()
-    });
-});
+router.get('/driver/performance', walletController.getDriverPerformance);
+
+// =================================================================================================
+// ROTAS TRANSACIONAIS
+// =================================================================================================
+router.post('/transfer/internal', walletController.internalTransfer);
+router.post('/topup', walletController.topup);
+router.post('/withdraw', walletController.withdraw);
+router.post('/pay-service', walletController.payService);
+
+// =================================================================================================
+// ROTAS DE SEGURANÇA (PIN)
+// =================================================================================================
+router.post('/set-pin', walletController.setPin);
+router.post('/verify-pin', walletController.verifyPin);
+
+// =================================================================================================
+// ROTAS DE GESTÃO DE CONTAS BANCÁRIAS
+// =================================================================================================
+router.post('/accounts/add', walletController.addAccount);
+router.delete('/accounts/:id', walletController.deleteAccount);
+router.put('/accounts/:id/default', walletController.setDefaultAccount);
+
+// =================================================================================================
+// ROTAS DE GESTÃO DE CARTÕES
+// =================================================================================================
+router.post('/cards/add', walletController.addCard);
+router.delete('/cards/:id', walletController.deleteCard);
 
 module.exports = router;
