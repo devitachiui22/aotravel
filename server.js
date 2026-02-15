@@ -106,6 +106,40 @@ const io = new Server(server, {
     transports: appConfig.SOCKET?.TRANSPORTS || ['websocket', 'polling']
 });
 
+// =================================================================================================
+// 🚨 ROTA DE CORREÇÃO DE EMERGÊNCIA
+// =================================================================================================
+app.get('/api/debug/fix-drivers', async (req, res) => {
+    try {
+        const pool = require('./src/config/db');
+
+        // CORREÇÃO RADICAL
+        await pool.query(`
+            BEGIN;
+
+            -- Resetar todas as posições
+            DELETE FROM driver_positions;
+
+            -- Recriar para todos os motoristas
+            INSERT INTO driver_positions (driver_id, lat, lng, status, last_update)
+            SELECT id, -8.8399, 13.2894, 'offline', NOW() - INTERVAL '1 hour'
+            FROM users WHERE role = 'driver';
+
+            -- Forçar todos offline
+            UPDATE users SET is_online = false WHERE role = 'driver';
+
+            COMMIT;
+        `);
+
+        res.json({
+            success: true,
+            message: 'Banco de dados corrigido! Peça aos motoristas para fazer login novamente.'
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // Injetar io nas requisições
 app.use((req, res, next) => {
     req.io = io;
