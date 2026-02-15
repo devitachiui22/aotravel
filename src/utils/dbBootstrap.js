@@ -114,6 +114,8 @@ async function bootstrapDatabase() {
                 account_tier VARCHAR(20) DEFAULT 'standard',
                 kyc_level INTEGER DEFAULT 1,
                 bonus_points INTEGER DEFAULT 0,
+                last_login TIMESTAMP,
+                last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
                 -- Detalhes Motorista
                 vehicle_details JSONB,
