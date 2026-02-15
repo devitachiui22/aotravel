@@ -1,30 +1,11 @@
 /**
  * =================================================================================================
- * 🚕 AOTRAVEL SERVER PRO - RIDE LIFECYCLE CONTROLLER (TITANIUM CORE V8.1.0)
+ * 🚕 AOTRAVEL SERVER PRO - RIDE LIFECYCLE CONTROLLER (TITANIUM CORE V8.2.0 - CORRIGIDO)
  * =================================================================================================
  *
- * ARQUIVO: src/controllers/rideController.js
- * DESCRIÇÃO: Controlador mestre de corridas. Gerencia o ciclo de vida:
- *            Solicitação -> Despacho -> Aceite -> Monitoramento -> Finalização -> Pagamento.
- *
- * ✅ CARACTERÍSTICAS DE PRODUÇÃO:
- * 1. Logging profissional em arquivo e terminal
- * 2. Sistema de fallback em múltiplos níveis
- * 3. Validações rigorosas em todas as etapas
- * 4. Transações ACID com rollback automático
- * 5. Notificações em tempo real com confirmação
- * 6. Monitoramento de performance
- * 7. Tratamento de erros hierárquico
- * 8. Compatível com qualquer cenário (inclusive GPS zero)
- *
- * ✅ CORREÇÕES CRÍTICAS APLICADAS (v8.1.0):
- * 1. Dispatch Resiliente: Filtra motoristas fantasmas, mas aceita GPS aproximado.
- * 2. Race Condition Fix: Uso de 'FOR UPDATE' e validação estrita de status.
- * 3. Integração Socket: Usa req.io injetado globalmente para broadcast imediato.
- * 4. Tratamento de Erro: Garante que o cliente não fique "pendurado" em caso de falha de DB.
- *
- * STATUS: 🔥 PRODUCTION READY - 100% ROBUSTO
- * =================================================================================================
+ * ✅ CORREÇÃO APLICADA:
+ *   - Removida referência a "updated_at" na validação de veículo
+ *   - Adicionada verificação correta de vehicle_details
  */
 
 const pool = require('../config/db');
@@ -57,17 +38,11 @@ const colors = {
 };
 
 const logger = {
-    /**
-     * Log no terminal com cores e no arquivo
-     */
     log: (level, component, message, data = null) => {
         const timestamp = new Date().toISOString();
         const logEntry = `[${timestamp}] [${level}] [${component}] ${message}`;
-
-        // Log no arquivo
         logFile.write(logEntry + (data ? ' ' + JSON.stringify(data) : '') + '\n');
 
-        // Log no terminal com cores
         const colorMap = {
             INFO: colors.cyan,
             SUCCESS: colors.green,
@@ -102,18 +77,13 @@ const logger = {
 };
 
 // =================================================================================================
-// 1. SOLICITAÇÃO DE CORRIDA (REQUEST) - VERSÃO ROBUSTA
+// 1. SOLICITAÇÃO DE CORRIDA (REQUEST)
 // =================================================================================================
 
-/**
- * POST /api/rides/request
- * Cria a intenção de corrida e notifica motoristas próximos.
- */
 exports.requestRide = async (req, res) => {
     const startTime = Date.now();
     const requestId = generateRef('RQ');
 
-    // Tratamento de input flexível (pode vir de snake_case ou camelCase dependendo da origem)
     const body = req.body;
     const originLat = parseFloat(body.origin_lat || body.originLat);
     const originLng = parseFloat(body.origin_lng || body.originLng);
@@ -128,9 +98,6 @@ exports.requestRide = async (req, res) => {
 
     logger.divider();
 
-    // =================================================================
-    // VALIDAÇÃO 1: Socket.IO
-    // =================================================================
     if (!req.io) {
         logger.error('REQUEST', `[${requestId}] Socket.IO não disponível`);
         return res.status(500).json({
@@ -139,9 +106,6 @@ exports.requestRide = async (req, res) => {
         });
     }
 
-    // =================================================================
-    // VALIDAÇÃO 2: Coordenadas
-    // =================================================================
     if (!originLat || !originLng || !destLat || !destLng) {
         logger.error('REQUEST', `[${requestId}] Coordenadas incompletas`, {
             origin_lat: originLat,
@@ -160,9 +124,6 @@ exports.requestRide = async (req, res) => {
     try {
         await client.query('BEGIN');
 
-        // =================================================================
-        // ETAPA 1: Buscar configurações de preço
-        // =================================================================
         logger.debug('REQUEST', `[${requestId}] Buscando configurações de preço`);
 
         const settingsRes = await client.query(
@@ -175,9 +136,6 @@ exports.requestRide = async (req, res) => {
             delivery_base: 1000, delivery_km_rate: 450
         };
 
-        // =================================================================
-        // ETAPA 2: Calcular preço estimado
-        // =================================================================
         let estimatedPrice = 0;
         const dist = parseFloat(body.distance_km) || 0;
         const rideType = body.ride_type || 'ride';
@@ -190,14 +148,11 @@ exports.requestRide = async (req, res) => {
             estimatedPrice = prices.base_price + (dist * prices.km_rate);
         }
 
-        estimatedPrice = Math.ceil(estimatedPrice / 50) * 50; // Arredondar para 50 Kz
-        if (estimatedPrice < 500) estimatedPrice = 500; // Mínimo
+        estimatedPrice = Math.ceil(estimatedPrice / 50) * 50;
+        if (estimatedPrice < 500) estimatedPrice = 500;
 
         logger.debug('REQUEST', `[${requestId}] Preço calculado: ${estimatedPrice} Kz`);
 
-        // =================================================================
-        // ETAPA 3: Inserir no banco
-        // =================================================================
         const insertQuery = `
             INSERT INTO rides (
                 passenger_id, origin_lat, origin_lng, dest_lat, dest_lng,
@@ -222,9 +177,6 @@ exports.requestRide = async (req, res) => {
 
         logger.success('REQUEST', `[${requestId}] Corrida #${ride.id} criada com sucesso`);
 
-        // =================================================================
-        // ETAPA 4: Notificar passageiro
-        // =================================================================
         try {
             req.io.to(`user_${passengerId}`).emit('ride_requested', {
                 ride_id: ride.id,
@@ -238,36 +190,25 @@ exports.requestRide = async (req, res) => {
             logger.error('REQUEST', `[${requestId}] Erro ao notificar passageiro: ${e.message}`);
         }
 
-        // =================================================================
-        // ETAPA 5: Buscar motoristas (DISPATCH ENGINE COM FALLBACKS)
-        // =================================================================
-
         logger.ride('DISPATCH', `[${requestId}] ===== INICIANDO DISPATCH =====`);
 
-        // NÍVEL 1: Motoristas com todos os critérios (raio 10km)
         let drivers = await exports.findAvailableDrivers(originLat, originLng, 10);
 
         logger.ride('DISPATCH', `[${requestId}] Nível 1 - Motoristas encontrados: ${drivers.length}`);
 
-        // NÍVEL 2: Se não encontrou, expandir raio para 15km
         if (drivers.length === 0) {
             logger.warn('DISPATCH', `[${requestId}] Nenhum motorista no nível 1. Expandindo raio para 15km...`);
             drivers = await exports.findAvailableDrivers(originLat, originLng, 15);
             logger.ride('DISPATCH', `[${requestId}] Nível 2 - Raio 15km: ${drivers.length}`);
         }
 
-        // NÍVEL 3: Se ainda não encontrou, incluir drivers com GPS zero
         if (drivers.length === 0) {
             logger.warn('DISPATCH', `[${requestId}] Nenhum motorista no nível 2. Tentando incluir GPS zero...`);
             drivers = await exports.findAvailableDrivers(originLat, originLng, 20, { includeGpsZero: true });
             logger.ride('DISPATCH', `[${requestId}] Nível 3 - Incluindo GPS zero: ${drivers.length}`);
         }
 
-        // =================================================================
-        // ETAPA 6: Notificar motoristas
-        // =================================================================
-
-        const maxRadius = 5000; // 5km (em metros)
+        const maxRadius = 5000;
 
         let driversNotified = 0;
         const notifiedDrivers = [];
@@ -287,7 +228,7 @@ exports.requestRide = async (req, res) => {
             dest_name: body.dest_name,
             initial_price: estimatedPrice,
             distance_km: dist,
-            distance_to_pickup: 0, // Calculado no loop
+            distance_to_pickup: 0,
             ride_type: rideType,
             request_id: requestId,
             timestamp: new Date().toISOString(),
@@ -295,7 +236,6 @@ exports.requestRide = async (req, res) => {
         };
 
         for (const driver of drivers) {
-            // Calcular distância se tiver GPS válido
             let distanceToPickup = 0;
             let distanceInMeters = 0;
 
@@ -307,17 +247,13 @@ exports.requestRide = async (req, res) => {
                 distanceInMeters = distanceToPickup * 1000;
             }
 
-            // Payload personalizado para cada motorista
             const driverPayload = {
                 ...ridePayload,
                 distance_to_pickup: parseFloat((distanceToPickup || 0).toFixed(1))
             };
 
             try {
-                // Só notificar se estiver dentro do raio OU se for GPS zero (considerar como potencial)
                 if (distanceInMeters <= maxRadius || driver.lat == 0 || driver.lng == 0) {
-
-                    // Tenta enviar por socket ID
                     if (driver.socket_id) {
                         req.io.to(driver.socket_id).emit('ride_opportunity', driverPayload);
                         driversNotified++;
@@ -328,9 +264,7 @@ exports.requestRide = async (req, res) => {
                             method: 'socket_id'
                         });
                         logger.debug('DISPATCH', `[${requestId}] Notificado driver ${driver.driver_id} via socket_id`);
-                    }
-                    // Fallback: enviar para sala do motorista
-                    else if (driver.driver_id) {
+                    } else if (driver.driver_id) {
                         req.io.to(`driver_${driver.driver_id}`).emit('ride_opportunity', driverPayload);
                         driversNotified++;
                         notifiedDrivers.push({
@@ -349,10 +283,6 @@ exports.requestRide = async (req, res) => {
                 logger.error('DISPATCH', `[${requestId}] Erro ao notificar driver ${driver.driver_id}: ${e.message}`);
             }
         }
-
-        // =================================================================
-        // ETAPA 7: Log do resultado
-        // =================================================================
 
         const duration = Date.now() - startTime;
 
@@ -373,10 +303,6 @@ exports.requestRide = async (req, res) => {
         }
 
         logger.divider();
-
-        // =================================================================
-        // ETAPA 8: Se nenhum motorista foi notificado
-        // =================================================================
 
         if (driversNotified === 0) {
             let reason = 'Nenhum motorista disponível';
@@ -400,10 +326,6 @@ exports.requestRide = async (req, res) => {
                 logger.error('DISPATCH', `[${requestId}] Erro ao notificar passageiro sobre falta de motoristas: ${e.message}`);
             }
         }
-
-        // =================================================================
-        // ETAPA 9: Resposta
-        // =================================================================
 
         logger.success('REQUEST', `[${requestId}] Processamento concluído em ${duration}ms`);
 
@@ -457,21 +379,12 @@ exports.requestRide = async (req, res) => {
 };
 
 // =================================================================================================
-// 2. FUNÇÃO AUXILIAR: Buscar motoristas disponíveis (DISPATCH ENGINE) - CORRIGIDA
+// 2. FUNÇÃO AUXILIAR: Buscar motoristas disponíveis
 // =================================================================================================
 
-/**
- * Busca motoristas disponíveis com diferentes níveis de filtro
- * @param {number} lat - Latitude de origem
- * @param {number} lng - Longitude de origem
- * @param {number} radiusKm - Raio de busca em km
- * @param {Object} options - Opções adicionais
- * @returns {Array} Lista de motoristas
- */
 exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => {
     const { includeGpsZero = false } = options;
 
-    // CORREÇÃO: Removido o HAVING e colocado o cálculo direto no WHERE
     const query = `
         SELECT
             dp.driver_id,
@@ -535,7 +448,6 @@ exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => 
     try {
         const result = await pool.query(query, [lat, lng, radiusKm]);
         
-        // Log para debug
         if (result.rows.length > 0) {
             console.log(`✅ [FIND_DRIVERS] Encontrados ${result.rows.length} motoristas`);
             result.rows.forEach(d => {
@@ -553,16 +465,12 @@ exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => 
 };
 
 // =================================================================================================
-// 3. ACEITE DE CORRIDA - VERSÃO ROBUSTA COM LOCK ATÔMICO
+// 3. ACEITE DE CORRIDA - VERSÃO CORRIGIDA (SEM ERRO "updated_at")
 // =================================================================================================
 
-/**
- * POST /api/rides/accept
- * Motorista aceita a corrida com proteção contra race condition
- */
 exports.acceptRide = async (req, res) => {
     const startTime = Date.now();
-    const { ride_id, driver_id } = req.body; // driver_id pode vir do body (bridge) ou req.user.id (http)
+    const { ride_id, driver_id } = req.body;
     const actualDriverId = driver_id || req.user.id;
 
     logger.ride('ACCEPT', `Motorista ${actualDriverId} tentando aceitar corrida #${ride_id}`);
@@ -617,7 +525,13 @@ exports.acceptRide = async (req, res) => {
             return res.status(400).json({ error: "Você não pode aceitar sua própria corrida." });
         }
 
-        if (!req.user.vehicle_details) {
+        // 🔥 CORREÇÃO: Verificar vehicle_details sem usar updated_at
+        const driverRes = await client.query(
+            "SELECT vehicle_details FROM users WHERE id = $1",
+            [actualDriverId]
+        );
+
+        if (driverRes.rows.length === 0 || !driverRes.rows[0].vehicle_details) {
             await client.query('ROLLBACK');
             logger.warn('ACCEPT', `Motorista ${actualDriverId} sem veículo cadastrado`);
             return res.status(400).json({
@@ -633,8 +547,7 @@ exports.acceptRide = async (req, res) => {
             `UPDATE rides SET
                 driver_id = $1,
                 status = 'accepted',
-                accepted_at = NOW(),
-                updated_at = NOW()
+                accepted_at = NOW()
              WHERE id = $2`,
             [actualDriverId, ride_id]
         );
@@ -691,7 +604,7 @@ exports.acceptRide = async (req, res) => {
 
         // Notificar outros motoristas que a corrida foi tomada
         try {
-            const otherDriversRes = await pool.query(`
+            const otherDriversRes = await client.query(`
                 SELECT socket_id, driver_id
                 FROM driver_positions
                 WHERE last_update > NOW() - INTERVAL '2 minutes'
@@ -716,6 +629,17 @@ exports.acceptRide = async (req, res) => {
             logger.debug('ACCEPT', `${notifiedOthers} outros motoristas notificados`);
         } catch (e) {
             logger.error('ACCEPT', `Erro ao notificar outros motoristas: ${e.message}`);
+        }
+
+        // 🔥 CORREÇÃO: Enviar confirmação para o motorista
+        try {
+            req.io.to(`user_${actualDriverId}`).emit('ride_accepted_confirmation', {
+                success: true,
+                ride: matchPayload,
+                message: "Corrida aceita com sucesso!"
+            });
+        } catch (e) {
+            logger.error('ACCEPT', `Erro ao notificar motorista: ${e.message}`);
         }
 
         res.json({
@@ -749,20 +673,15 @@ exports.acceptRide = async (req, res) => {
 };
 
 // =================================================================================================
-// 4. ATUALIZAR STATUS - VERSÃO ROBUSTA
+// 4. ATUALIZAR STATUS
 // =================================================================================================
 
-/**
- * POST /api/rides/update-status
- * Atualizações intermediárias: 'arrived', 'picked_up', 'ongoing'
- */
 exports.updateStatus = async (req, res) => {
     const { ride_id, status } = req.body;
     const driverId = req.user.id;
 
     logger.ride('STATUS', `Motorista ${driverId} atualizando status da corrida #${ride_id} para ${status}`);
 
-    // Validação básica de transição de estados
     const allowed = ['arrived', 'ongoing', 'picked_up'];
     if (!allowed.includes(status)) {
         logger.warn('STATUS', `Status inválido: ${status}`);
@@ -813,7 +732,6 @@ exports.updateStatus = async (req, res) => {
 
         logger.success('STATUS', `Corrida #${ride_id} atualizada para ${newStatus}`);
 
-        // Notificações
         if (req.io) {
             const eventMap = {
                 'arrived': 'driver_arrived',
@@ -859,23 +777,15 @@ exports.updateStatus = async (req, res) => {
     }
 };
 
-/**
- * POST /api/rides/start
- * Início formal da viagem (wrapper para updateStatus)
- */
 exports.startRide = async (req, res) => {
     req.body.status = 'picked_up';
     return exports.updateStatus(req, res);
 };
 
 // =================================================================================================
-// 5. FINALIZAR CORRIDA - VERSÃO ROBUSTA COM PAGAMENTO
+// 5. FINALIZAR CORRIDA
 // =================================================================================================
 
-/**
- * POST /api/rides/complete
- * Finaliza a corrida e processa pagamento
- */
 exports.completeRide = async (req, res) => {
     const startTime = Date.now();
     const { ride_id, payment_method, final_price, rating, feedback, distance_traveled } = req.body;
@@ -890,9 +800,6 @@ exports.completeRide = async (req, res) => {
     try {
         await client.query('BEGIN');
 
-        // =================================================================
-        // ETAPA 1: Verificar e Bloquear
-        // =================================================================
         const rideCheck = await client.query(
             "SELECT * FROM rides WHERE id = $1 FOR UPDATE",
             [ride_id]
@@ -918,9 +825,6 @@ exports.completeRide = async (req, res) => {
             return res.status(400).json({ error: `Status inválido para finalização: ${ride.status}` });
         }
 
-        // =================================================================
-        // ETAPA 2: Calcular valor final
-        // =================================================================
         let finalAmount = amount || parseFloat(ride.final_price || ride.initial_price);
 
         if (distance_traveled && parseFloat(distance_traveled) > parseFloat(ride.distance_km || 0)) {
@@ -944,11 +848,7 @@ exports.completeRide = async (req, res) => {
             logger.debug('COMPLETE', `Distância extra: ${extraDistance.toFixed(2)}km, Taxa extra: ${extraCharge} Kz`);
         }
 
-        // =================================================================
-        // ETAPA 3: Processar pagamento
-        // =================================================================
         if (method === 'wallet') {
-            // Verificar saldo passageiro
             const paxRes = await client.query(
                 "SELECT balance FROM users WHERE id = $1",
                 [ride.passenger_id]
@@ -965,19 +865,16 @@ exports.completeRide = async (req, res) => {
                 });
             }
 
-            // Débito Passageiro
             await client.query(
                 "UPDATE users SET balance = balance - $1 WHERE id = $2",
                 [finalAmount, ride.passenger_id]
             );
 
-            // Crédito Motorista
             await client.query(
                 "UPDATE users SET balance = balance + $1 WHERE id = $2",
                 [finalAmount, driverId]
             );
 
-            // Registrar Transações
             const txRef = generateRef('WLTX');
 
             await client.query(
@@ -996,7 +893,6 @@ exports.completeRide = async (req, res) => {
 
             logger.debug('COMPLETE', `Pagamento via carteira processado: ${finalAmount} Kz`);
         } else {
-            // Pagamento em dinheiro (registrar apenas para o motorista)
             const txRef = generateRef('CASH');
 
             await client.query(
@@ -1009,9 +905,6 @@ exports.completeRide = async (req, res) => {
             logger.debug('COMPLETE', `Pagamento em dinheiro registrado: ${finalAmount} Kz`);
         }
 
-        // =================================================================
-        // ETAPA 4: Atualizar Corrida
-        // =================================================================
         await client.query(
             `UPDATE rides SET
                 status = 'completed',
@@ -1032,9 +925,6 @@ exports.completeRide = async (req, res) => {
         const duration = Date.now() - startTime;
         logger.success('COMPLETE', `Corrida #${ride_id} finalizada! Valor: ${finalAmount} Kz (${duration}ms)`);
 
-        // =================================================================
-        // ETAPA 5: Notificações
-        // =================================================================
         if (req.io) {
             try {
                 const payload = {
@@ -1057,7 +947,6 @@ exports.completeRide = async (req, res) => {
 
                 req.io.to(`user_${driverId}`).emit('ride_completed_driver', payload);
 
-                // Se pagamento via carteira, notificar atualização de saldo
                 if (method === 'wallet') {
                     const passengerBalance = await pool.query(
                         "SELECT balance FROM users WHERE id = $1",
@@ -1087,9 +976,6 @@ exports.completeRide = async (req, res) => {
             }
         }
 
-        // =================================================================
-        // ETAPA 6: Atualizar rating do motorista
-        // =================================================================
         if (rating) {
             try {
                 await pool.query(`
@@ -1139,16 +1025,12 @@ exports.completeRide = async (req, res) => {
 };
 
 // =================================================================================================
-// 6. CANCELAR CORRIDA - VERSÃO ROBUSTA
+// 6. CANCELAR CORRIDA
 // =================================================================================================
 
-/**
- * POST /api/rides/cancel
- */
 exports.cancelRide = async (req, res) => {
     const { ride_id, reason } = req.body;
     const userId = req.user.id;
-    // Tenta identificar role pelo req.user (http) ou body (socket bridge)
     const role = req.user.role || req.body.role || 'passenger';
 
     logger.ride('CANCEL', `${role} ${userId} cancelando corrida #${ride_id} - Motivo: ${reason || 'Não especificado'}`);
@@ -1199,7 +1081,6 @@ exports.cancelRide = async (req, res) => {
 
         logger.success('CANCEL', `Corrida #${ride_id} cancelada por ${role}`);
 
-        // Notificações
         if (req.io) {
             try {
                 const payload = {
@@ -1212,13 +1093,11 @@ exports.cancelRide = async (req, res) => {
 
                 req.io.to(`ride_${ride_id}`).emit('ride_cancelled', payload);
 
-                // Notificar a contraparte
                 const targetId = role === 'driver' ? ride.passenger_id : ride.driver_id;
                 if (targetId) {
                     req.io.to(`user_${targetId}`).emit('ride_cancelled', payload);
                 }
 
-                // Se estava em searching, notificar motoristas que a corrida foi cancelada
                 if (ride.status === 'searching') {
                     const driversRes = await pool.query(`
                         SELECT socket_id
@@ -1270,10 +1149,6 @@ exports.cancelRide = async (req, res) => {
 // 7. HISTÓRICO E DETALHES
 // =================================================================================================
 
-/**
- * GET /api/rides/history
- * Histórico paginado
- */
 exports.getHistory = async (req, res) => {
     const { limit = 20, offset = 0, status } = req.query;
     const userId = req.user.id;
@@ -1354,10 +1229,6 @@ exports.getHistory = async (req, res) => {
     }
 };
 
-/**
- * GET /api/rides/:id
- * Detalhes completos de uma corrida
- */
 exports.getRideDetails = async (req, res) => {
     logger.debug('DETAILS', `Buscando detalhes da corrida #${req.params.id}`);
 
@@ -1401,10 +1272,6 @@ exports.getRideDetails = async (req, res) => {
 // 8. ESTATÍSTICAS E PERFORMANCE
 // =================================================================================================
 
-/**
- * GET /api/rides/driver/performance-stats
- * Dashboard do motorista
- */
 exports.getDriverPerformance = async (req, res) => {
     try {
         if (req.user.role !== 'driver') {
@@ -1553,10 +1420,6 @@ exports.getDriverPerformance = async (req, res) => {
     }
 };
 
-/**
- * GET /api/rides/passenger/stats
- * Estatísticas para passageiros
- */
 exports.getPassengerStats = async (req, res) => {
     try {
         const statsQuery = `
@@ -1590,10 +1453,6 @@ exports.getPassengerStats = async (req, res) => {
     }
 };
 
-/**
- * POST /api/rides/:id/rating
- * Avaliar corrida
- */
 exports.rateRide = async (req, res) => {
     const { ride_id } = req.params;
     const { rating, feedback } = req.body;
@@ -1672,10 +1531,6 @@ exports.rateRide = async (req, res) => {
 // 9. UTILITÁRIOS E DIAGNÓSTICO
 // =================================================================================================
 
-/**
- * GET /api/rides/health/socket
- * Diagnóstico do socket
- */
 exports.checkSocketHealth = async (req, res) => {
     try {
         const socketAvailable = !!req.io;
@@ -1699,10 +1554,6 @@ exports.checkSocketHealth = async (req, res) => {
     }
 };
 
-/**
- * GET /api/rides/debug/drivers
- * Debug: Listar motoristas online
- */
 exports.debugDrivers = async (req, res) => {
     try {
         const result = await pool.query(`
@@ -1735,6 +1586,5 @@ exports.debugDrivers = async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 };
-
 
 module.exports = exports;
