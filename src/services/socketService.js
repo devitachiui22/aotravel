@@ -1,20 +1,17 @@
 /**
  * =================================================================================================
- * ⚡ AOTRAVEL SERVER PRO - SOCKET SERVICE (CORREÇÃO DE REGISTRO IMEDIATO) - COMPLETO
+ * ⚡ AOTRAVEL SERVER PRO - SOCKET SERVICE (CORREÇÃO DO FLUXO DE CORRIDAS)
  * =================================================================================================
  *
  * ARQUIVO: src/services/socketService.js
- * DESCRIÇÃO: Motor de comunicação bidirecional em tempo real com registro imediato no banco.
+ * DESCRIÇÃO: Motor de comunicação bidirecional em tempo real - AGORA COM INTEGRAÇÃO COMPLETA
  *
- * ✅ CORREÇÕES APLICADAS (v7.0.0):
- * 1. ✅ Registro imediato no banco ao entrar na sala de motoristas
- * 2. ✅ Normalização robusta de ID (driver_id, user_id, id)
- * 3. ✅ Salva posição mesmo sem GPS (lat/lng = 0) para garantir presença
- * 4. ✅ Logs detalhados para debug
- * 5. ✅ Compatível com a estrutura da tabela driver_positions
- * 6. ✅ ❌ ROTA DE DEBUG REMOVIDA (deve ficar no server.js)
+ * ✅ CORREÇÕES APLICADAS (v7.1.0):
+ * 1. ✅ Handler de request_ride agora chama o rideController
+ * 2. ✅ Integração completa entre socket e controllers HTTP
+ * 3. ✅ Logs detalhados para debug
  *
- * STATUS: 🔥 PRODUCTION READY - CORRIGIDO
+ * STATUS: 🔥 PRODUCTION READY
  * =================================================================================================
  */
 
@@ -24,6 +21,7 @@ const { logSystem, logError, getDistance, getFullRideDetails } = require('../uti
 const SYSTEM_CONFIG = require('../config/appConfig');
 
 const socketController = require('../controllers/socketController');
+const rideController = require('../controllers/rideController'); // ✅ ADICIONADO
 
 let io;
 
@@ -308,9 +306,9 @@ function handleConnection(socket) {
     // =====================================================================
     socket.on('heartbeat', async (data) => {
         const driverId = data.driver_id || data.user_id;
-        
+
         if (!driverId) return;
-        
+
         // Apenas atualizar timestamp (sem alterar posição)
         await socketController.updateDriverActivity(driverId);
     });
@@ -338,14 +336,56 @@ function handleConnection(socket) {
     });
 
     // =====================================================================
-    // 9. REQUEST RIDE (fallback)
+    // 9. REQUEST RIDE (CORRIGIDO - AGORA CHAMA O CONTROLLER)
     // =====================================================================
-    socket.on('request_ride', (data) => {
-        console.log('🚕 [SOCKET] Request ride (via socket)');
-        socket.emit('ride_request_received', {
-            message: 'Solicitação recebida, processando...',
-            timestamp: new Date().toISOString()
-        });
+    socket.on('request_ride', async (data) => {
+        console.log('🚕 [SOCKET] ========================================');
+        console.log('🚕 [SOCKET] SOLICITAÇÃO DE CORRIDA VIA SOCKET');
+        console.log('🚕 [SOCKET] Dados recebidos:', JSON.stringify(data, null, 2));
+        console.log('🚕 [SOCKET] ========================================');
+
+        try {
+            // Criar um objeto req simulado para o controller
+            const mockReq = {
+                body: data,
+                user: { id: data.passenger_id },
+                io: io
+            };
+
+            const mockRes = {
+                status: (code) => ({
+                    json: (response) => {
+                        console.log(`📦 [SOCKET] Resposta do controller (${code}):`, response);
+                        
+                        // Emitir para o passageiro
+                        io.to(`user_${data.passenger_id}`).emit('ride_request_response', {
+                            success: code === 201,
+                            message: response.message,
+                            ride: response.ride,
+                            dispatch_stats: response.dispatch_stats
+                        });
+
+                        // Se houver motoristas notificados, eles já receberam via ride_opportunity
+                        if (response.dispatch_stats?.drivers_notified > 0) {
+                            console.log(`✅ [SOCKET] ${response.dispatch_stats.drivers_notified} motoristas notificados`);
+                        } else {
+                            console.log('⚠️ [SOCKET] Nenhum motorista disponível no momento');
+                        }
+                    }
+                })
+            };
+
+            // Chamar o controller
+            await rideController.requestRide(mockReq, mockRes);
+
+        } catch (error) {
+            console.error('❌ [SOCKET] Erro ao processar request_ride:', error);
+            
+            io.to(`user_${data.passenger_id}`).emit('ride_request_error', {
+                message: 'Erro ao processar solicitação',
+                error: error.message
+            });
+        }
     });
 
     // =====================================================================
