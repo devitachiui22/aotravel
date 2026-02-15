@@ -408,4 +408,5 @@ process.on('uncaughtException', (err) => {
     console.error(err);
 });
 
+setupSocketIO(server);
 module.exports = { app, server, io };
