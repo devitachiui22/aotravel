@@ -457,7 +457,7 @@ exports.requestRide = async (req, res) => {
 };
 
 // =================================================================================================
-// 2. FUNÇÃO AUXILIAR: Buscar motoristas disponíveis (DISPATCH ENGINE)
+// 2. FUNÇÃO AUXILIAR: Buscar motoristas disponíveis (DISPATCH ENGINE) - CORRIGIDA
 // =================================================================================================
 
 /**
@@ -471,20 +471,7 @@ exports.requestRide = async (req, res) => {
 exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => {
     const { includeGpsZero = false } = options;
 
-    // A consulta busca na tabela `driver_positions` (hot data) e cruza com `users`
-    // Filtros:
-    // 1. Status 'online'
-    // 2. Atualização recente (< 15 min para ser tolerante)
-    // 3. Tem socket_id (está conectado)
-    // 4. Raio de distância (Haversine formula)
-
-    // Fallback: Se lat/lng do motorista for 0 (erro de GPS), mas ele estiver online e atualizado recentemente,
-    // incluímos ele também se includeGpsZero = true para não perder motoristas em áreas de sombra de GPS.
-
-    const gpsCondition = includeGpsZero
-        ? `AND ((dp.lat != 0 AND dp.lng != 0 AND (6371 * acos(cos(radians($1)) * cos(radians(dp.lat)) * cos(radians(dp.lng) - radians($2)) + sin(radians($1)) * sin(radians(dp.lat)))) <= $3) OR (dp.lat = 0 AND dp.lng = 0))`
-        : `AND (dp.lat != 0 AND dp.lng != 0) AND (6371 * acos(cos(radians($1)) * cos(radians(dp.lat)) * cos(radians(dp.lng) - radians($2)) + sin(radians($1)) * sin(radians(dp.lat)))) <= $3`;
-
+    // CORREÇÃO: Removido o HAVING e colocado o cálculo direto no WHERE
     const query = `
         SELECT
             dp.driver_id,
@@ -499,32 +486,68 @@ exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => 
             u.rating,
             u.photo,
             u.is_blocked,
-            (
-                6371 * acos(
-                    cos(radians($1)) * cos(radians(dp.lat)) * cos(radians(dp.lng) - radians($2)) +
-                    sin(radians($1)) * sin(radians(dp.lat))
-                )
-            ) AS distance
+            CASE 
+                WHEN dp.lat != 0 AND dp.lng != 0 THEN
+                    (6371 * acos(
+                        cos(radians($1)) * 
+                        cos(radians(dp.lat)) * 
+                        cos(radians(dp.lng) - radians($2)) + 
+                        sin(radians($1)) * 
+                        sin(radians(dp.lat))
+                    ))
+                ELSE 999999 
+            END as distance
         FROM driver_positions dp
         JOIN users u ON dp.driver_id = u.id
         WHERE
             dp.status = 'online'
-            AND dp.last_update > NOW() - INTERVAL '15 minutes'
+            AND dp.last_update > NOW() - INTERVAL '2 minutes'
             AND dp.socket_id IS NOT NULL
             AND u.is_blocked = false
-            AND u.is_online = true
-            ${gpsCondition}
-        ORDER BY
-            CASE WHEN dp.lat = 0 OR dp.lng = 0 THEN 999999 ELSE distance END ASC NULLS LAST,
+            AND u.role = 'driver'
+            AND (
+                (dp.lat != 0 AND dp.lng != 0 AND 
+                    (6371 * acos(
+                        cos(radians($1)) * 
+                        cos(radians(dp.lat)) * 
+                        cos(radians(dp.lng) - radians($2)) + 
+                        sin(radians($1)) * 
+                        sin(radians(dp.lat))
+                    )) <= $3
+                )
+                ${includeGpsZero ? "OR (dp.lat = 0 AND dp.lng = 0)" : ""}
+            )
+        ORDER BY 
+            CASE 
+                WHEN dp.lat = 0 OR dp.lng = 0 THEN 999999 
+                ELSE (6371 * acos(
+                    cos(radians($1)) * 
+                    cos(radians(dp.lat)) * 
+                    cos(radians(dp.lng) - radians($2)) + 
+                    sin(radians($1)) * 
+                    sin(radians(dp.lat))
+                ))
+            END ASC NULLS LAST,
             u.rating DESC NULLS LAST
         LIMIT 20
     `;
 
     try {
         const result = await pool.query(query, [lat, lng, radiusKm]);
+        
+        // Log para debug
+        if (result.rows.length > 0) {
+            console.log(`✅ [FIND_DRIVERS] Encontrados ${result.rows.length} motoristas`);
+            result.rows.forEach(d => {
+                console.log(`   → ${d.name} (ID: ${d.driver_id}) - Distância: ${d.distance?.toFixed(2) || '?'}km`);
+            });
+        } else {
+            console.log(`⚠️ [FIND_DRIVERS] Nenhum motorista encontrado para (${lat}, ${lng}) raio ${radiusKm}km`);
+        }
+        
         return result.rows;
     } catch (e) {
-        logger.error('FIND_DRIVERS', `Erro na query espacial: ${e.message}`);
+        console.error(`❌ [FIND_DRIVERS] Erro na query:`, e.message);
         return [];
     }
 };
@@ -1712,5 +1735,6 @@ exports.debugDrivers = async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 };
+
 
 module.exports = exports;
