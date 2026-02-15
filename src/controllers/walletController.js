@@ -28,7 +28,7 @@ function log(level, msg, data = null) {
     if (level === 'ERROR') color = colors.red;
     if (level === 'SUCCESS') color = colors.green;
     if (level === 'WARN') color = colors.yellow;
-    
+
     console.log(`\x1b[${color}[${timestamp}] [${level}] [WALLET]\x1b[0m ${msg}`);
     if (data) console.log('   📦', JSON.stringify(data, null, 2).substring(0, 200));
 }
@@ -83,7 +83,7 @@ exports.getWalletData = async (req, res) => {
 
         // Buscar transações recentes
         const txRes = await pool.query(
-            `SELECT 
+            `SELECT
                 t.*,
                 s.name as sender_name,
                 r.name as receiver_name
@@ -98,7 +98,7 @@ exports.getWalletData = async (req, res) => {
 
         // Buscar contas bancárias
         const accountsRes = await pool.query(
-            `SELECT 
+            `SELECT
                 id, bank_name, iban, holder_name, is_default,
                 CASE
                     WHEN LENGTH(iban) > 8
@@ -141,16 +141,16 @@ exports.getBalance = async (req, res) => {
             'SELECT balance, wallet_account_number FROM users WHERE id = $1',
             [req.user.id]
         );
-        
+
         if (result.rows.length === 0) {
             return res.status(404).json({ error: 'Usuário não encontrado' });
         }
-        
+
         res.json({
             balance: parseFloat(result.rows[0].balance) || 0,
             accountNumber: result.rows[0].wallet_account_number || 'AOT' + req.user.id.toString().padStart(8, '0')
         });
-        
+
     } catch (error) {
         log('ERROR', 'Erro ao buscar saldo', error.message);
         res.status(500).json({ error: 'Erro interno' });
@@ -162,21 +162,21 @@ exports.getBalance = async (req, res) => {
 // =================================================================================================
 exports.getTransactions = async (req, res) => {
     const { limit = 20, offset = 0 } = req.query;
-    
+
     try {
         const result = await pool.query(
-            `SELECT * FROM wallet_transactions 
+            `SELECT * FROM wallet_transactions
              WHERE user_id = $1 OR sender_id = $1 OR receiver_id = $1
-             ORDER BY created_at DESC 
+             ORDER BY created_at DESC
              LIMIT $2 OFFSET $3`,
             [req.user.id, limit, offset]
         );
-        
+
         res.json({
             transactions: result.rows,
             total: result.rows.length
         });
-        
+
     } catch (error) {
         log('ERROR', 'Erro ao buscar transações', error.message);
         res.status(500).json({ error: 'Erro interno' });
@@ -266,7 +266,7 @@ exports.internalTransfer = async (req, res) => {
         // Registrar transação para o remetente
         const refSender = 'TRF' + Date.now() + 'S' + senderId;
         await client.query(
-            `INSERT INTO wallet_transactions 
+            `INSERT INTO wallet_transactions
              (reference_id, user_id, sender_id, receiver_id, amount, type, method, status, description, created_at)
              VALUES ($1, $2, $3, $4, $5, 'transfer', 'internal', 'completed', $6, NOW())`,
             [refSender, senderId, senderId, receiver.id, -val, description || `Transferência para ${receiver.name}`]
@@ -275,7 +275,7 @@ exports.internalTransfer = async (req, res) => {
         // Registrar transação para o destinatário
         const refReceiver = 'TRF' + Date.now() + 'R' + receiver.id;
         await client.query(
-            `INSERT INTO wallet_transactions 
+            `INSERT INTO wallet_transactions
              (reference_id, user_id, sender_id, receiver_id, amount, type, method, status, description, created_at)
              VALUES ($1, $2, $3, $4, $5, 'transfer', 'internal', 'completed', $6, NOW())`,
             [refReceiver, receiver.id, senderId, receiver.id, val, 'transfer', 'internal', 'completed', `Transferência de ${req.user.name}`]
@@ -355,7 +355,7 @@ exports.topup = async (req, res) => {
         // Registrar transação
         const ref = reference || 'TOP' + Date.now() + userId;
         await client.query(
-            `INSERT INTO wallet_transactions 
+            `INSERT INTO wallet_transactions
              (reference_id, user_id, amount, type, method, status, description, created_at)
              VALUES ($1, $2, $3, 'topup', $4, 'completed', 'Adição de fundos', NOW())`,
             [ref, userId, val, method || 'card']
@@ -438,7 +438,7 @@ exports.withdraw = async (req, res) => {
         // Registrar transação
         const ref = 'SAQ' + Date.now() + userId;
         await client.query(
-            `INSERT INTO wallet_transactions 
+            `INSERT INTO wallet_transactions
              (reference_id, user_id, amount, type, method, status, description, created_at)
              VALUES ($1, $2, $3, 'withdraw', 'bank', 'completed', 'Saque para conta bancária', NOW())`,
             [ref, userId, -val]
@@ -521,7 +521,7 @@ exports.payService = async (req, res) => {
         // Registrar transação
         const ref = 'SVC' + Date.now() + userId;
         await client.query(
-            `INSERT INTO wallet_transactions 
+            `INSERT INTO wallet_transactions
              (reference_id, user_id, amount, type, method, status, description, metadata, created_at)
              VALUES ($1, $2, $3, 'payment', 'wallet', 'completed', $4, $5, NOW())`,
             [ref, userId, -val, `Pagamento de serviço: ${service_id}`, JSON.stringify({ service_id, reference })]
@@ -593,9 +593,9 @@ exports.setPin = async (req, res) => {
 
         log('SUCCESS', `PIN configurado para usuário ${userId}`);
 
-        res.json({ 
-            success: true, 
-            message: "PIN de segurança definido com sucesso." 
+        res.json({
+            success: true,
+            message: "PIN de segurança definido com sucesso."
         });
 
     } catch (error) {
@@ -673,7 +673,7 @@ exports.addAccount = async (req, res) => {
         const novaConta = insertRes.rows[0];
 
         // Gerar máscara
-        const maskedIban = accountNumber.length > 8 
+        const maskedIban = accountNumber.length > 8
             ? `${accountNumber.substring(0, 4)}...${accountNumber.substring(accountNumber.length - 4)}`
             : `...${accountNumber.substring(accountNumber.length - 4)}`;
 
@@ -907,29 +907,29 @@ exports.getDriverPerformance = async (req, res) => {
     try {
         // Buscar corridas do motorista
         const ridesResult = await pool.query(
-            `SELECT 
+            `SELECT
                 COUNT(*) as total,
                 COALESCE(SUM(final_price), 0) as total_earnings,
                 COALESCE(AVG(rating), 0) as avg_rating
-             FROM rides 
+             FROM rides
              WHERE driver_id = $1 AND status = 'completed'`,
             [req.user.id]
         );
 
         // Buscar corridas de hoje
         const todayResult = await pool.query(
-            `SELECT 
+            `SELECT
                 COUNT(*) as today_count,
                 COALESCE(SUM(final_price), 0) as today_earnings
-             FROM rides 
-             WHERE driver_id = $1 AND status = 'completed' 
+             FROM rides
+             WHERE driver_id = $1 AND status = 'completed'
                AND created_at::date = CURRENT_DATE`,
             [req.user.id]
         );
 
         // Buscar corridas recentes
         const recentResult = await pool.query(
-            `SELECT 
+            `SELECT
                 r.*,
                 u.name as passenger_name
              FROM rides r
