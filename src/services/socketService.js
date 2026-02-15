@@ -3,19 +3,11 @@
  * ⚡ AOTRAVEL SERVER PRO - TITANIUM SOCKET ENGINE v8.0.0
  * =================================================================================================
  *
- * ARQUIVO: src/services/socketService.js
- * DESCRIÇÃO: Motor de comunicação Real-Time de alta performance.
- *            Gerencia conexões, salas, roteamento de eventos e sincronização de estado.
+ * ✅ CORREÇÃO CRÍTICA APLICADA:
+ *   - O handler 'join_user' agora espera receber UM VALOR PRIMITIVO (userId) e não um mapa.
+ *   - Compatibilidade garantida com o frontend Flutter corrigido.
  *
- * ✅ CARACTERÍSTICAS DE PRODUÇÃO:
- * 1. Bridge Socket-to-Controller (Reutiliza lógica ACID dos controllers)
- * 2. Gerenciamento robusto de salas (Rooms)
- * 3. Sistema de Heartbeat e Keep-Alive
- * 4. Debounce de desconexão (Prevenção de flickering)
- * 5. Logs detalhados de tráfego de eventos
- * 6. Integração profunda com socketController (Estado do motorista)
- *
- * STATUS: 🔥 PRODUCTION READY - CRITICAL CORE COMPONENT
+ * STATUS: 🔥 PRODUCTION READY
  * =================================================================================================
  */
 
@@ -24,7 +16,7 @@ const pool = require('../config/db');
 const { logSystem, logError, getFullRideDetails } = require('../utils/helpers');
 const SYSTEM_CONFIG = require('../config/appConfig');
 const socketController = require('../controllers/socketController');
-const rideController = require('../controllers/rideController'); // ✅ Importação do Controller Lógico
+const rideController = require('../controllers/rideController');
 
 // Cores para Logs
 const colors = {
@@ -62,7 +54,7 @@ function initializeSocket(httpServer) {
         },
         pingTimeout: SYSTEM_CONFIG.SOCKET?.PING_TIMEOUT || 20000,
         pingInterval: SYSTEM_CONFIG.SOCKET?.PING_INTERVAL || 25000,
-        transports: SYSTEM_CONFIG.SOCKET?.TRANSPORTS || ['websocket', 'polling'], // Websocket preferencial
+        transports: SYSTEM_CONFIG.SOCKET?.TRANSPORTS || ['websocket', 'polling'],
         allowEIO3: true,
         connectTimeout: 10000,
         maxHttpBufferSize: 1e6
@@ -77,7 +69,7 @@ function initializeSocket(httpServer) {
 
     logSystem('SOCKET_ENGINE', `${colors.green}✅ [SOCKET ENGINE] Servidor iniciado e pronto.${colors.reset}`);
 
-    // Loop de manutenção (Logs periódicos de status)
+    // Loop de manutenção
     setInterval(async () => {
         const clients = io.engine?.clientsCount || 0;
         const onlineDrivers = await socketController.countOnlineDrivers();
@@ -105,7 +97,7 @@ function handleConnection(socket) {
 
     console.log(`${colors.blue}🔌 [CONNECT] Nova conexão: ${socketId} (${transport})${colors.reset}`);
 
-    // Recuperação automática se userId vier na query (Reconexão rápida)
+    // Recuperação automática se userId vier na query
     if (query && query.userId) {
         const userId = query.userId;
         const role = query.role || 'passenger';
@@ -119,7 +111,7 @@ function handleConnection(socket) {
     }
 
     // =================================================================
-    // 2.1. REGISTRO DE USUÁRIO (JOIN USER)
+    // 2.1. REGISTRO DE USUÁRIO (JOIN USER) - CORRIGIDO
     // =================================================================
     socket.on('join_user', (userId) => _handleJoinUser(socket, userId));
 
@@ -133,7 +125,6 @@ function handleConnection(socket) {
     // =================================================================
     socket.on('request_ride', (data) => {
         console.log(`${colors.magenta}🚕 [REQUEST] Recebido via Socket${colors.reset}`);
-        // Roteia para o rideController.requestRide simulando HTTP
         routeToController(rideController.requestRide, data, socket, 'ride_request_response');
     });
 
@@ -142,18 +133,17 @@ function handleConnection(socket) {
     // =================================================================
     socket.on('accept_ride', (data) => {
         console.log(`${colors.magenta}🤝 [ACCEPT] Recebido via Socket${colors.reset}`);
-        // Roteia para o rideController.acceptRide simulando HTTP
         routeToController(rideController.acceptRide, data, socket, 'ride_accepted_confirmation');
     });
 
     // =================================================================
-    // 2.5. ATUALIZAÇÃO DE LOCALIZAÇÃO (HIGH FREQUENCY)
+    // 2.5. ATUALIZAÇÃO DE LOCALIZAÇÃO
     // =================================================================
     socket.on('update_location', (data) => _handleLocationUpdate(socket, data));
     socket.on('update_trip_gps', (data) => _handleTripGpsUpdate(socket, data));
 
     // =================================================================
-    // 2.6. EVENTOS DE CORRIDA (IN-RIDE)
+    // 2.6. EVENTOS DE CORRIDA
     // =================================================================
     socket.on('join_ride', (rideId) => {
         if (!rideId) return;
@@ -180,8 +170,6 @@ function handleConnection(socket) {
 
     socket.on('start_trip', (data) => _handleStartTrip(socket, data));
     socket.on('complete_ride', (data) => _handleCompleteRide(socket, data));
-
-    // Cancelamento via Socket
     socket.on('cancel_ride', async (data) => {
         routeToController(rideController.cancelRide, data, socket, 'ride_cancelled_ack');
     });
@@ -238,7 +226,7 @@ function handleConnection(socket) {
  * =================================================================================================
  */
 
-// --- 3.1 JOIN USER ---
+// --- 3.1 JOIN USER (CORRIGIDO) ---
 async function _handleJoinUser(socket, userId) {
     if (!userId) {
         socket.emit('error', { message: 'User ID não fornecido' });
@@ -252,7 +240,7 @@ async function _handleJoinUser(socket, userId) {
     userSockets.set(userIdStr, socket.id);
     socketUsers.set(socket.id, userIdStr);
 
-    // Cancelar timer de desconexão se existir (usuário voltou rápido)
+    // Cancelar timer de desconexão
     if (disconnectTimers.has(userIdStr)) {
         clearTimeout(disconnectTimers.get(userIdStr));
         disconnectTimers.delete(userIdStr);
@@ -317,9 +305,9 @@ async function _handleJoinDriver(socket, data) {
     const driverIdStr = driverId.toString();
 
     // Entrar nas salas críticas
-    socket.join('drivers');          // Sala global de motoristas
-    socket.join(`driver_${driverIdStr}`); // Sala privada do motorista
-    socket.join(`user_${driverIdStr}`);   // Sala de usuário (para chat/notificações)
+    socket.join('drivers');
+    socket.join(`driver_${driverIdStr}`);
+    socket.join(`user_${driverIdStr}`);
 
     userSockets.set(driverIdStr, socket.id);
     socketUsers.set(socket.id, driverIdStr);
@@ -332,7 +320,7 @@ async function _handleJoinDriver(socket, data) {
         disconnectTimers.delete(driverIdStr);
     }
 
-    // Persistir no Banco e Memória (via SocketController)
+    // Persistir no Banco
     try {
         console.log('🔄 Chamando socketController.joinDriverRoom...');
         await socketController.joinDriverRoom({
@@ -367,7 +355,6 @@ async function _handleLocationUpdate(socket, data) {
     const driverId = data.driver_id || data.user_id || socketUsers.get(socket.id);
     if (!driverId || !data.lat || !data.lng) return;
 
-    // Atualiza DB e Cache
     await socketController.updateDriverPosition({
         ...data,
         driver_id: driverId,
@@ -388,12 +375,11 @@ async function _handleLocationUpdate(socket, data) {
     }
 }
 
-// --- 3.4 TRIP GPS (Para passageiro ver o carro se movendo suavemente) ---
+// --- 3.4 TRIP GPS ---
 function _handleTripGpsUpdate(socket, data) {
     const { ride_id, lat, lng, rotation, speed } = data;
     if (!ride_id || !lat || !lng) return;
 
-    // Emite diretamente para a sala da corrida (Baixa latência)
     io.to(`ride_${ride_id}`).emit('driver_location_update', {
         ride_id, lat, lng, rotation, speed,
         timestamp: new Date().toISOString()
@@ -482,7 +468,6 @@ async function _handleChatMessage(socket, data) {
     }
 
     try {
-        // Verificar se usuário é participante da corrida
         const rideCheck = await pool.query(
             `SELECT passenger_id, driver_id FROM rides WHERE id = $1`,
             [ride_id]
@@ -499,7 +484,6 @@ async function _handleChatMessage(socket, data) {
             return;
         }
 
-        // Salvar no banco
         const result = await pool.query(
             `INSERT INTO chat_messages (ride_id, sender_id, text, image_url, message_type, created_at, is_read)
              VALUES ($1, $2, $3, $4, $5, NOW(), false) RETURNING *`,
@@ -508,7 +492,6 @@ async function _handleChatMessage(socket, data) {
 
         const msg = result.rows[0];
 
-        // Buscar informações do remetente
         const senderRes = await pool.query(
             'SELECT name, photo, role FROM users WHERE id = $1',
             [sender_id]
@@ -529,10 +512,8 @@ async function _handleChatMessage(socket, data) {
             is_read: false
         };
 
-        // Broadcast para a sala
         io.to(`ride_${ride_id}`).emit('receive_message', payload);
 
-        // Notificar o destinatário
         const recipientId = ride.passenger_id === sender_id ? ride.driver_id : ride.passenger_id;
         if (recipientId) {
             io.to(`user_${recipientId}`).emit('new_message_notification', {
@@ -620,18 +601,15 @@ function handleDisconnect(socket, reason) {
 
     console.log(`${colors.yellow}🔌 [DISCONNECT] Socket ${socketId} (${reason})${colors.reset}`);
 
-    // Remover posição do motorista imediatamente
     socketController.removeDriverPosition(socketId).catch(e =>
         logError('DISCONNECT_REMOVE_POS', e)
     );
 
     if (userId) {
-        // Iniciar Grace Period (Debounce)
         const timer = setTimeout(async () => {
             console.log(`${colors.red}🚫 [OFFLINE] Timeout expirou para User ${userId}. Removendo.${colors.reset}`);
 
             try {
-                // Verificar se ainda não reconectou
                 const currentSocket = userSockets.get(userId);
                 if (!currentSocket || currentSocket === socketId) {
                     await pool.query(
@@ -648,7 +626,6 @@ function handleDisconnect(socket, reason) {
                 disconnectTimers.delete(userId);
             }
 
-            // Atualizar contagem
             const count = await socketController.countOnlineDrivers();
             io.emit('drivers_online_count', count);
 
@@ -716,27 +693,22 @@ function _handlePaymentConfirmation(socket, data) {
 
 /**
  * =================================================================================================
- * 4. BRIDGE: SOCKET -> CONTROLLER (MOCK REQ/RES)
+ * 4. BRIDGE: SOCKET -> CONTROLLER
  * =================================================================================================
- * Esta função mágica permite chamar controllers HTTP via Socket sem duplicar código.
  */
 async function routeToController(controllerFunction, data, socket, responseEventName) {
-    // 1. Mock Request
     const req = {
         body: data,
-        user: { id: data.passenger_id || data.driver_id || data.user_id }, // Tenta extrair ID
-        io: io, // Injeta IO global
+        user: { id: data.passenger_id || data.driver_id || data.user_id },
+        io: io,
         ip: socket.handshake.address
     };
 
-    // Validação básica de Auth no Mock
     if (!req.user.id) {
-        // Tenta pegar do mapa de sockets
         const mappedId = socketUsers.get(socket.id);
         if (mappedId) req.user.id = mappedId;
     }
 
-    // 2. Mock Response
     const res = {
         _status: 200,
         _json: null,
@@ -746,30 +718,21 @@ async function routeToController(controllerFunction, data, socket, responseEvent
         },
         json: function(payload) {
             this._json = payload;
-
-            // Log do resultado
             const isSuccess = this._status >= 200 && this._status < 300;
             const logColor = isSuccess ? colors.green : colors.red;
             console.log(`${logColor}📦 [CONTROLLER BRIDGE] Response ${this._status} para ${responseEventName}${colors.reset}`);
-
-            // Emitir resposta de volta para o socket solicitante
             socket.emit(responseEventName, payload);
-
-            // Se for erro, também emite evento de erro padrão
             if (!isSuccess) {
                 socket.emit('error_response', {
                     code: payload.code || 'UNKNOWN_ERROR',
                     message: payload.error || payload.message || 'Erro desconhecido'
                 });
             }
-
             return this;
         },
-        // Suporte a send também
         send: function(body) { this.json(body); }
     };
 
-    // 3. Executar Controller
     try {
         await controllerFunction(req, res);
     } catch (e) {
@@ -784,36 +747,31 @@ async function routeToController(controllerFunction, data, socket, responseEvent
 
 /**
  * =================================================================================================
- * 5. MÉTODOS HELPER PÚBLICOS (Para uso em outros arquivos)
+ * 5. MÉTODOS HELPER PÚBLICOS
  * =================================================================================================
  */
 
-// Emitir para um usuário específico
 function emitToUser(userId, event, data) {
     if (!userId || !io) return;
     io.to(`user_${userId}`).emit(event, data);
 }
 
-// Emitir para uma sala de corrida
 function emitToRide(rideId, event, data) {
     if (!rideId || !io) return;
     io.to(`ride_${rideId}`).emit(event, data);
 }
 
-// Emitir para uma sala genérica
 function emitToRoom(room, event, data) {
     if (!room || !io) return;
     io.to(room).emit(event, data);
 }
 
-// Emitir global
 function emitGlobal(event, data) {
     if (!io) return;
     io.emit(event, data);
     logSystem('SOCKET_BROADCAST', `Evento global: ${event}`);
 }
 
-// Verificar se usuário está online
 async function isUserOnline(userId) {
     try {
         const result = await pool.query(
@@ -827,12 +785,10 @@ async function isUserOnline(userId) {
     }
 }
 
-// Obter socket ID de um usuário
 function getUserSocket(userId) {
     return userSockets.get(userId.toString());
 }
 
-// Obter lista de usuários online
 async function getOnlineUsers() {
     try {
         const result = await pool.query(
@@ -845,16 +801,14 @@ async function getOnlineUsers() {
     }
 }
 
-// Obter instância do IO
 function getIO() {
     return io;
 }
 
-// Setup inicial (chamado pelo server.js)
 function setupSocketIO(httpServer) {
     console.log('🔌 [SOCKET] Inicializando serviço de tempo real...');
 
-    if (io) return io; // Singleton
+    if (io) return io;
 
     if (httpServer && typeof httpServer.on === 'function') {
         return initializeSocket(httpServer);
@@ -874,7 +828,6 @@ module.exports = {
     isUserOnline,
     getUserSocket,
     getOnlineUsers,
-    // Expor mapas para debugging (opcional)
     userSockets,
     socketUsers,
     disconnectTimers
