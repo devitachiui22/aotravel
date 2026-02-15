@@ -104,7 +104,7 @@ function initializeSocket(httpServer) {
 // =================================================================================================
 function handleConnection(socket) {
     const socketId = socket.id;
-    
+
     console.log(`${colors.magenta}\n🔌 NOVA CONEXÃO: ${socketId} (Transport: ${socket.conn.transport.name})${colors.reset}`);
 
     // =====================================================================
@@ -161,7 +161,7 @@ function handleConnection(socket) {
 
                 if (pendingRides.rows.length > 0) {
                     console.log(`${colors.cyan}📊 Corridas pendentes: ${pendingRides.rows.length}${colors.reset}`);
-                    
+
                     pendingRides.rows.forEach(ride => {
                         const rideRoom = `ride_${ride.id}`;
                         socket.join(rideRoom);
@@ -185,7 +185,7 @@ function handleConnection(socket) {
             logError('JOIN_USER', error);
             socket.emit('error', { message: 'Erro ao registrar usuário', error: error.message });
         }
-        
+
         console.log(`${colors.blue}👤 [join_user] FIM\n${colors.reset}`);
     });
 
@@ -241,7 +241,7 @@ function handleConnection(socket) {
         try {
             // 🔴 CHAMADA DIRETA AO CONTROLLER
             console.log(`${colors.cyan}🔄 Chamando socketController.joinDriverRoom...${colors.reset}`);
-            
+
             await socketController.joinDriverRoom({
                 driver_id: driverIdStr,
                 user_id: driverIdStr,
@@ -251,7 +251,7 @@ function handleConnection(socket) {
                 speed: speed,
                 status: 'online'
             }, socket);
-            
+
             console.log(`${colors.green}✅ Controller executado com sucesso${colors.reset}`);
 
             // Buscar corridas ativas para este motorista
@@ -265,7 +265,7 @@ function handleConnection(socket) {
 
             if (activeRides.rows.length > 0) {
                 console.log(`${colors.cyan}📊 Corridas ativas: ${activeRides.rows.length}${colors.reset}`);
-                
+
                 activeRides.rows.forEach(ride => {
                     const rideRoom = `ride_${ride.id}`;
                     socket.join(rideRoom);
@@ -291,7 +291,7 @@ function handleConnection(socket) {
         } catch (error) {
             console.log(`${colors.red}❌ [join_driver_room] Erro:${colors.reset}`, error.message);
             console.error(error);
-            
+
             socket.emit('joined_ack', {
                 success: false,
                 driver_id: driverIdStr,
@@ -350,11 +350,11 @@ function handleConnection(socket) {
 
         try {
             await pool.query(`
-                UPDATE driver_positions 
-                SET last_update = NOW() 
+                UPDATE driver_positions
+                SET last_update = NOW()
                 WHERE driver_id = $1
             `, [driverId]);
-            
+
             socket.emit('heartbeat_ack', {
                 timestamp: new Date().toISOString(),
                 driver_id: driverId
@@ -405,7 +405,7 @@ function handleConnection(socket) {
                         // Se encontrou motoristas, eles já foram notificados via ride_opportunity
                         if (response.dispatch_stats?.drivers_notified > 0) {
                             console.log(`${colors.green}✅ ${response.dispatch_stats.drivers_notified} motoristas notificados${colors.reset}`);
-                            
+
                             // Entrar na sala da corrida
                             if (response.ride?.id) {
                                 socket.join(`ride_${response.ride.id}`);
