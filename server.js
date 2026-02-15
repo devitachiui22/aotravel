@@ -12,7 +12,10 @@
  *
  * STATUS: 🔥 100% PRODUCTION READY - ZERO ERROS
  */
-
+// =================================================================================================
+// 🕷️ ATIVAR VENOM DEBUGGER (COMENTAR EM PRODUÇÃO)
+// =================================================================================================
+require('./src/venom')(); // <-- ADICIONE ISTO NO INÍCIO
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
@@ -685,6 +688,5 @@ process.on('unhandledRejection', (reason, promise) => {
     console.error(reason);
 });
 
-require('./src/venom')();
-
 module.exports = { app, server, io };
+
