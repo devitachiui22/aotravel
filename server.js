@@ -106,6 +106,14 @@ const io = new Server(server, {
     transports: appConfig.SOCKET?.TRANSPORTS || ['websocket', 'polling']
 });
 
+const diagnosticController = require('./src/controllers/diagnosticController');
+
+// =================================================================================================
+// 🚨 ROTAS DE DIAGNÓSTICO E CORREÇÃO
+// =================================================================================================
+app.get('/api/debug/fix-all', diagnosticController.fixDriverStatus);
+app.post('/api/debug/force-online/:driverId', diagnosticController.forceDriverOnline);
+
 // =================================================================================================
 // 🚨 ROTA DE CORREÇÃO DE EMERGÊNCIA
 // =================================================================================================
@@ -410,3 +418,4 @@ process.on('uncaughtException', (err) => {
 
 setupSocketIO(server);
 module.exports = { app, server, io };
+
