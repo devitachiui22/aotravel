@@ -66,7 +66,7 @@ const io = new Server(server, {
     transports: appConfig.SOCKET?.TRANSPORTS || ['websocket', 'polling']
 });
 
-// Configurar Socket.IO com handlers DIRETOS (sem setupSocketIO)
+// Configurar Socket.IO com handlers DIRETOS
 io.on('connection', (socket) => {
     console.log(`${colors.magenta}🔌 [SOCKET] Conectado: ${socket.id}${colors.reset}`);
     
@@ -98,6 +98,20 @@ io.on('connection', (socket) => {
             socket.emit('joined_ack', { success: true, driver_id: driverId });
         } catch (e) {
             console.error(`❌ Erro:`, e.message);
+        }
+    });
+    
+    socket.on('join_user', async (userId) => {
+        if (!userId) return;
+        
+        try {
+            const pool = require('./src/config/db');
+            await pool.query(`
+                UPDATE users SET is_online = true, last_seen = NOW()
+                WHERE id = $1
+            `, [userId]);
+        } catch (e) {
+            console.error(`❌ Erro join_user:`, e.message);
         }
     });
     
@@ -167,11 +181,12 @@ app.get('/api/debug/fix-drivers', async (req, res) => {
             SELECT id, -8.8399, 13.2894, 'offline', NOW() - INTERVAL '1 hour'
             FROM users WHERE role = 'driver'
         `);
-        await pool.query('UPDATE users SET is_online = false WHERE role = 'driver'');
+        await pool.query("UPDATE users SET is_online = false WHERE role = 'driver'");
         await pool.query('COMMIT');
         
-        res.json({ success: true, message: 'Banco resetado' });
+        res.json({ success: true, message: 'Banco resetado com sucesso' });
     } catch (error) {
+        await pool.query('ROLLBACK');
         res.status(500).json({ error: error.message });
     }
 });
@@ -194,7 +209,7 @@ app.get('/api/debug/drivers-detailed', async (req, res) => {
             FROM driver_positions dp
             RIGHT JOIN users u ON dp.driver_id = u.id
             WHERE u.role = 'driver'
-            ORDER BY dp.last_update DESC
+            ORDER BY dp.last_update DESC NULLS LAST
         `);
         
         res.json({
