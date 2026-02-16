@@ -399,16 +399,16 @@ exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => 
             u.rating,
             u.photo,
             u.is_blocked,
-            CASE 
+            CASE
                 WHEN dp.lat != 0 AND dp.lng != 0 THEN
                     (6371 * acos(
-                        cos(radians($1)) * 
-                        cos(radians(dp.lat)) * 
-                        cos(radians(dp.lng) - radians($2)) + 
-                        sin(radians($1)) * 
+                        cos(radians($1)) *
+                        cos(radians(dp.lat)) *
+                        cos(radians(dp.lng) - radians($2)) +
+                        sin(radians($1)) *
                         sin(radians(dp.lat))
                     ))
-                ELSE 999999 
+                ELSE 999999
             END as distance
         FROM driver_positions dp
         JOIN users u ON dp.driver_id = u.id
@@ -419,25 +419,25 @@ exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => 
             AND u.is_blocked = false
             AND u.role = 'driver'
             AND (
-                (dp.lat != 0 AND dp.lng != 0 AND 
+                (dp.lat != 0 AND dp.lng != 0 AND
                     (6371 * acos(
-                        cos(radians($1)) * 
-                        cos(radians(dp.lat)) * 
-                        cos(radians(dp.lng) - radians($2)) + 
-                        sin(radians($1)) * 
+                        cos(radians($1)) *
+                        cos(radians(dp.lat)) *
+                        cos(radians(dp.lng) - radians($2)) +
+                        sin(radians($1)) *
                         sin(radians(dp.lat))
                     )) <= $3
                 )
                 ${includeGpsZero ? "OR (dp.lat = 0 AND dp.lng = 0)" : ""}
             )
-        ORDER BY 
-            CASE 
-                WHEN dp.lat = 0 OR dp.lng = 0 THEN 999999 
+        ORDER BY
+            CASE
+                WHEN dp.lat = 0 OR dp.lng = 0 THEN 999999
                 ELSE (6371 * acos(
-                    cos(radians($1)) * 
-                    cos(radians(dp.lat)) * 
-                    cos(radians(dp.lng) - radians($2)) + 
-                    sin(radians($1)) * 
+                    cos(radians($1)) *
+                    cos(radians(dp.lat)) *
+                    cos(radians(dp.lng) - radians($2)) +
+                    sin(radians($1)) *
                     sin(radians(dp.lat))
                 ))
             END ASC NULLS LAST,
@@ -447,7 +447,7 @@ exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => 
 
     try {
         const result = await pool.query(query, [lat, lng, radiusKm]);
-        
+
         if (result.rows.length > 0) {
             console.log(`✅ [FIND_DRIVERS] Encontrados ${result.rows.length} motoristas`);
             result.rows.forEach(d => {
@@ -456,7 +456,7 @@ exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => 
         } else {
             console.log(`⚠️ [FIND_DRIVERS] Nenhum motorista encontrado para (${lat}, ${lng}) raio ${radiusKm}km`);
         }
-        
+
         return result.rows;
     } catch (e) {
         console.error(`❌ [FIND_DRIVERS] Erro na query:`, e.message);
@@ -465,7 +465,7 @@ exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => 
 };
 
 // =================================================================================================
-// 3. ACEITE DE CORRIDA - VERSÃO CORRIGIDA (SEM ERRO "updated_at")
+// 3. ACEITE DE CORRIDA - VERSÃO COM LOGS EXTRAS
 // =================================================================================================
 
 exports.acceptRide = async (req, res) => {
@@ -561,6 +561,7 @@ exports.acceptRide = async (req, res) => {
         // ETAPA 4: Buscar detalhes completos
         // =================================================================
         const fullRide = await getFullRideDetails(ride_id);
+        logger.debug('ACCEPT', `Detalhes completos obtidos:`, { ride_id: fullRide?.id });
 
         // Dados do Motorista
         const driverData = {
@@ -631,13 +632,18 @@ exports.acceptRide = async (req, res) => {
             logger.error('ACCEPT', `Erro ao notificar outros motoristas: ${e.message}`);
         }
 
-        // 🔥 CORREÇÃO: Enviar confirmação para o motorista
+        // 🔥 CORREÇÃO: Enviar confirmação para o motorista (COM DADOS COMPLETOS)
         try {
-            req.io.to(`user_${actualDriverId}`).emit('ride_accepted_confirmation', {
+            const confirmationPayload = {
                 success: true,
                 ride: matchPayload,
                 message: "Corrida aceita com sucesso!"
-            });
+            };
+
+            logger.debug('ACCEPT', `Enviando confirmação para motorista ${actualDriverId}`);
+            logger.debug('ACCEPT', `Payload:`, confirmationPayload);
+
+            req.io.to(`user_${actualDriverId}`).emit('ride_accepted_confirmation', confirmationPayload);
         } catch (e) {
             logger.error('ACCEPT', `Erro ao notificar motorista: ${e.message}`);
         }
@@ -1588,3 +1594,4 @@ exports.debugDrivers = async (req, res) => {
 };
 
 module.exports = exports;
+
