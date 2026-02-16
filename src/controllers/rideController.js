@@ -1,6 +1,6 @@
 /**
  * =================================================================================================
- * 🚕 AOTRAVEL SERVER PRO - RIDE LIFECYCLE CONTROLLER (TITANIUM CORE V8.2.0 - FINAL)
+ * 🚕 AOTRAVEL SERVER PRO - RIDE LIFECYCLE CONTROLLER (TITANIUM CORE V9.0.0 - FINAL)
  * =================================================================================================
  *
  * ✅ CORREÇÕES APLICADAS:
@@ -12,12 +12,14 @@
  *   - Gestão de pagamentos por carteira/dinheiro
  *   - Estatísticas e performance para motoristas
  *   - Avaliações e feedback
+ *   - Cálculo de preços corrigido e sincronizado
+ *   - Cálculo de distância corrigido usando a fórmula de Haversine
  */
 
 const pool = require('../config/db');
 const fs = require('fs');
 const path = require('path');
-const { getDistance, logError, generateRef } = require('../utils/helpers');
+const { logError, generateRef } = require('../utils/helpers');
 
 // =================================================================================================
 // 📊 SISTEMA DE LOGGING PROFISSIONAL
@@ -82,7 +84,23 @@ const logger = {
 };
 
 // =================================================================================================
-// 1. SOLICITAÇÃO DE CORRIDA (REQUEST)
+// 1. FUNÇÃO AUXILIAR: Calcular distância entre dois pontos (Fórmula de Haversine)
+// =================================================================================================
+function calculateDistance(lat1, lon1, lat2, lon2) {
+    const R = 6371; // Raio da Terra em km
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    const distance = R * c; // Distância em km
+    return parseFloat(distance.toFixed(2));
+}
+
+// =================================================================================================
+// 2. SOLICITAÇÃO DE CORRIDA (REQUEST)
 // =================================================================================================
 
 exports.requestRide = async (req, res) => {
@@ -121,6 +139,10 @@ exports.requestRide = async (req, res) => {
 
         logger.debug('REQUEST', `[${requestId}] Buscando configurações de preço`);
 
+        // Calcular a distância real da viagem
+        const distanceKm = calculateDistance(originLat, originLng, destLat, destLng);
+        logger.debug('REQUEST', `[${requestId}] Distância calculada: ${distanceKm} km`);
+
         const settingsRes = await client.query(
             "SELECT value FROM app_settings WHERE key = 'ride_prices'"
         );
@@ -132,15 +154,14 @@ exports.requestRide = async (req, res) => {
         };
 
         let estimatedPrice = 0;
-        const dist = parseFloat(body.distance_km) || 0;
         const rideType = body.ride_type || 'ride';
 
         if (rideType === 'moto') {
-            estimatedPrice = prices.moto_base + (dist * prices.moto_km_rate);
+            estimatedPrice = prices.moto_base + (distanceKm * prices.moto_km_rate);
         } else if (rideType === 'delivery') {
-            estimatedPrice = prices.delivery_base + (dist * prices.delivery_km_rate);
+            estimatedPrice = prices.delivery_base + (distanceKm * prices.delivery_km_rate);
         } else {
-            estimatedPrice = prices.base_price + (dist * prices.km_rate);
+            estimatedPrice = prices.base_price + (distanceKm * prices.km_rate);
         }
 
         estimatedPrice = Math.ceil(estimatedPrice / 50) * 50;
@@ -164,7 +185,7 @@ exports.requestRide = async (req, res) => {
             body.dest_name || 'Destino desconhecido',
             estimatedPrice,
             rideType,
-            dist
+            distanceKm
         ]);
 
         const ride = result.rows[0];
@@ -222,7 +243,7 @@ exports.requestRide = async (req, res) => {
             dest_lng: destLng,
             dest_name: body.dest_name,
             initial_price: estimatedPrice,
-            distance_km: dist,
+            distance_km: distanceKm,
             distance_to_pickup: 0,
             ride_type: rideType,
             request_id: requestId,
@@ -235,7 +256,7 @@ exports.requestRide = async (req, res) => {
             let distanceInMeters = 0;
 
             if (driver.lat && driver.lng && driver.lat != 0 && driver.lng != 0) {
-                distanceToPickup = getDistance(
+                distanceToPickup = calculateDistance(
                     originLat, originLng,
                     parseFloat(driver.lat), parseFloat(driver.lng)
                 );
@@ -332,7 +353,7 @@ exports.requestRide = async (req, res) => {
             ride: {
                 id: ride.id,
                 initial_price: estimatedPrice,
-                distance_km: dist,
+                distance_km: distanceKm,
                 status: 'searching',
                 created_at: ride.created_at
             },
@@ -374,7 +395,7 @@ exports.requestRide = async (req, res) => {
 };
 
 // =================================================================================================
-// 2. FUNÇÃO AUXILIAR: Buscar motoristas disponíveis
+// 3. FUNÇÃO AUXILIAR: Buscar motoristas disponíveis
 // =================================================================================================
 
 exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => {
@@ -460,7 +481,7 @@ exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => 
 };
 
 // =================================================================================================
-// 3. FUNÇÃO AUXILIAR: Obter detalhes completos da corrida
+// 4. FUNÇÃO AUXILIAR: Obter detalhes completos da corrida
 // =================================================================================================
 
 async function getFullRideDetails(rideId) {
@@ -492,7 +513,7 @@ async function getFullRideDetails(rideId) {
 }
 
 // =================================================================================================
-// 4. ACEITE DE CORRIDA - VERSÃO FINAL SEM UPDATED_AT
+// 5. ACEITE DE CORRIDA - VERSÃO FINAL SEM UPDATED_AT
 // =================================================================================================
 
 exports.acceptRide = async (req, res) => {
@@ -681,7 +702,7 @@ exports.acceptRide = async (req, res) => {
 };
 
 // =================================================================================================
-// 5. ATUALIZAR STATUS (ARRIVED / PICKED_UP)
+// 6. ATUALIZAR STATUS (ARRIVED / PICKED_UP)
 // =================================================================================================
 
 exports.updateStatus = async (req, res) => {
@@ -796,7 +817,7 @@ exports.startRide = async (req, res) => {
 };
 
 // =================================================================================================
-// 6. FINALIZAR CORRIDA
+// 7. FINALIZAR CORRIDA
 // =================================================================================================
 
 exports.completeRide = async (req, res) => {
@@ -1037,7 +1058,7 @@ exports.completeRide = async (req, res) => {
 };
 
 // =================================================================================================
-// 7. CANCELAR CORRIDA
+// 8. CANCELAR CORRIDA
 // =================================================================================================
 
 exports.cancelRide = async (req, res) => {
@@ -1157,7 +1178,7 @@ exports.cancelRide = async (req, res) => {
 };
 
 // =================================================================================================
-// 8. HISTÓRICO E DETALHES
+// 9. HISTÓRICO E DETALHES
 // =================================================================================================
 
 exports.getHistory = async (req, res) => {
@@ -1280,7 +1301,7 @@ exports.getRideDetails = async (req, res) => {
 };
 
 // =================================================================================================
-// 9. ESTATÍSTICAS E PERFORMANCE
+// 10. ESTATÍSTICAS E PERFORMANCE
 // =================================================================================================
 
 exports.getDriverPerformance = async (req, res) => {
@@ -1465,7 +1486,7 @@ exports.getPassengerStats = async (req, res) => {
 };
 
 // =================================================================================================
-// 10. AVALIAÇÃO DA CORRIDA
+// 11. AVALIAÇÃO DA CORRIDA
 // =================================================================================================
 
 exports.rateRide = async (req, res) => {
@@ -1542,7 +1563,7 @@ exports.rateRide = async (req, res) => {
 };
 
 // =================================================================================================
-// 11. UTILITÁRIOS E DIAGNÓSTICO
+// 12. UTILITÁRIOS E DIAGNÓSTICO
 // =================================================================================================
 
 exports.checkSocketHealth = async (req, res) => {
