@@ -4,8 +4,8 @@
  * =================================================================================================
  *
  * ✅ CORREÇÃO APLICADA:
- *   - Removida referência a "updated_at" na validação de veículo
- *   - Adicionada verificação correta de vehicle_details
+ *   - Removida referência a "updated_at" em todas as queries
+ *   - Versão final sem triggers problemáticas
  */
 
 const pool = require('../config/db');
@@ -91,12 +91,7 @@ exports.requestRide = async (req, res) => {
     const destLng = parseFloat(body.dest_lng || body.destLng);
     const passengerId = req.user.id;
 
-    logger.ride('REQUEST', `[${requestId}] Nova solicitação de corrida - Pax: ${passengerId}`, {
-        userId: req.user?.id,
-        body: req.body
-    });
-
-    logger.divider();
+    logger.ride('REQUEST', `[${requestId}] Nova solicitação de corrida - Pax: ${passengerId}`);
 
     if (!req.io) {
         logger.error('REQUEST', `[${requestId}] Socket.IO não disponível`);
@@ -107,12 +102,7 @@ exports.requestRide = async (req, res) => {
     }
 
     if (!originLat || !originLng || !destLat || !destLng) {
-        logger.error('REQUEST', `[${requestId}] Coordenadas incompletas`, {
-            origin_lat: originLat,
-            origin_lng: originLng,
-            dest_lat: destLat,
-            dest_lng: destLng
-        });
+        logger.error('REQUEST', `[${requestId}] Coordenadas incompletas`);
         return res.status(400).json({
             error: "Coordenadas GPS incompletas.",
             code: "INVALID_COORDINATES"
@@ -399,16 +389,16 @@ exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => 
             u.rating,
             u.photo,
             u.is_blocked,
-            CASE
+            CASE 
                 WHEN dp.lat != 0 AND dp.lng != 0 THEN
                     (6371 * acos(
-                        cos(radians($1)) *
-                        cos(radians(dp.lat)) *
-                        cos(radians(dp.lng) - radians($2)) +
-                        sin(radians($1)) *
+                        cos(radians($1)) * 
+                        cos(radians(dp.lat)) * 
+                        cos(radians(dp.lng) - radians($2)) + 
+                        sin(radians($1)) * 
                         sin(radians(dp.lat))
                     ))
-                ELSE 999999
+                ELSE 999999 
             END as distance
         FROM driver_positions dp
         JOIN users u ON dp.driver_id = u.id
@@ -419,25 +409,25 @@ exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => 
             AND u.is_blocked = false
             AND u.role = 'driver'
             AND (
-                (dp.lat != 0 AND dp.lng != 0 AND
+                (dp.lat != 0 AND dp.lng != 0 AND 
                     (6371 * acos(
-                        cos(radians($1)) *
-                        cos(radians(dp.lat)) *
-                        cos(radians(dp.lng) - radians($2)) +
-                        sin(radians($1)) *
+                        cos(radians($1)) * 
+                        cos(radians(dp.lat)) * 
+                        cos(radians(dp.lng) - radians($2)) + 
+                        sin(radians($1)) * 
                         sin(radians(dp.lat))
                     )) <= $3
                 )
                 ${includeGpsZero ? "OR (dp.lat = 0 AND dp.lng = 0)" : ""}
             )
-        ORDER BY
-            CASE
-                WHEN dp.lat = 0 OR dp.lng = 0 THEN 999999
+        ORDER BY 
+            CASE 
+                WHEN dp.lat = 0 OR dp.lng = 0 THEN 999999 
                 ELSE (6371 * acos(
-                    cos(radians($1)) *
-                    cos(radians(dp.lat)) *
-                    cos(radians(dp.lng) - radians($2)) +
-                    sin(radians($1)) *
+                    cos(radians($1)) * 
+                    cos(radians(dp.lat)) * 
+                    cos(radians(dp.lng) - radians($2)) + 
+                    sin(radians($1)) * 
                     sin(radians(dp.lat))
                 ))
             END ASC NULLS LAST,
@@ -447,7 +437,7 @@ exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => 
 
     try {
         const result = await pool.query(query, [lat, lng, radiusKm]);
-
+        
         if (result.rows.length > 0) {
             console.log(`✅ [FIND_DRIVERS] Encontrados ${result.rows.length} motoristas`);
             result.rows.forEach(d => {
@@ -456,7 +446,7 @@ exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => 
         } else {
             console.log(`⚠️ [FIND_DRIVERS] Nenhum motorista encontrado para (${lat}, ${lng}) raio ${radiusKm}km`);
         }
-
+        
         return result.rows;
     } catch (e) {
         console.error(`❌ [FIND_DRIVERS] Erro na query:`, e.message);
@@ -465,7 +455,7 @@ exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => 
 };
 
 // =================================================================================================
-// 3. ACEITE DE CORRIDA - VERSÃO COM LOGS EXTRAS
+// 3. ACEITE DE CORRIDA - VERSÃO FINAL SEM UPDATED_AT
 // =================================================================================================
 
 exports.acceptRide = async (req, res) => {
@@ -525,7 +515,7 @@ exports.acceptRide = async (req, res) => {
             return res.status(400).json({ error: "Você não pode aceitar sua própria corrida." });
         }
 
-        // 🔥 CORREÇÃO: Verificar vehicle_details sem usar updated_at
+        // Verificar veículo
         const driverRes = await client.query(
             "SELECT vehicle_details FROM users WHERE id = $1",
             [actualDriverId]
@@ -541,7 +531,7 @@ exports.acceptRide = async (req, res) => {
         }
 
         // =================================================================
-        // ETAPA 3: Atualizar corrida
+        // ETAPA 3: Atualizar corrida - SEM UPDATED_AT
         // =================================================================
         await client.query(
             `UPDATE rides SET
@@ -561,7 +551,6 @@ exports.acceptRide = async (req, res) => {
         // ETAPA 4: Buscar detalhes completos
         // =================================================================
         const fullRide = await getFullRideDetails(ride_id);
-        logger.debug('ACCEPT', `Detalhes completos obtidos:`, { ride_id: fullRide?.id });
 
         // Dados do Motorista
         const driverData = {
@@ -632,17 +621,15 @@ exports.acceptRide = async (req, res) => {
             logger.error('ACCEPT', `Erro ao notificar outros motoristas: ${e.message}`);
         }
 
-        // 🔥 CORREÇÃO: Enviar confirmação para o motorista (COM DADOS COMPLETOS)
+        // CONFIRMAÇÃO PARA O MOTORISTA
         try {
             const confirmationPayload = {
                 success: true,
                 ride: matchPayload,
                 message: "Corrida aceita com sucesso!"
             };
-
+            
             logger.debug('ACCEPT', `Enviando confirmação para motorista ${actualDriverId}`);
-            logger.debug('ACCEPT', `Payload:`, confirmationPayload);
-
             req.io.to(`user_${actualDriverId}`).emit('ride_accepted_confirmation', confirmationPayload);
         } catch (e) {
             logger.error('ACCEPT', `Erro ao notificar motorista: ${e.message}`);
@@ -1594,4 +1581,3 @@ exports.debugDrivers = async (req, res) => {
 };
 
 module.exports = exports;
-
