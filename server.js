@@ -2,14 +2,15 @@
  * =================================================================================================
  * 🚀 AOTRAVEL SERVER PRO - PRODUCTION COMMAND CENTER v11.0.0 (VERSÃO FINAL - CORRIGIDA)
  * =================================================================================================
- *
+ * 
  * ✅ TODAS AS CORREÇÕES APLICADAS:
  * 1. ✅ Coluna last_seen adicionada à tabela users
  * 2. ✅ Socket.IO configurado corretamente (única instância)
  * 3. ✅ Handlers de driver funcionando perfeitamente
  * 4. ✅ Rotas de diagnóstico e correção
  * 5. ✅ Bootstrap do banco de dados automático
- *
+ * 6. ✅ CORREÇÃO: Removida dependência de updated_at
+ * 
  * STATUS: 🔥 PRODUCTION READY - ZERO ERROS
  */
 
@@ -77,17 +78,17 @@ const io = new Server(server, {
 // Configurar Socket.IO com handlers completos
 io.on('connection', (socket) => {
     console.log(`${colors.magenta}🔌 [SOCKET] Conectado: ${socket.id}${colors.reset}`);
-
+    
     // =========================================
     // JOIN USER - Passageiro/Motorista entra na sala pessoal
     // =========================================
     socket.on('join_user', async (userId) => {
         if (!userId) return;
-
+        
         console.log(`${colors.blue}👤 [JOIN_USER] User ${userId} - Socket: ${socket.id}${colors.reset}`);
-
+        
         socket.join(`user_${userId}`);
-
+        
         try {
             const pool = require('./src/config/db');
             await pool.query(`
@@ -99,27 +100,27 @@ io.on('connection', (socket) => {
             console.error(`❌ Erro join_user:`, e.message);
         }
     });
-
+    
     // =========================================
     // JOIN DRIVER ROOM - Motorista entra na sala de motoristas
     // =========================================
     socket.on('join_driver_room', async (data) => {
         const driverId = data.driver_id || data.user_id;
         if (!driverId) return;
-
+        
         const lat = parseFloat(data.lat) || -8.8399;
         const lng = parseFloat(data.lng) || 13.2894;
-
+        
         console.log(`${colors.cyan}🚗 [JOIN_DRIVER] Driver ${driverId} - Socket: ${socket.id}${colors.reset}`);
         console.log(`   📍 Posição: (${lat}, ${lng})`);
-
+        
         socket.join('drivers');
         socket.join(`driver_${driverId}`);
         socket.join(`user_${driverId}`);
-
+        
         try {
             const pool = require('./src/config/db');
-
+            
             // 1. Inserir/atualizar driver_positions
             await pool.query(`
                 INSERT INTO driver_positions (driver_id, lat, lng, socket_id, status, last_update)
@@ -131,50 +132,43 @@ io.on('connection', (socket) => {
                     status = 'online',
                     last_update = NOW()
             `, [driverId, lat, lng, socket.id]);
-
+            
             // 2. Atualizar users
             await pool.query(`
                 UPDATE users SET is_online = true, last_seen = NOW()
                 WHERE id = $1
             `, [driverId]);
-
+            
             console.log(`${colors.green}✅ [DB] Driver ${driverId} registrado com sucesso${colors.reset}`);
-
-            // 3. Verificar se salvou corretamente
-            const check = await pool.query(
-                'SELECT status, socket_id FROM driver_positions WHERE driver_id = $1',
-                [driverId]
-            );
-            console.log(`   📊 Status no banco: ${check.rows[0]?.status}, Socket: ${check.rows[0]?.socket_id}`);
-
-            socket.emit('joined_ack', {
-                success: true,
+            
+            socket.emit('joined_ack', { 
+                success: true, 
                 driver_id: driverId,
                 status: 'online',
                 socket_id: socket.id
             });
-
+            
         } catch (e) {
             console.error(`❌ Erro join_driver_room:`, e.message);
             socket.emit('joined_ack', { success: false, error: e.message });
         }
     });
-
+    
     // =========================================
     // UPDATE LOCATION - Atualizar posição do motorista
     // =========================================
     socket.on('update_location', async (data) => {
         const driverId = data.driver_id || data.user_id;
         if (!driverId) return;
-
+        
         const lat = parseFloat(data.lat);
         const lng = parseFloat(data.lng);
         if (isNaN(lat) || isNaN(lng)) return;
-
+        
         try {
             const pool = require('./src/config/db');
             await pool.query(`
-                UPDATE driver_positions
+                UPDATE driver_positions 
                 SET lat = $2, lng = $3, last_update = NOW()
                 WHERE driver_id = $1
             `, [driverId, lat, lng]);
@@ -182,22 +176,22 @@ io.on('connection', (socket) => {
             // Ignorar erros de location
         }
     });
-
+    
     // =========================================
     // HEARTBEAT - Manter motorista online
     // =========================================
     socket.on('heartbeat', async (data) => {
         const driverId = data.driver_id || data.user_id;
         if (!driverId) return;
-
+        
         try {
             const pool = require('./src/config/db');
             await pool.query(`
-                UPDATE driver_positions
+                UPDATE driver_positions 
                 SET last_update = NOW()
                 WHERE driver_id = $1
             `, [driverId]);
-
+            
             await pool.query(`
                 UPDATE users SET last_seen = NOW()
                 WHERE id = $1
@@ -206,177 +200,195 @@ io.on('connection', (socket) => {
             // Ignorar erros
         }
     });
-
+    
     // =========================================
     // REQUEST RIDE - Passageiro solicita corrida
     // =========================================
     socket.on('request_ride', async (data) => {
         console.log(`${colors.yellow}🚕 [REQUEST_RIDE] Nova solicitação${colors.reset}`);
-
+        
         try {
             const rideController = require('./src/controllers/rideController');
-
+            
             const req = {
                 body: data,
                 user: { id: data.passenger_id },
                 io: io,
                 ip: socket.handshake.address
             };
-
+            
             const res = {
-                status: (code) => ({
+                status: (code) => ({ 
                     json: (payload) => {
                         socket.emit('ride_request_response', payload);
                         return this;
-                    }
+                    } 
                 }),
                 json: (payload) => {
                     socket.emit('ride_request_response', payload);
                     return this;
                 }
             };
-
+            
             await rideController.requestRide(req, res);
-
+            
         } catch (e) {
             console.error(`❌ Erro request_ride:`, e.message);
-            socket.emit('ride_request_response', {
-                success: false,
-                error: 'Erro interno'
+            socket.emit('ride_request_response', { 
+                success: false, 
+                error: 'Erro interno' 
             });
         }
     });
-
-// =========================================
-// ACCEPT RIDE - Motorista aceita corrida (VERSÃO CORRIGIDA COM LOGS)
-// =========================================
-socket.on('accept_ride', async (data) => {
-    console.log(`${colors.green}✅ [ACCEPT_RIDE] Motorista ${data.driver_id} aceitou corrida ${data.ride_id}${colors.reset}`);
-    console.log(`📦 Dados recebidos:`, data);
-
-    try {
-        const pool = require('./src/config/db');
-
-        // 1. Verificar se o motorista tem veículo cadastrado
-        const driverCheck = await pool.query(
-            'SELECT vehicle_details FROM users WHERE id = $1',
-            [data.driver_id]
-        );
-
-        if (!driverCheck.rows[0]?.vehicle_details) {
-            console.log(`${colors.yellow}⚠️ Motorista sem veículo cadastrado${colors.reset}`);
-            socket.emit('ride_accepted_confirmation', {
-                success: false,
-                error: 'Vehicle required',
-                code: 'VEHICLE_REQUIRED'
+    
+    // =========================================
+    // ACCEPT RIDE - Motorista aceita corrida (VERSÃO FINAL CORRIGIDA - SEM UPDATED_AT)
+    // =========================================
+    socket.on('accept_ride', async (data) => {
+        console.log(`${colors.green}✅ [ACCEPT_RIDE] Motorista ${data.driver_id} aceitou corrida ${data.ride_id}${colors.reset}`);
+        console.log(`📦 Dados recebidos:`, data);
+        
+        try {
+            const pool = require('./src/config/db');
+            
+            // 1. Verificar se o motorista tem veículo cadastrado
+            const driverCheck = await pool.query(
+                'SELECT vehicle_details FROM users WHERE id = $1',
+                [data.driver_id]
+            );
+            
+            if (!driverCheck.rows[0]?.vehicle_details) {
+                console.log(`${colors.yellow}⚠️ Motorista sem veículo cadastrado${colors.reset}`);
+                socket.emit('ride_accepted_confirmation', { 
+                    success: false, 
+                    error: 'Vehicle required',
+                    code: 'VEHICLE_REQUIRED'
+                });
+                return;
+            }
+            
+            // 2. Verificar se a corrida ainda está disponível
+            const rideCheck = await pool.query(
+                'SELECT id, status, passenger_id FROM rides WHERE id = $1',
+                [data.ride_id]
+            );
+            
+            if (rideCheck.rows.length === 0) {
+                console.log(`${colors.yellow}⚠️ Corrida não encontrada${colors.reset}`);
+                socket.emit('ride_accepted_confirmation', { 
+                    success: false, 
+                    error: 'Ride not found'
+                });
+                return;
+            }
+            
+            if (rideCheck.rows[0].status !== 'searching') {
+                console.log(`${colors.yellow}⚠️ Corrida não está mais disponível. Status: ${rideCheck.rows[0].status}${colors.reset}`);
+                socket.emit('ride_accepted_confirmation', { 
+                    success: false, 
+                    error: 'Ride already taken',
+                    code: 'RIDE_TAKEN'
+                });
+                return;
+            }
+            
+            const passengerId = rideCheck.rows[0].passenger_id;
+            
+            // 3. Atualizar a corrida - SEM USAR updated_at
+            await pool.query(`
+                UPDATE rides 
+                SET driver_id = $1, 
+                    status = 'accepted', 
+                    accepted_at = NOW()
+                WHERE id = $2 AND status = 'searching'
+            `, [data.driver_id, data.ride_id]);
+            
+            console.log(`${colors.green}✅ Corrida ${data.ride_id} atualizada no banco${colors.reset}`);
+            
+            // 4. Buscar detalhes completos da corrida
+            const rideDetails = await pool.query(`
+                SELECT 
+                    r.*,
+                    json_build_object(
+                        'id', d.id,
+                        'name', d.name,
+                        'photo', d.photo,
+                        'phone', d.phone,
+                        'rating', d.rating,
+                        'vehicle_details', d.vehicle_details
+                    ) as driver_data,
+                    json_build_object(
+                        'id', p.id,
+                        'name', p.name,
+                        'photo', p.photo,
+                        'phone', p.phone,
+                        'rating', p.rating
+                    ) as passenger_data
+                FROM rides r
+                LEFT JOIN users d ON r.driver_id = d.id
+                LEFT JOIN users p ON r.passenger_id = p.id
+                WHERE r.id = $1
+            `, [data.ride_id]);
+            
+            const ride = rideDetails.rows[0];
+            console.log(`📦 Detalhes da corrida carregados:`, { 
+                ride_id: ride.id, 
+                passenger_id: ride.passenger_id,
+                driver_id: ride.driver_id,
+                status: ride.status
             });
-            return;
-        }
-
-        // 2. Atualizar a corrida no banco
-        const updateResult = await pool.query(`
-            UPDATE rides
-            SET driver_id = $1, status = 'accepted', accepted_at = NOW()
-            WHERE id = $2 AND status = 'searching'
-            RETURNING *
-        `, [data.driver_id, data.ride_id]);
-
-        if (updateResult.rows.length === 0) {
-            console.log(`${colors.yellow}⚠️ Corrida não está mais disponível${colors.reset}`);
-            socket.emit('ride_accepted_confirmation', {
-                success: false,
-                error: 'Ride no longer available',
-                code: 'RIDE_TAKEN'
+            
+            // 5. Emitir evento MATCH_FOUND para o PASSAGEIRO
+            io.to(`user_${ride.passenger_id}`).emit('match_found', {
+                ...ride,
+                message: 'Motorista a caminho!',
+                matched_at: new Date().toISOString()
             });
-            return;
+            console.log(`📤 [MATCH_FOUND] Enviado para passageiro ${ride.passenger_id}`);
+            
+            // 6. Emitir para a sala da corrida
+            io.to(`ride_${data.ride_id}`).emit('ride_accepted', ride);
+            
+            // 7. Fazer o motorista entrar na sala
+            socket.join(`ride_${data.ride_id}`);
+            
+            // 8. Fazer o passageiro entrar na sala (se estiver online)
+            const passengerSocket = Array.from(io.sockets.sockets.values())
+                .find(s => Array.from(s.rooms).includes(`user_${ride.passenger_id}`));
+            
+            if (passengerSocket) {
+                passengerSocket.join(`ride_${data.ride_id}`);
+                console.log(`🚪 Passageiro ${ride.passenger_id} entrou na sala ride_${data.ride_id}`);
+            }
+            
+            // 9. Notificar outros motoristas que a corrida foi aceita
+            io.to('drivers').emit('ride_taken', {
+                ride_id: data.ride_id,
+                taken_by: data.driver_id
+            });
+            
+            // 10. Confirmar para o motorista (COM DADOS COMPLETOS)
+            const confirmationPayload = { 
+                success: true, 
+                ride: ride,
+                message: 'Corrida aceita com sucesso!'
+            };
+            
+            console.log(`📤 [CONFIRMAÇÃO] Enviando para motorista ${data.driver_id}`);
+            socket.emit('ride_accepted_confirmation', confirmationPayload);
+            
+            console.log(`${colors.green}✅ Corrida ${data.ride_id} aceita e notificações enviadas!${colors.reset}`);
+            
+        } catch (e) {
+            console.error(`❌ Erro accept_ride:`, e.message);
+            console.error(e.stack);
+            socket.emit('ride_accepted_confirmation', { 
+                success: false, 
+                error: e.message 
+            });
         }
-
-        // 3. Buscar detalhes completos da corrida
-        const rideDetails = await pool.query(`
-            SELECT
-                r.*,
-                json_build_object(
-                    'id', d.id,
-                    'name', d.name,
-                    'photo', d.photo,
-                    'phone', d.phone,
-                    'rating', d.rating,
-                    'vehicle_details', d.vehicle_details
-                ) as driver_data,
-                json_build_object(
-                    'id', p.id,
-                    'name', p.name,
-                    'photo', p.photo,
-                    'phone', p.phone,
-                    'rating', p.rating
-                ) as passenger_data
-            FROM rides r
-            LEFT JOIN users d ON r.driver_id = d.id
-            LEFT JOIN users p ON r.passenger_id = p.id
-            WHERE r.id = $1
-        `, [data.ride_id]);
-
-        const ride = rideDetails.rows[0];
-        console.log(`📦 Detalhes da corrida:`, {
-            ride_id: ride.id,
-            passenger_id: ride.passenger_id,
-            driver_id: ride.driver_id,
-            status: ride.status
-        });
-
-        // 4. Emitir evento MATCH_FOUND para o PASSAGEIRO
-        io.to(`user_${ride.passenger_id}`).emit('match_found', {
-            ...ride,
-            message: 'Motorista a caminho!',
-            matched_at: new Date().toISOString()
-        });
-        console.log(`📤 [MATCH_FOUND] Enviado para passageiro ${ride.passenger_id}`);
-
-        // 5. Emitir para a sala da corrida
-        io.to(`ride_${data.ride_id}`).emit('ride_accepted', ride);
-
-        // 6. Fazer o motorista entrar na sala
-        socket.join(`ride_${data.ride_id}`);
-
-        // 7. Fazer o passageiro entrar na sala (se estiver online)
-        const passengerSocket = Array.from(io.sockets.sockets.values())
-            .find(s => Array.from(s.rooms).includes(`user_${ride.passenger_id}`));
-
-        if (passengerSocket) {
-            passengerSocket.join(`ride_${data.ride_id}`);
-            console.log(`🚪 Passageiro ${ride.passenger_id} entrou na sala ride_${data.ride_id}`);
-        }
-
-        // 8. Notificar outros motoristas que a corrida foi aceita
-        io.to('drivers').emit('ride_taken', {
-            ride_id: data.ride_id,
-            taken_by: data.driver_id
-        });
-
-        // 9. Confirmar para o motorista (COM DADOS COMPLETOS)
-        const confirmationPayload = {
-            success: true,
-            ride: ride,
-            message: 'Corrida aceita com sucesso!'
-        };
-
-        console.log(`📤 [CONFIRMAÇÃO] Enviando para motorista ${data.driver_id}`);
-        console.log(`📦 Payload:`, confirmationPayload);
-
-        socket.emit('ride_accepted_confirmation', confirmationPayload);
-
-        console.log(`${colors.green}✅ Corrida ${data.ride_id} aceita e notificações enviadas!${colors.reset}`);
-
-    } catch (e) {
-        console.error(`❌ Erro accept_ride:`, e.message);
-        console.error(e.stack);
-        socket.emit('ride_accepted_confirmation', {
-            success: false,
-            error: e.message
-        });
-    }
-});
-
+    });
+    
     // =========================================
     // JOIN RIDE - Entrar na sala da corrida
     // =========================================
@@ -386,7 +398,7 @@ socket.on('accept_ride', async (data) => {
         console.log(`🚪 [JOIN_RIDE] Socket ${socket.id} entrou na sala ride_${rideId}`);
         socket.emit('ride_joined', { success: true, ride_id: rideId });
     });
-
+    
     // =========================================
     // LEAVE RIDE - Sair da sala da corrida
     // =========================================
@@ -395,28 +407,28 @@ socket.on('accept_ride', async (data) => {
         socket.leave(`ride_${rideId}`);
         console.log(`🚪 [LEAVE_RIDE] Socket ${socket.id} saiu da sala ride_${rideId}`);
     });
-
+    
     // =========================================
     // SEND MESSAGE - Enviar mensagem no chat
     // =========================================
     socket.on('send_message', async (data) => {
         const { ride_id, sender_id, text } = data;
         if (!ride_id || !sender_id || !text) return;
-
+        
         try {
             const pool = require('./src/config/db');
-
+            
             const result = await pool.query(`
                 INSERT INTO chat_messages (ride_id, sender_id, text, created_at)
                 VALUES ($1, $2, $3, NOW())
                 RETURNING id, created_at
             `, [ride_id, sender_id, text]);
-
+            
             const senderInfo = await pool.query(
                 'SELECT name, photo FROM users WHERE id = $1',
                 [sender_id]
             );
-
+            
             const message = {
                 id: result.rows[0].id,
                 ride_id: ride_id,
@@ -426,56 +438,56 @@ socket.on('accept_ride', async (data) => {
                 sender_name: senderInfo.rows[0]?.name || 'Usuário',
                 sender_photo: senderInfo.rows[0]?.photo
             };
-
+            
             io.to(`ride_${ride_id}`).emit('receive_message', message);
-
+            
         } catch (e) {
             console.error(`❌ Erro send_message:`, e.message);
         }
     });
-
+    
     // =========================================
     // TYPING INDICATOR - Indicador de digitação
     // =========================================
     socket.on('typing_indicator', (data) => {
         const { ride_id, user_id, is_typing } = data;
         if (!ride_id || !user_id) return;
-
+        
         socket.to(`ride_${ride_id}`).emit('user_typing', {
             user_id: user_id,
             is_typing: is_typing
         });
     });
-
+    
     // =========================================
     // DISCONNECT - Desconexão
     // =========================================
     socket.on('disconnect', async () => {
         console.log(`${colors.yellow}🔌 [DISCONNECT] Socket ${socket.id}${colors.reset}`);
-
+        
         try {
             const pool = require('./src/config/db');
-
+            
             // Buscar driver por este socket
             const result = await pool.query(
                 'SELECT driver_id FROM driver_positions WHERE socket_id = $1',
                 [socket.id]
             );
-
+            
             if (result.rows.length > 0) {
                 const driverId = result.rows[0].driver_id;
-
+                
                 await pool.query(`
-                    UPDATE driver_positions
+                    UPDATE driver_positions 
                     SET status = 'offline', socket_id = NULL, last_update = NOW()
                     WHERE driver_id = $1
                 `, [driverId]);
-
+                
                 await pool.query(`
                     UPDATE users SET is_online = false, last_seen = NOW()
                     WHERE id = $1
                 `, [driverId]);
-
+                
                 console.log(`${colors.yellow}🚫 Driver ${driverId} desconectado${colors.reset}`);
             }
         } catch (e) {
@@ -511,31 +523,31 @@ app.use('/uploads', express.static(path.join(__dirname, uploadPath)));
 app.get('/api/debug/fix-drivers', async (req, res) => {
     try {
         const pool = require('./src/config/db');
-
+        
         await pool.query('BEGIN');
-
+        
         // Adicionar coluna last_seen se não existir
         await pool.query(`
-            ALTER TABLE users
+            ALTER TABLE users 
             ADD COLUMN IF NOT EXISTS last_seen TIMESTAMP DEFAULT NOW()
         `);
-
+        
         // Limpar dados inconsistentes
         await pool.query('DELETE FROM driver_positions');
         await pool.query("UPDATE users SET is_online = false WHERE role = 'driver'");
-
+        
         // Recriar posições
         await pool.query(`
             INSERT INTO driver_positions (driver_id, lat, lng, status, last_update)
             SELECT id, -8.8399, 13.2894, 'offline', NOW() - INTERVAL '1 hour'
             FROM users WHERE role = 'driver'
         `);
-
+        
         await pool.query('COMMIT');
-
-        res.json({
-            success: true,
-            message: 'Banco de dados corrigido! Peça aos motoristas para fazer login novamente.'
+        
+        res.json({ 
+            success: true, 
+            message: 'Banco de dados corrigido! Peça aos motoristas para fazer login novamente.' 
         });
     } catch (error) {
         await pool.query('ROLLBACK');
@@ -543,12 +555,85 @@ app.get('/api/debug/fix-drivers', async (req, res) => {
     }
 });
 
-// DIAGNÓSTICO - Ver motoristas (VERSÃO CORRIGIDA - SEM FUSO HORÁRIO)
+// ROTA DE CORREÇÃO DE TRIGGERS - EXECUTE UMA VEZ
+app.get('/api/debug/fix-triggers', async (req, res) => {
+    try {
+        const pool = require('./src/config/db');
+        
+        // 1. Remover triggers problemáticas
+        await pool.query('DROP TRIGGER IF EXISTS update_rides_updated_at ON rides;');
+        await pool.query('DROP TRIGGER IF EXISTS rides_updated_at ON rides;');
+        await pool.query('DROP TRIGGER IF EXISTS update_rides_timestamp ON rides;');
+        await pool.query('DROP TRIGGER IF EXISTS rides_timestamp ON rides;');
+        
+        // 2. Remover funções problemáticas
+        await pool.query('DROP FUNCTION IF EXISTS update_updated_at_column() CASCADE;');
+        await pool.query('DROP FUNCTION IF EXISTS update_timestamp() CASCADE;');
+        
+        // 3. Adicionar coluna updated_at se não existir
+        await pool.query(`
+            ALTER TABLE rides 
+            ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()
+        `);
+        
+        // 4. Criar função correta
+        await pool.query(`
+            CREATE OR REPLACE FUNCTION update_updated_at_column()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                NEW.updated_at = NOW();
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+        `);
+        
+        // 5. Criar trigger apenas se a coluna existe
+        await pool.query(`
+            DO $$
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 
+                    FROM information_schema.columns 
+                    WHERE table_name = 'rides' 
+                    AND column_name = 'updated_at'
+                ) THEN
+                    CREATE TRIGGER update_rides_updated_at
+                        BEFORE UPDATE ON rides
+                        FOR EACH ROW
+                        EXECUTE FUNCTION update_updated_at_column();
+                END IF;
+            END $$;
+        `);
+        
+        // 6. Verificar se a correção funcionou
+        const checkTrigger = await pool.query(`
+            SELECT tgname 
+            FROM pg_trigger 
+            WHERE tgrelid = 'rides'::regclass 
+            AND tgname = 'update_rides_updated_at'
+        `);
+        
+        res.json({
+            success: true,
+            message: 'Triggers corrigidas com sucesso!',
+            trigger_created: checkTrigger.rows.length > 0,
+            timestamp: new Date().toISOString()
+        });
+        
+    } catch (error) {
+        console.error('❌ Erro ao corrigir triggers:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+});
+
+// DIAGNÓSTICO - Ver motoristas
 app.get('/api/debug/drivers-detailed', async (req, res) => {
     try {
         const pool = require('./src/config/db');
-
-        // Buscar dados BRUTOS do banco, sem conversão de timezone
+        
         const result = await pool.query(`
             SELECT
                 dp.driver_id,
@@ -564,30 +649,29 @@ app.get('/api/debug/drivers-detailed', async (req, res) => {
             WHERE u.role = 'driver'
             ORDER BY dp.last_update DESC NULLS LAST
         `);
-
-        // Calcular online em tempo real
+        
         const now = new Date();
         const twoMinutesAgo = new Date(now.getTime() - 2 * 60 * 1000);
-
+        
         const driversWithStatus = result.rows.map(driver => {
             let isTrulyOnline = false;
-
+            
             if (driver.socket_id && driver.status === 'online' && driver.last_update) {
                 const lastUpdate = new Date(driver.last_update);
                 const diffSeconds = (now - lastUpdate) / 1000;
-                isTrulyOnline = diffSeconds < 120; // menos de 2 minutos
+                isTrulyOnline = diffSeconds < 120;
             }
-
+            
             return {
                 ...driver,
                 truly_online: isTrulyOnline,
-                seconds_since_update: driver.last_update ?
+                seconds_since_update: driver.last_update ? 
                     Math.round((now - new Date(driver.last_update)) / 1000) : null
             };
         });
-
+        
         const trulyOnline = driversWithStatus.filter(d => d.truly_online).length;
-
+        
         res.json({
             success: true,
             timestamp: now.toISOString(),
@@ -597,9 +681,44 @@ app.get('/api/debug/drivers-detailed', async (req, res) => {
             },
             drivers: driversWithStatus
         });
-
+        
     } catch (error) {
-        console.error('Erro no debug:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Rota para verificar o estado atual das triggers
+app.get('/api/debug/check-triggers', async (req, res) => {
+    try {
+        const pool = require('./src/config/db');
+        
+        const triggers = await pool.query(`
+            SELECT 
+                tgname AS trigger_name,
+                pg_get_triggerdef(oid) AS definition
+            FROM pg_trigger
+            WHERE tgrelid = 'rides'::regclass
+        `);
+        
+        const columns = await pool.query(`
+            SELECT 
+                column_name,
+                data_type,
+                is_nullable
+            FROM information_schema.columns
+            WHERE table_name = 'rides'
+            ORDER BY ordinal_position
+        `);
+        
+        res.json({
+            success: true,
+            triggers: triggers.rows,
+            columns: columns.rows,
+            has_updated_at: columns.rows.some(c => c.column_name === 'updated_at'),
+            timestamp: new Date().toISOString()
+        });
+        
+    } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
@@ -608,14 +727,14 @@ app.get('/api/debug/drivers-detailed', async (req, res) => {
 app.post('/api/debug/force-online/:driverId', async (req, res) => {
     const { driverId } = req.params;
     const { socketId } = req.body;
-
+    
     if (!socketId) {
         return res.status(400).json({ error: 'socketId é obrigatório' });
     }
-
+    
     try {
         const pool = require('./src/config/db');
-
+        
         await pool.query(`
             INSERT INTO driver_positions (driver_id, lat, lng, socket_id, status, last_update)
             VALUES ($1, -8.8399, 13.2894, $2, 'online', NOW())
@@ -624,15 +743,15 @@ app.post('/api/debug/force-online/:driverId', async (req, res) => {
                 status = 'online',
                 last_update = NOW()
         `, [driverId, socketId]);
-
+        
         await pool.query(`
             UPDATE users SET is_online = true, last_seen = NOW()
             WHERE id = $1
         `, [driverId]);
-
-        res.json({
-            success: true,
-            message: `Driver ${driverId} forçado a online com socket ${socketId}`
+        
+        res.json({ 
+            success: true, 
+            message: `Driver ${driverId} forçado a online com socket ${socketId}` 
         });
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -652,6 +771,8 @@ app.get('/admin', (req, res) => {
             <ul>
                 <li><a href="/api/debug/drivers-detailed">Ver motoristas</a></li>
                 <li><a href="/api/debug/fix-drivers">Corrigir banco de dados</a></li>
+                <li><a href="/api/debug/fix-triggers">Corrigir triggers</a></li>
+                <li><a href="/api/debug/check-triggers">Verificar triggers</a></li>
             </ul>
         </body>
         </html>
@@ -666,6 +787,8 @@ app.get('/', (req, res) => {
         timestamp: new Date().toISOString(),
         endpoints: {
             fix_drivers: '/api/debug/fix-drivers',
+            fix_triggers: '/api/debug/fix-triggers',
+            check_triggers: '/api/debug/check-triggers',
             drivers_detailed: '/api/debug/drivers-detailed',
             force_online: '/api/debug/force-online/:driverId'
         }
@@ -686,7 +809,7 @@ app.use(globalErrorHandler);
 (async function startServer() {
     try {
         console.clear();
-
+        
         console.log(colors.cyan + '╔══════════════════════════════════════════════════════════════╗');
         console.log('║                   AOTRAVEL TERMINAL v11.0.0                   ║');
         console.log('╚══════════════════════════════════════════════════════════════╝' + colors.reset);
@@ -696,27 +819,11 @@ app.use(globalErrorHandler);
         await bootstrapDatabase();
         log.success('Banco de dados OK');
 
-        // Verificar se a coluna last_seen existe
-        const pool = require('./src/config/db');
-        const checkColumn = await pool.query(`
-            SELECT column_name FROM information_schema.columns
-            WHERE table_name = 'users' AND column_name = 'last_seen'
-        `);
-
-        if (checkColumn.rows.length === 0) {
-            log.warn('Coluna last_seen não encontrada. Adicionando...');
-            await pool.query('ALTER TABLE users ADD COLUMN last_seen TIMESTAMP DEFAULT NOW()');
-            log.success('Coluna last_seen adicionada');
-        } else {
-            log.success('Coluna last_seen OK');
-        }
-
         const PORT = process.env.PORT || appConfig.SERVER?.PORT || 3000;
         server.listen(PORT, '0.0.0.0', () => {
             console.log();
             log.success(`Servidor rodando na porta ${PORT}`);
-            log.info(`Debug: http://localhost:${PORT}/api/debug/drivers-detailed`);
-            log.info(`Correção: http://localhost:${PORT}/api/debug/fix-drivers`);
+            log.info(`Correção de triggers: http://localhost:${PORT}/api/debug/fix-triggers`);
             console.log();
         });
 
