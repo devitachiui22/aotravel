@@ -1,18 +1,23 @@
 /**
  * =================================================================================================
- * 🚕 AOTRAVEL SERVER PRO - RIDE LIFECYCLE CONTROLLER (TITANIUM CORE V8.2.0 - CORRIGIDO)
+ * 🚕 AOTRAVEL SERVER PRO - RIDE LIFECYCLE CONTROLLER (TITANIUM CORE V8.2.0 - FINAL)
  * =================================================================================================
  *
- * ✅ CORREÇÃO APLICADA:
- *   - Removida referência a "updated_at" em todas as queries
- *   - Versão final sem triggers problemáticas
+ * ✅ CORREÇÕES APLICADAS:
+ *   - Removida referência a "updated_at" em todas as queries que causavam erro
+ *   - Queries otimizadas sem triggers problemáticas
+ *   - Sistema de logging profissional integrado
+ *   - Dispatch com níveis de raio progressivos
+ *   - Notificações em tempo real completas
+ *   - Gestão de pagamentos por carteira/dinheiro
+ *   - Estatísticas e performance para motoristas
+ *   - Avaliações e feedback
  */
 
 const pool = require('../config/db');
 const fs = require('fs');
 const path = require('path');
-const { getDistance, getFullRideDetails, logSystem, logError, generateRef } = require('../utils/helpers');
-const SYSTEM_CONFIG = require('../config/appConfig');
+const { getDistance, logError, generateRef } = require('../utils/helpers');
 
 // =================================================================================================
 // 📊 SISTEMA DE LOGGING PROFISSIONAL
@@ -389,16 +394,16 @@ exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => 
             u.rating,
             u.photo,
             u.is_blocked,
-            CASE 
+            CASE
                 WHEN dp.lat != 0 AND dp.lng != 0 THEN
                     (6371 * acos(
-                        cos(radians($1)) * 
-                        cos(radians(dp.lat)) * 
-                        cos(radians(dp.lng) - radians($2)) + 
-                        sin(radians($1)) * 
+                        cos(radians($1)) *
+                        cos(radians(dp.lat)) *
+                        cos(radians(dp.lng) - radians($2)) +
+                        sin(radians($1)) *
                         sin(radians(dp.lat))
                     ))
-                ELSE 999999 
+                ELSE 999999
             END as distance
         FROM driver_positions dp
         JOIN users u ON dp.driver_id = u.id
@@ -409,25 +414,25 @@ exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => 
             AND u.is_blocked = false
             AND u.role = 'driver'
             AND (
-                (dp.lat != 0 AND dp.lng != 0 AND 
+                (dp.lat != 0 AND dp.lng != 0 AND
                     (6371 * acos(
-                        cos(radians($1)) * 
-                        cos(radians(dp.lat)) * 
-                        cos(radians(dp.lng) - radians($2)) + 
-                        sin(radians($1)) * 
+                        cos(radians($1)) *
+                        cos(radians(dp.lat)) *
+                        cos(radians(dp.lng) - radians($2)) +
+                        sin(radians($1)) *
                         sin(radians(dp.lat))
                     )) <= $3
                 )
                 ${includeGpsZero ? "OR (dp.lat = 0 AND dp.lng = 0)" : ""}
             )
-        ORDER BY 
-            CASE 
-                WHEN dp.lat = 0 OR dp.lng = 0 THEN 999999 
+        ORDER BY
+            CASE
+                WHEN dp.lat = 0 OR dp.lng = 0 THEN 999999
                 ELSE (6371 * acos(
-                    cos(radians($1)) * 
-                    cos(radians(dp.lat)) * 
-                    cos(radians(dp.lng) - radians($2)) + 
-                    sin(radians($1)) * 
+                    cos(radians($1)) *
+                    cos(radians(dp.lat)) *
+                    cos(radians(dp.lng) - radians($2)) +
+                    sin(radians($1)) *
                     sin(radians(dp.lat))
                 ))
             END ASC NULLS LAST,
@@ -437,7 +442,7 @@ exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => 
 
     try {
         const result = await pool.query(query, [lat, lng, radiusKm]);
-        
+
         if (result.rows.length > 0) {
             console.log(`✅ [FIND_DRIVERS] Encontrados ${result.rows.length} motoristas`);
             result.rows.forEach(d => {
@@ -446,7 +451,7 @@ exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => 
         } else {
             console.log(`⚠️ [FIND_DRIVERS] Nenhum motorista encontrado para (${lat}, ${lng}) raio ${radiusKm}km`);
         }
-        
+
         return result.rows;
     } catch (e) {
         console.error(`❌ [FIND_DRIVERS] Erro na query:`, e.message);
@@ -455,7 +460,39 @@ exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => 
 };
 
 // =================================================================================================
-// 3. ACEITE DE CORRIDA - VERSÃO FINAL SEM UPDATED_AT
+// 3. FUNÇÃO AUXILIAR: Obter detalhes completos da corrida
+// =================================================================================================
+
+async function getFullRideDetails(rideId) {
+    const result = await pool.query(`
+        SELECT
+            r.*,
+            json_build_object(
+                'id', d.id,
+                'name', d.name,
+                'photo', d.photo,
+                'phone', d.phone,
+                'rating', d.rating,
+                'vehicle_details', d.vehicle_details
+            ) as driver_data,
+            json_build_object(
+                'id', p.id,
+                'name', p.name,
+                'photo', p.photo,
+                'phone', p.phone,
+                'rating', p.rating
+            ) as passenger_data
+        FROM rides r
+        LEFT JOIN users d ON r.driver_id = d.id
+        LEFT JOIN users p ON r.passenger_id = p.id
+        WHERE r.id = $1
+    `, [rideId]);
+
+    return result.rows[0];
+}
+
+// =================================================================================================
+// 4. ACEITE DE CORRIDA - VERSÃO FINAL SEM UPDATED_AT
 // =================================================================================================
 
 exports.acceptRide = async (req, res) => {
@@ -480,9 +517,6 @@ exports.acceptRide = async (req, res) => {
     try {
         await client.query('BEGIN');
 
-        // =================================================================
-        // ETAPA 1: Lock na linha da corrida (FOR UPDATE)
-        // =================================================================
         const rideRes = await client.query(
             "SELECT id, status, passenger_id, driver_id FROM rides WHERE id = $1 FOR UPDATE",
             [ride_id]
@@ -496,9 +530,6 @@ exports.acceptRide = async (req, res) => {
 
         const ride = rideRes.rows[0];
 
-        // =================================================================
-        // ETAPA 2: Validações
-        // =================================================================
         if (ride.status !== 'searching') {
             await client.query('ROLLBACK');
             logger.warn('ACCEPT', `Corrida #${ride_id} já foi aceita por outro motorista. Status: ${ride.status}`);
@@ -515,7 +546,6 @@ exports.acceptRide = async (req, res) => {
             return res.status(400).json({ error: "Você não pode aceitar sua própria corrida." });
         }
 
-        // Verificar veículo
         const driverRes = await client.query(
             "SELECT vehicle_details FROM users WHERE id = $1",
             [actualDriverId]
@@ -530,9 +560,6 @@ exports.acceptRide = async (req, res) => {
             });
         }
 
-        // =================================================================
-        // ETAPA 3: Atualizar corrida - SEM UPDATED_AT
-        // =================================================================
         await client.query(
             `UPDATE rides SET
                 driver_id = $1,
@@ -547,12 +574,8 @@ exports.acceptRide = async (req, res) => {
         const duration = Date.now() - startTime;
         logger.success('ACCEPT', `Corrida #${ride_id} aceita por motorista ${actualDriverId} em ${duration}ms`);
 
-        // =================================================================
-        // ETAPA 4: Buscar detalhes completos
-        // =================================================================
         const fullRide = await getFullRideDetails(ride_id);
 
-        // Dados do Motorista
         const driverData = {
             name: req.user.name,
             photo: req.user.photo,
@@ -573,11 +596,6 @@ exports.acceptRide = async (req, res) => {
             message: "Motorista a caminho do ponto de embarque!"
         };
 
-        // =================================================================
-        // ETAPA 5: Notificações
-        // =================================================================
-
-        // Notificar passageiro
         try {
             req.io.to(`user_${fullRide.passenger_id}`).emit('match_found', matchPayload);
             logger.debug('ACCEPT', `Passageiro ${fullRide.passenger_id} notificado`);
@@ -585,14 +603,12 @@ exports.acceptRide = async (req, res) => {
             logger.error('ACCEPT', `Erro ao notificar passageiro: ${e.message}`);
         }
 
-        // Notificar sala da corrida
         try {
             req.io.to(`ride_${ride_id}`).emit('ride_accepted', matchPayload);
         } catch (e) {
             logger.error('ACCEPT', `Erro ao notificar sala: ${e.message}`);
         }
 
-        // Notificar outros motoristas que a corrida foi tomada
         try {
             const otherDriversRes = await client.query(`
                 SELECT socket_id, driver_id
@@ -621,14 +637,13 @@ exports.acceptRide = async (req, res) => {
             logger.error('ACCEPT', `Erro ao notificar outros motoristas: ${e.message}`);
         }
 
-        // CONFIRMAÇÃO PARA O MOTORISTA
         try {
             const confirmationPayload = {
                 success: true,
                 ride: matchPayload,
                 message: "Corrida aceita com sucesso!"
             };
-            
+
             logger.debug('ACCEPT', `Enviando confirmação para motorista ${actualDriverId}`);
             req.io.to(`user_${actualDriverId}`).emit('ride_accepted_confirmation', confirmationPayload);
         } catch (e) {
@@ -666,7 +681,7 @@ exports.acceptRide = async (req, res) => {
 };
 
 // =================================================================================================
-// 4. ATUALIZAR STATUS
+// 5. ATUALIZAR STATUS (ARRIVED / PICKED_UP)
 // =================================================================================================
 
 exports.updateStatus = async (req, res) => {
@@ -710,16 +725,21 @@ exports.updateStatus = async (req, res) => {
             newStatus = 'ongoing';
         }
 
-        const result = await client.query(
-            `UPDATE rides SET
-                status = $1,
-                ${status === 'arrived' ? 'arrived_at = NOW(),' : ''}
-                ${status === 'picked_up' ? 'started_at = NOW(),' : ''}
-                updated_at = NOW()
-             WHERE id = $2
-             RETURNING *`,
-            [newStatus, ride_id]
-        );
+        let updateQuery = `UPDATE rides SET status = $1`;
+        const params = [newStatus];
+        let paramCounter = 2;
+
+        if (status === 'arrived') {
+            updateQuery += `, arrived_at = NOW()`;
+        }
+        if (status === 'picked_up') {
+            updateQuery += `, started_at = NOW()`;
+        }
+
+        updateQuery += ` WHERE id = $${paramCounter} RETURNING *`;
+        params.push(ride_id);
+
+        const result = await client.query(updateQuery, params);
 
         await client.query('COMMIT');
 
@@ -776,7 +796,7 @@ exports.startRide = async (req, res) => {
 };
 
 // =================================================================================================
-// 5. FINALIZAR CORRIDA
+// 6. FINALIZAR CORRIDA
 // =================================================================================================
 
 exports.completeRide = async (req, res) => {
@@ -907,8 +927,7 @@ exports.completeRide = async (req, res) => {
                 completed_at = NOW(),
                 rating = COALESCE($3, rating),
                 feedback = COALESCE($4, feedback),
-                distance_km = COALESCE($5, distance_km),
-                updated_at = NOW()
+                distance_km = COALESCE($5, distance_km)
              WHERE id = $6`,
             [finalAmount, method, rating || 0, feedback || '', distance_traveled || ride.distance_km, ride_id]
         );
@@ -1018,7 +1037,7 @@ exports.completeRide = async (req, res) => {
 };
 
 // =================================================================================================
-// 6. CANCELAR CORRIDA
+// 7. CANCELAR CORRIDA
 // =================================================================================================
 
 exports.cancelRide = async (req, res) => {
@@ -1063,8 +1082,7 @@ exports.cancelRide = async (req, res) => {
                 status = 'cancelled',
                 cancelled_at = NOW(),
                 cancelled_by = $1,
-                cancellation_reason = $2,
-                updated_at = NOW()
+                cancellation_reason = $2
              WHERE id = $3
              RETURNING *`,
             [role, reason || 'Cancelado pelo usuário', ride_id]
@@ -1139,7 +1157,7 @@ exports.cancelRide = async (req, res) => {
 };
 
 // =================================================================================================
-// 7. HISTÓRICO E DETALHES
+// 8. HISTÓRICO E DETALHES
 // =================================================================================================
 
 exports.getHistory = async (req, res) => {
@@ -1262,7 +1280,7 @@ exports.getRideDetails = async (req, res) => {
 };
 
 // =================================================================================================
-// 8. ESTATÍSTICAS E PERFORMANCE
+// 9. ESTATÍSTICAS E PERFORMANCE
 // =================================================================================================
 
 exports.getDriverPerformance = async (req, res) => {
@@ -1446,6 +1464,10 @@ exports.getPassengerStats = async (req, res) => {
     }
 };
 
+// =================================================================================================
+// 10. AVALIAÇÃO DA CORRIDA
+// =================================================================================================
+
 exports.rateRide = async (req, res) => {
     const { ride_id } = req.params;
     const { rating, feedback } = req.body;
@@ -1464,8 +1486,7 @@ exports.rateRide = async (req, res) => {
         const result = await client.query(
             `UPDATE rides SET
                 rating = $1,
-                feedback = $2,
-                updated_at = NOW()
+                feedback = $2
              WHERE id = $3
              AND passenger_id = $4
              AND status = 'completed'
@@ -1521,7 +1542,7 @@ exports.rateRide = async (req, res) => {
 };
 
 // =================================================================================================
-// 9. UTILITÁRIOS E DIAGNÓSTICO
+// 11. UTILITÁRIOS E DIAGNÓSTICO
 // =================================================================================================
 
 exports.checkSocketHealth = async (req, res) => {
