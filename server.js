@@ -256,109 +256,114 @@ io.on('connection', (socket) => {
         }
     });
 
-    // =========================================
-    // ACCEPT RIDE - Motorista aceita corrida (VERSÃO FINAL CORRIGIDA)
-    // =========================================
-    socket.on('accept_ride', async (data) => {
-        console.log(`${colors.green}✅ [ACCEPT_RIDE] Motorista ${data.driver_id} aceitou corrida ${data.ride_id}${colors.reset}`);
+// =========================================
+// ACCEPT RIDE - Motorista aceita corrida (VERSÃO FINAL CORRIGIDA)
+// =========================================
+socket.on('accept_ride', async (data) => {
+    console.log(`${colors.green}✅ [ACCEPT_RIDE] Motorista ${data.driver_id} aceitou corrida ${data.ride_id}${colors.reset}`);
 
-        try {
-            const pool = require('./src/config/db');
+    try {
+        const pool = require('./src/config/db');
 
-            const driverCheck = await pool.query(
-                'SELECT vehicle_details FROM users WHERE id = $1',
-                [data.driver_id]
-            );
+        // 1. Verificar se o motorista tem veículo cadastrado
+        const driverCheck = await pool.query(
+            'SELECT vehicle_details FROM users WHERE id = $1',
+            [data.driver_id]
+        );
 
-            if (!driverCheck.rows[0]?.vehicle_details) {
-                socket.emit('ride_accepted_confirmation', {
-                    success: false,
-                    error: 'Vehicle required',
-                    code: 'VEHICLE_REQUIRED'
-                });
-                return;
-            }
-
-            const rideCheck = await pool.query(
-                'SELECT id, status, passenger_id FROM rides WHERE id = $1',
-                [data.ride_id]
-            );
-
-            if (rideCheck.rows.length === 0) {
-                socket.emit('ride_accepted_confirmation', {
-                    success: false,
-                    error: 'Ride not found'
-                });
-                return;
-            }
-
-            if (rideCheck.rows[0].status !== 'searching') {
-                socket.emit('ride_accepted_confirmation', {
-                    success: false,
-                    error: 'Ride already taken',
-                    code: 'RIDE_TAKEN'
-                });
-                return;
-            }
-
-            const passengerId = rideCheck.rows[0].passenger_id;
-
-            await pool.query(`
-                UPDATE rides
-                SET driver_id = $1,
-                    status = 'accepted',
-                    accepted_at = NOW()
-                WHERE id = $2 AND status = 'searching'
-            `, [data.driver_id, data.ride_id]);
-
-            // Buscar detalhes completos da corrida usando a função helper
-            const fullRide = await getFullRideDetails(data.ride_id);
-
-            if (!fullRide) {
-                console.error(`❌ Erro ao buscar detalhes da corrida ${data.ride_id}`);
-                return;
-            }
-
-            // 🔥 CORREÇÃO: Emitir APENAS 'ride_accepted' para AMBOS os participantes
-            io.to(`user_${passengerId}`).emit('ride_accepted', fullRide);
-            io.to(`user_${data.driver_id}`).emit('ride_accepted', fullRide);
-            
-            // Emitir para a sala da corrida também
-            io.to(`ride_${data.ride_id}`).emit('ride_accepted', fullRide);
-
-            // Fazer o motorista entrar na sala
-            socket.join(`ride_${data.ride_id}`);
-
-            // Fazer o passageiro entrar na sala (se estiver online)
-            const passengerSocket = Array.from(io.sockets.sockets.values())
-                .find(s => Array.from(s.rooms).includes(`user_${passengerId}`));
-
-            if (passengerSocket) {
-                passengerSocket.join(`ride_${data.ride_id}`);
-                console.log(`🚪 Passageiro ${passengerId} entrou na sala ride_${data.ride_id}`);
-            }
-
-            // Notificar outros motoristas que a corrida foi aceita
-            io.to('drivers').emit('ride_taken', {
-                ride_id: data.ride_id,
-                taken_by: data.driver_id
-            });
-
-            socket.emit('ride_accepted_confirmation', {
-                success: true,
-                ride: fullRide
-            });
-
-            console.log(`${colors.green}✅ Corrida ${data.ride_id} aceita e notificações enviadas!${colors.reset}`);
-
-        } catch (e) {
-            console.error(`❌ Erro accept_ride:`, e.message);
+        if (!driverCheck.rows[0]?.vehicle_details) {
             socket.emit('ride_accepted_confirmation', {
                 success: false,
-                error: e.message
+                error: 'Vehicle required',
+                code: 'VEHICLE_REQUIRED'
             });
+            return;
         }
-    });
+
+        // 2. Verificar se a corrida ainda está disponível
+        const rideCheck = await pool.query(
+            'SELECT id, status, passenger_id FROM rides WHERE id = $1',
+            [data.ride_id]
+        );
+
+        if (rideCheck.rows.length === 0) {
+            socket.emit('ride_accepted_confirmation', {
+                success: false,
+                error: 'Ride not found'
+            });
+            return;
+        }
+
+        if (rideCheck.rows[0].status !== 'searching') {
+            socket.emit('ride_accepted_confirmation', {
+                success: false,
+                error: 'Ride already taken',
+                code: 'RIDE_TAKEN'
+            });
+            return;
+        }
+
+        const passengerId = rideCheck.rows[0].passenger_id;
+
+        // 3. Atualizar a corrida
+        await pool.query(`
+            UPDATE rides
+            SET driver_id = $1,
+                status = 'accepted',
+                accepted_at = NOW()
+            WHERE id = $2 AND status = 'searching'
+        `, [data.driver_id, data.ride_id]);
+
+        // 4. Buscar detalhes completos da corrida
+        const { getFullRideDetails } = require('./src/utils/helpers');
+        const fullRide = await getFullRideDetails(data.ride_id);
+
+        if (!fullRide) {
+            console.error(`❌ Erro ao buscar detalhes da corrida ${data.ride_id}`);
+            return;
+        }
+
+        // 🔥 CORREÇÃO CRÍTICA: Emitir APENAS 'ride_accepted' (NEM 'match_found')
+        io.to(`user_${passengerId}`).emit('ride_accepted', fullRide);
+        io.to(`user_${data.driver_id}`).emit('ride_accepted', fullRide);
+
+        // Emitir para a sala da corrida também
+        io.to(`ride_${data.ride_id}`).emit('ride_accepted', fullRide);
+
+        // 5. Fazer o motorista entrar na sala
+        socket.join(`ride_${data.ride_id}`);
+
+        // 6. Fazer o passageiro entrar na sala (se estiver online)
+        const passengerSocket = Array.from(io.sockets.sockets.values())
+            .find(s => Array.from(s.rooms).includes(`user_${passengerId}`));
+
+        if (passengerSocket) {
+            passengerSocket.join(`ride_${data.ride_id}`);
+            console.log(`🚪 Passageiro ${passengerId} entrou na sala ride_${data.ride_id}`);
+        }
+
+        // 7. Notificar outros motoristas que a corrida foi aceita
+        io.to('drivers').emit('ride_taken', {
+            ride_id: data.ride_id,
+            taken_by: data.driver_id
+        });
+
+        // 8. Confirmar para o motorista
+        socket.emit('ride_accepted_confirmation', {
+            success: true,
+            ride: fullRide
+        });
+
+        console.log(`${colors.green}✅ Corrida ${data.ride_id} aceita e notificações enviadas!${colors.reset}`);
+
+    } catch (e) {
+        console.error(`❌ Erro accept_ride:`, e.message);
+        socket.emit('ride_accepted_confirmation', {
+            success: false,
+            error: e.message
+        });
+    }
+});
 
     // =========================================
     // DRIVER ARRIVED - Motorista chegou ao local
