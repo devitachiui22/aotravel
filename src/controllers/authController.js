@@ -12,11 +12,12 @@
  *            - Provisionamento Automático de Carteira (Titanium Wallet) no Cadastro.
  *
  * ✅ CORREÇÕES APLICADAS:
- * 1. Bug crítico na criação de conta (ReferenceError deviceInfo) resolvido.
- * 2. Transação atômica no cadastro para garantir que Usuário, Sessão e Carteira
+ * 1. ✅ Bug crítico na criação de conta (ReferenceError deviceInfo) resolvido.
+ * 2. ✅ Transação atômica no cadastro para garantir que Usuário, Sessão e Carteira
  *    sejam criados de forma indivisível.
- * 3. Sanitização agressiva de telefones para padrão Angola (9 dígitos).
- * 4. Validação de sessão no Splash Screen reforçada com update de Heartbeat.
+ * 3. ✅ Sanitização agressiva de telefones para padrão Angola (9 dígitos).
+ * 4. ✅ Validação de sessão no Splash Screen reforçada com update de Heartbeat.
+ * 5. ✅ CORREÇÃO CRÍTICA: Regex de email inválida consertada.
  *
  * STATUS: PRODUCTION READY - FULL VERSION
  * =================================================================================================
@@ -32,23 +33,37 @@ const SYSTEM_CONFIG = require('../config/appConfig');
 // 0. HELPERS PRIVADOS E UTILITÁRIOS DE SEGURANÇA
 // =================================================================================================
 
+/**
+ * Validação de email usando regex mais robusto e seguro
+ * ✅ CORREÇÃO: Regex inválido consertado
+ */
 const isValidEmail = (email) => {
-    const re = /^+@+\.{2,6}$/;
+    const re = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
     return re.test(email);
 };
 
+/**
+ * Sanitiza número de telefone para padrão Angola (9 dígitos)
+ * Remove códigos de país e zeros à esquerda
+ */
 const sanitizePhone = (phone) => {
     if (!phone) return null;
     let clean = phone.replace(/\D/g, '');
 
+    // Remove código de Angola (+244) se presente
     if (clean.startsWith('244') && clean.length > 9) clean = clean.substring(3);
+    // Remove zero inicial se presente
     if (clean.startsWith('0') && clean.length > 9) clean = clean.substring(1);
 
+    // Valida se tem exatamente 9 dígitos
     if (clean.length !== 9) return null;
 
     return clean;
 };
 
+/**
+ * Cria uma sessão persistente para o usuário
+ */
 async function createPersistentSession(userId, deviceInfo = {}, ipAddress = null, fcmToken = null) {
     const client = await pool.connect();
     try {
@@ -58,22 +73,25 @@ async function createPersistentSession(userId, deviceInfo = {}, ipAddress = null
         const expiresAt = new Date();
         expiresAt.setDate(expiresAt.getDate() + (SYSTEM_CONFIG.SECURITY.SESSION_EXPIRY_DAYS || 365));
 
+        // Insere a sessão
         await client.query(
             `INSERT INTO user_sessions (user_id, session_token, device_info, ip_address, fcm_token, expires_at, is_active, created_at, last_activity)
              VALUES ($1, $2, $3, $4, $5, $6, true, NOW(), NOW())`,
+            [userId, sessionToken, deviceInfo || {}, ipAddress, fcmToken, expiresAt]
         );
 
-        const updateFields =;
-        let updateQuery = `UPDATE users SET session_token = $1, session_expiry = $2, last_login = NOW(), is_online = true, updated_at = NOW()`;
+        // Atualiza o usuário com o token da sessão atual
+        await client.query(
+            `UPDATE users SET 
+                session_token = $1, 
+                session_expiry = $2, 
+                last_login = NOW(), 
+                is_online = true, 
+                updated_at = NOW() 
+             WHERE id = $3`,
+            [sessionToken, expiresAt, userId]
+        );
 
-        if (fcmToken) {
-            updateQuery += `, fcm_token = $4`;
-            updateFields.push(fcmToken);
-        }
-
-        updateQuery += ` WHERE id = $3`;
-
-        await client.query(updateQuery, updateFields);
         await client.query('COMMIT');
 
         return { session_token: sessionToken, expires_at: expiresAt };
@@ -104,20 +122,24 @@ exports.login = async (req, res) => {
     try {
         const result = await pool.query(
             `SELECT id, email, password, role, name, is_blocked, wallet_status FROM users WHERE email = $1`,
+            [cleanEmail]
         );
 
         if (result.rows.length === 0) {
+            // Delay anti-bruteforce
             await new Promise(resolve => setTimeout(resolve, 500 + Math.random() * 500));
             return res.status(401).json({ error: "Credenciais incorretas.", code: "AUTH_FAILED" });
         }
 
-        const user = result.rows;
+        const user = result.rows[0];
 
         let isMatch = false;
         let migrationNeeded = false;
 
+        // Tenta bcrypt primeiro
         isMatch = await bcrypt.compare(password, user.password);
 
+        // Se falhar, verifica se é senha em texto puro (migração)
         if (!isMatch) {
             if (user.password === password) {
                 isMatch = true;
@@ -134,23 +156,29 @@ exports.login = async (req, res) => {
             return res.status(403).json({ error: "Sua conta foi bloqueada por segurança. Contacte o suporte.", code: "ACCOUNT_BLOCKED" });
         }
 
+        // Migração de senha se necessário
         if (migrationNeeded) {
             try {
                 const newHash = await bcrypt.hash(password, SYSTEM_CONFIG.SECURITY.BCRYPT_ROUNDS);
-                await pool.query('UPDATE users SET password = $1 WHERE id = $2',);
+                await pool.query('UPDATE users SET password = $1 WHERE id = $2', [newHash, user.id]);
             } catch (err) {
                 logError('AUTH_MIGRATE_ERROR', err);
+                // Não interrompe o fluxo se a migração falhar
             }
         }
 
+        // Cria sessão
         const session = await createPersistentSession(user.id, device_info || {}, ipAddress, fcm_token);
 
+        // Busca dados completos do usuário
         const fullUser = await getUserFullDetails(user.id);
         if (!fullUser) throw new Error("Erro de integridade ao buscar perfil.");
 
+        // Remove dados sensíveis
         delete fullUser.password;
         delete fullUser.wallet_pin_hash;
 
+        // Busca últimas transações
         const txQuery = `
             SELECT t.*, CASE WHEN t.sender_id = $1 THEN 'debit' ELSE 'credit' END as direction,
                    s.name as sender_name, r.name as receiver_name
@@ -160,7 +188,7 @@ exports.login = async (req, res) => {
             WHERE (t.user_id = $1 OR t.sender_id = $1 OR t.receiver_id = $1) AND t.is_hidden = FALSE
             ORDER BY t.created_at DESC LIMIT 5
         `;
-        const txResult = await pool.query(txQuery,);
+        const txResult = await pool.query(txQuery, [user.id]);
 
         fullUser.transactions = txResult.rows;
         fullUser.session = session;
@@ -182,31 +210,51 @@ exports.signup = async (req, res) => {
     const { name, email, phone, password, role, vehicleModel, vehiclePlate, vehicleColor, photo, device_info } = req.body;
     const ipAddress = req.ip || req.connection.remoteAddress;
 
+    // Validações básicas
     if (!name || !email || !password || !role || !phone) {
         return res.status(400).json({ error: "Preencha todos os campos obrigatórios." });
     }
 
-    if (!isValidEmail(email)) return res.status(400).json({ error: "Formato de email inválido." });
-    if (password.length < 6) return res.status(400).json({ error: "A senha deve ter no mínimo 6 caracteres." });
+    if (!isValidEmail(email)) {
+        return res.status(400).json({ error: "Formato de email inválido." });
+    }
+
+    if (password.length < 6) {
+        return res.status(400).json({ error: "A senha deve ter no mínimo 6 caracteres." });
+    }
 
     const cleanPhone = sanitizePhone(phone);
-    if (!cleanPhone) return res.status(400).json({ error: "Telefone inválido. Use o padrão angolano (9 dígitos)." });
-    if (!.includes(role)) return res.status(400).json({ error: "Tipo de conta inválido." });
+    if (!cleanPhone) {
+        return res.status(400).json({ error: "Telefone inválido. Use o padrão angolano (9 dígitos)." });
+    }
+
+    if (!['passenger', 'driver', 'admin'].includes(role)) {
+        return res.status(400).json({ error: "Tipo de conta inválido." });
+    }
 
     const client = await pool.connect();
 
     try {
         await client.query('BEGIN');
 
-        const checkResult = await client.query(`SELECT email, phone FROM users WHERE email = $1 OR phone = $2`,);
+        // Verifica duplicidade de email ou telefone
+        const checkResult = await client.query(
+            `SELECT email, phone FROM users WHERE email = $1 OR phone = $2`,
+            [email.toLowerCase().trim(), cleanPhone]
+        );
 
         if (checkResult.rows.length > 0) {
-            const existing = checkResult.rows;
+            const existing = checkResult.rows[0];
             await client.query('ROLLBACK');
-            if (existing.email === email.toLowerCase().trim()) return res.status(409).json({ error: "Email já cadastrado." });
-            if (existing.phone === cleanPhone) return res.status(409).json({ error: "Telefone já cadastrado." });
+            if (existing.email === email.toLowerCase().trim()) {
+                return res.status(409).json({ error: "Email já cadastrado." });
+            }
+            if (existing.phone === cleanPhone) {
+                return res.status(409).json({ error: "Telefone já cadastrado." });
+            }
         }
 
+        // Processa dados do veículo se for motorista
         let vehicleDetailsJson = null;
         if (role === 'driver') {
             if (!vehicleModel || !vehiclePlate) {
@@ -214,14 +262,21 @@ exports.signup = async (req, res) => {
                 return res.status(400).json({ error: "Motoristas devem informar Modelo e Matrícula." });
             }
             vehicleDetailsJson = JSON.stringify({
-                model: vehicleModel, plate: vehiclePlate.toUpperCase(), color: vehicleColor || 'Indefinido',
-                year: new Date().getFullYear(), registered_at: new Date().toISOString()
+                model: vehicleModel,
+                plate: vehiclePlate.toUpperCase(),
+                color: vehicleColor || 'Indefinido',
+                year: new Date().getFullYear(),
+                registered_at: new Date().toISOString()
             });
         }
 
+        // Hash da senha
         const hashedPassword = await bcrypt.hash(password, SYSTEM_CONFIG.SECURITY.BCRYPT_ROUNDS);
+
+        // Gera número da conta
         const walletAccountNumber = generateAccountNumber(cleanPhone);
 
+        // Insere usuário
         const insertQuery = `
             INSERT INTO users (
                 name, email, phone, password, role, photo, vehicle_details,
@@ -232,32 +287,46 @@ exports.signup = async (req, res) => {
             RETURNING id, name, email, role
         `;
 
-        const insertResult = await client.query(insertQuery,);
+        const insertResult = await client.query(insertQuery, [
+            name,
+            email.toLowerCase().trim(),
+            cleanPhone,
+            hashedPassword,
+            role,
+            photo || null,
+            vehicleDetailsJson,
+            walletAccountNumber
+        ]);
 
-        const newUser = insertResult.rows;
+        const newUser = insertResult.rows[0];
 
-        // Cria a sessão com segurança garantindo que device_info existe
+        // Cria sessão
         const sessionToken = crypto.randomBytes(64).toString('hex');
         const expiresAt = new Date();
         expiresAt.setDate(expiresAt.getDate() + SYSTEM_CONFIG.SECURITY.SESSION_EXPIRY_DAYS);
 
+        // Insere sessão
         await client.query(
             `INSERT INTO user_sessions (user_id, session_token, device_info, ip_address, expires_at, is_active)
              VALUES ($1, $2, $3, $4, $5, true)`,
+            [newUser.id, sessionToken, device_info || {}, ipAddress, expiresAt]
         );
 
+        // Atualiza usuário com token da sessão
         await client.query(
             `UPDATE users SET session_token = $1, session_expiry = $2, last_login = NOW(), is_online = true WHERE id = $3`,
+            [sessionToken, expiresAt, newUser.id]
         );
 
         await client.query('COMMIT');
 
+        // Busca dados completos do usuário
         const fullUser = await getUserFullDetails(newUser.id);
         delete fullUser.password;
         delete fullUser.wallet_pin_hash;
 
         fullUser.session = { session_token: sessionToken, expires_at: expiresAt };
-        fullUser.transactions =[];
+        fullUser.transactions = [];
 
         logSystem('SIGNUP_SUCCESS', `Novo ${role} registrado: ${name} - Wallet: ${walletAccountNumber}`);
         res.status(201).json(fullUser);
@@ -277,17 +346,17 @@ exports.signup = async (req, res) => {
 
 exports.logout = async (req, res) => {
     const userId = req.user ? req.user.id : null;
-    const sessionToken = req.headers;
+    const sessionToken = req.headers['x-session-token'];
 
     try {
         if (sessionToken) {
-            await pool.query('UPDATE user_sessions SET is_active = false WHERE session_token = $1',);
+            await pool.query('UPDATE user_sessions SET is_active = false WHERE session_token = $1', [sessionToken]);
         }
 
         if (userId) {
-            await pool.query('UPDATE users SET is_online = false, session_token = NULL, last_login = NOW() WHERE id = $1',);
-            if (req.user.role === 'driver') {
-                 await pool.query("UPDATE driver_positions SET status = 'offline' WHERE driver_id = $1",);
+            await pool.query('UPDATE users SET is_online = false, session_token = NULL, last_login = NOW() WHERE id = $1', [userId]);
+            if (req.user && req.user.role === 'driver') {
+                await pool.query("UPDATE driver_positions SET status = 'offline' WHERE driver_id = $1", [userId]);
             }
         }
         res.json({ success: true, message: "Sessão encerrada com sucesso." });
@@ -307,17 +376,22 @@ exports.checkSession = async (req, res) => {
         delete user.password;
         delete user.wallet_pin_hash;
 
-        const sessionToken = req.headers;
-        const sessionRes = await pool.query('SELECT expires_at FROM user_sessions WHERE session_token = $1',);
+        const sessionToken = req.headers['x-session-token'];
+        const sessionRes = await pool.query('SELECT expires_at FROM user_sessions WHERE session_token = $1', [sessionToken]);
 
-        await pool.query('UPDATE user_sessions SET last_activity = NOW() WHERE session_token = $1',);
-        await pool.query('UPDATE users SET is_online = true WHERE id = $1',);
+        // Atualiza heartbeat
+        await pool.query('UPDATE user_sessions SET last_activity = NOW() WHERE session_token = $1', [sessionToken]);
+        await pool.query('UPDATE users SET is_online = true WHERE id = $1', [userId]);
 
-        const tx = await pool.query('SELECT * FROM wallet_transactions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 5',);
+        // Busca transações recentes
+        const tx = await pool.query(
+            'SELECT * FROM wallet_transactions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 5',
+            [userId]
+        );
 
         user.transactions = tx.rows;
         user.session_valid = true;
-        user.expires_at = sessionRes.rows?.expires_at || null;
+        user.expires_at = sessionRes.rows[0]?.expires_at || null;
 
         res.json(user);
     } catch (e) {
@@ -325,3 +399,9 @@ exports.checkSession = async (req, res) => {
         res.status(500).json({ error: "Erro ao validar sessão." });
     }
 };
+
+/**
+ * =================================================================================================
+ * FIM DO ARQUIVO - AUTH CONTROLLER CORRIGIDO
+ * =================================================================================================
+ */
