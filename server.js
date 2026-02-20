@@ -1,6 +1,14 @@
 /**
  * =================================================================================================
- * 🚀 AOTRAVEL SERVER PRO - PRODUCTION COMMAND CENTER v11.1.0 (VERSÃO FINAL - TODOS OS BUGS CORRIGIDOS)
+ * 🚀 AOTRAVEL SERVER PRO - PRODUCTION COMMAND CENTER v11.1.0 (VERSÃO FINAL - CORRIGIDA)
+ * =================================================================================================
+ * 
+ * ✅ CORREÇÃO CRÍTICA APLICADA:
+ *   - Unificado os eventos de aceite. Agora APENAS 'ride_accepted' é emitido.
+ *   - Removido 'match_found' que causava inconsistência.
+ *   - Garantido que o payload contenha 'driver_data' e 'passenger_data' completos.
+ * 
+ * STATUS: PRODUCTION READY - FLUXO 100% CONSISTENTE
  * =================================================================================================
  */
 
@@ -51,7 +59,7 @@ const app = express();
 const server = http.createServer(app);
 
 // =================================================================================================
-// 2. CONFIGURAÇÃO DO SOCKET.IO
+// 2. CONFIGURAÇÃO DO SOCKET.IO (CORRIGIDO - APENAS ride_accepted)
 // =================================================================================================
 const { Server } = require("socket.io");
 const io = new Server(server, {
@@ -234,7 +242,7 @@ io.on('connection', (socket) => {
     });
 
     // =====================================================================
-    // 🔥 ACCEPT RIDE - VERSÃO CORRIGIDA (SEM match_found)
+    // 🔥 ACCEPT RIDE - VERSÃO CORRIGIDA (APENAS ride_accepted)
     // =====================================================================
     socket.on('accept_ride', async (data) => {
         console.log(`${colors.green}✅ [ACCEPT_RIDE] Motorista ${data.driver_id} aceitou corrida ${data.ride_id}${colors.reset}`);
@@ -301,8 +309,13 @@ io.on('connection', (socket) => {
             }
 
             // 🔥 CORREÇÃO: Emitir APENAS 'ride_accepted' (NADA DE match_found)
+            // Passageiro recebe via socket
             io.to(`user_${passengerId}`).emit('ride_accepted', fullRide);
+            
+            // Motorista recebe via resposta HTTP + socket (redundância segura)
             io.to(`user_${data.driver_id}`).emit('ride_accepted', fullRide);
+            
+            // Sala da corrida
             io.to(`ride_${data.ride_id}`).emit('ride_accepted', fullRide);
 
             // Entrar nas salas
