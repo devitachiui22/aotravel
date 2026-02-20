@@ -11,6 +11,7 @@
  * 2. Uso estrito de FOR UPDATE para bloquear a linha do usuário e evitar Double-Spend.
  * 3. Registro duplo e exato em transferências P2P (Débito e Crédito) com balance_after.
  * 4. Verificação de PIN integrada de forma transacional.
+ * 5. ✅ CORREÇÃO CRÍTICA: Sintaxe inválida na linha 170 corrigida.
  *
  * STATUS: PRODUCTION READY - FULL VERSION
  * =================================================================================================
@@ -29,9 +30,10 @@ async function verifyPinInternal(userId, pinInput, client) {
 
     const res = await client.query(
         "SELECT wallet_pin_hash FROM users WHERE id = $1 FOR UPDATE",
+        [userId]
     );
 
-    const storedHash = res.rows?.wallet_pin_hash;
+    const storedHash = res.rows[0]?.wallet_pin_hash;
 
     if (!storedHash) throw new Error("PIN de transação não configurado. Defina um PIN em Configurações.");
 
@@ -54,10 +56,11 @@ exports.getWalletData = async (req, res) => {
                     daily_limit, daily_limit_used, account_tier, phone,
                     (wallet_pin_hash IS NOT NULL) as has_pin
              FROM users WHERE id = $1`,
+            [userId]
         );
 
         if (userRes.rows.length === 0) return res.status(404).json({ error: "Carteira não encontrada." });
-        const userData = userRes.rows;
+        const userData = userRes.rows[0];
 
         const txRes = await pool.query(
             `SELECT t.*, s.name as sender_name, r.name as receiver_name
@@ -66,6 +69,7 @@ exports.getWalletData = async (req, res) => {
              LEFT JOIN users r ON t.receiver_id = r.id
              WHERE t.user_id = $1 OR t.sender_id = $1 OR t.receiver_id = $1
              ORDER BY t.created_at DESC LIMIT 20`,
+            [userId]
         );
 
         const accountsRes = await pool.query(
@@ -73,11 +77,13 @@ exports.getWalletData = async (req, res) => {
                     CASE WHEN LENGTH(iban) > 8 THEN CONCAT(LEFT(iban, 4), '...', RIGHT(iban, 4))
                     ELSE CONCAT('...', RIGHT(iban, 4)) END as masked_iban
              FROM external_bank_accounts WHERE user_id = $1 ORDER BY is_default DESC, created_at DESC`,
+            [userId]
         );
 
         const cardsRes = await pool.query(
             `SELECT id, card_alias, last_four, card_network, expiry_date, is_default
              FROM wallet_cards WHERE user_id = $1 AND is_active = true ORDER BY is_default DESC, created_at DESC`,
+            [userId]
         );
 
         res.json({
@@ -91,9 +97,9 @@ exports.getWalletData = async (req, res) => {
                 daily_used: parseFloat(userData.daily_limit_used) || 0,
                 tier: userData.account_tier || 'standard'
             },
-            recent_transactions: txRes.rows ||[],
+            recent_transactions: txRes.rows || [],
             bank_accounts: accountsRes.rows || [],
-            cards: cardsRes.rows ||[]
+            cards: cardsRes.rows || []
         });
 
     } catch (error) {
@@ -104,12 +110,12 @@ exports.getWalletData = async (req, res) => {
 
 exports.getBalance = async (req, res) => {
     try {
-        const result = await pool.query('SELECT balance, wallet_account_number FROM users WHERE id = $1',);
+        const result = await pool.query('SELECT balance, wallet_account_number FROM users WHERE id = $1', [req.user.id]);
         if (result.rows.length === 0) return res.status(404).json({ error: 'Usuário não encontrado' });
 
         res.json({
-            balance: parseFloat(result.rows.balance) || 0,
-            accountNumber: result.rows.wallet_account_number || 'AOT' + req.user.id.toString().padStart(8, '0')
+            balance: parseFloat(result.rows[0].balance) || 0,
+            accountNumber: result.rows[0].wallet_account_number || 'AOT' + req.user.id.toString().padStart(8, '0')
         });
     } catch (error) {
         res.status(500).json({ error: 'Erro interno' });
@@ -142,10 +148,11 @@ exports.internalTransfer = async (req, res) => {
         // 1. Bloqueia Remetente (FOR UPDATE)
         const senderRes = await client.query(
             'SELECT id, name, balance FROM users WHERE id = $1 FOR UPDATE',
+            [senderId]
         );
         if (senderRes.rows.length === 0) throw new Error("Remetente não encontrado.");
 
-        const sender = senderRes.rows;
+        const sender = senderRes.rows[0];
         const senderBalance = parseFloat(sender.balance);
 
         if (senderBalance < val) throw new Error("Saldo insuficiente para esta transferência.");
@@ -153,12 +160,13 @@ exports.internalTransfer = async (req, res) => {
         // Lógica de Débito de Sistema (Ex: pagamento de taxas ou pacotes)
         if (is_system_debit && receiver_identifier === 'system_debit') {
             const newSenderBalance = senderBalance - val;
-            await client.query('UPDATE users SET balance = $1, updated_at = NOW() WHERE id = $2',);
+            await client.query('UPDATE users SET balance = $1, updated_at = NOW() WHERE id = $2', [newSenderBalance, senderId]);
             const txRef = generateRef('DEB');
 
             await client.query(
                 `INSERT INTO wallet_transactions (reference_id, user_id, amount, type, method, status, description, balance_after, category, created_at)
                  VALUES ($1, $2, $3, 'payment', 'system', 'completed', $4, $5, 'service', NOW())`,
+                [txRef, senderId, -val, description || 'Débito de sistema', newSenderBalance]
             );
 
             await client.query('COMMIT');
@@ -167,28 +175,28 @@ exports.internalTransfer = async (req, res) => {
 
         // 2. Busca e Bloqueia Destinatário (FOR UPDATE)
         let receiverQuery = 'SELECT id, name, balance FROM users WHERE phone = $1 FOR UPDATE';
-        let receiverParams =;
+        let receiverParams = [receiver_identifier];
 
         if (receiver_identifier.includes('@')) {
             receiverQuery = 'SELECT id, name, balance FROM users WHERE email = $1 FOR UPDATE';
-            receiverParams =;
+            receiverParams = [receiver_identifier.toLowerCase().trim()];
         } else if (receiver_identifier.startsWith('AOT')) {
             receiverQuery = 'SELECT id, name, balance FROM users WHERE wallet_account_number = $1 FOR UPDATE';
-            receiverParams =;
+            receiverParams = [receiver_identifier];
         }
 
         const receiverRes = await client.query(receiverQuery, receiverParams);
         if (receiverRes.rows.length === 0) throw new Error("Destinatário não encontrado na rede Titanium.");
 
-        const receiver = receiverRes.rows;
+        const receiver = receiverRes.rows[0];
         if (receiver.id === senderId) throw new Error("Você não pode transferir para si mesmo.");
 
         // 3. Executa a Transferência P2P
         const newSenderBalance = senderBalance - val;
         const newReceiverBalance = parseFloat(receiver.balance) + val;
 
-        await client.query('UPDATE users SET balance = $1, updated_at = NOW() WHERE id = $2',);
-        await client.query('UPDATE users SET balance = $1, updated_at = NOW() WHERE id = $2',);
+        await client.query('UPDATE users SET balance = $1, updated_at = NOW() WHERE id = $2', [newSenderBalance, senderId]);
+        await client.query('UPDATE users SET balance = $1, updated_at = NOW() WHERE id = $2', [newReceiverBalance, receiver.id]);
 
         // 4. Ledger: Grava Débito e Crédito Separados
         const txRef = generateRef('TRF');
@@ -197,6 +205,7 @@ exports.internalTransfer = async (req, res) => {
         await client.query(
             `INSERT INTO wallet_transactions (reference_id, user_id, sender_id, receiver_id, amount, type, method, status, description, balance_after, category, created_at)
              VALUES ($1, $2, $3, $4, $5, 'transfer', 'internal', 'completed', $6, $7, 'p2p', NOW())`,
+            [txRef, senderId, senderId, receiver.id, -val, description || `Envio para ${receiver.name}`, newSenderBalance]
         );
 
         // Crédito Destinatário
@@ -204,6 +213,7 @@ exports.internalTransfer = async (req, res) => {
         await client.query(
             `INSERT INTO wallet_transactions (reference_id, user_id, sender_id, receiver_id, amount, type, method, status, description, balance_after, category, created_at)
              VALUES ($1, $2, $3, $4, $5, 'transfer', 'internal', 'completed', $6, $7, 'p2p', NOW())`,
+            [receiverRef, receiver.id, senderId, receiver.id, val, `Recebido de ${sender.name}`, newReceiverBalance]
         );
 
         await client.query('COMMIT');
@@ -247,16 +257,17 @@ exports.topup = async (req, res) => {
     try {
         await client.query('BEGIN');
 
-        const userRes = await client.query('SELECT balance FROM users WHERE id = $1 FOR UPDATE',);
+        const userRes = await client.query('SELECT balance FROM users WHERE id = $1 FOR UPDATE', [userId]);
         if (userRes.rows.length === 0) throw new Error('Usuário não encontrado');
 
-        const newBalance = parseFloat(userRes.rows.balance) + val;
-        await client.query('UPDATE users SET balance = $1, updated_at = NOW() WHERE id = $2',);
+        const newBalance = parseFloat(userRes.rows[0].balance) + val;
+        await client.query('UPDATE users SET balance = $1, updated_at = NOW() WHERE id = $2', [newBalance, userId]);
 
         const ref = reference || generateRef('TOP');
         await client.query(
             `INSERT INTO wallet_transactions (reference_id, user_id, amount, type, method, status, description, balance_after, category, created_at)
              VALUES ($1, $2, $3, 'topup', $4, 'completed', 'Adição de fundos', $5, 'topup', NOW())`,
+            [ref, userId, val, method, newBalance]
         );
 
         await client.query('COMMIT');
@@ -284,23 +295,24 @@ exports.withdraw = async (req, res) => {
         await client.query('BEGIN');
         await verifyPinInternal(userId, pin, client);
 
-        const userRes = await client.query('SELECT balance FROM users WHERE id = $1 FOR UPDATE',);
-        const currentBalance = parseFloat(userRes.rows.balance);
+        const userRes = await client.query('SELECT balance FROM users WHERE id = $1 FOR UPDATE', [userId]);
+        const currentBalance = parseFloat(userRes.rows[0].balance);
 
         if (currentBalance < val) throw new Error('Saldo insuficiente para este saque.');
 
-        const bankRes = await client.query("SELECT * FROM external_bank_accounts WHERE id = $1 AND user_id = $2",);
+        const bankRes = await client.query("SELECT * FROM external_bank_accounts WHERE id = $1 AND user_id = $2", [bank_account_id, userId]);
         if (bankRes.rows.length === 0) throw new Error("Conta bancária inválida ou não pertence a você.");
 
-        const bank = bankRes.rows;
+        const bank = bankRes.rows[0];
         const newBalance = currentBalance - val;
 
-        await client.query("UPDATE users SET balance = $1, updated_at = NOW() WHERE id = $2",);
+        await client.query("UPDATE users SET balance = $1, updated_at = NOW() WHERE id = $2", [newBalance, userId]);
 
         const txRef = generateRef('WTH');
         await client.query(
             `INSERT INTO wallet_transactions (reference_id, user_id, amount, type, method, status, description, metadata, balance_after, category, created_at)
              VALUES ($1, $2, $3, 'withdraw', 'bank_transfer', 'pending', $4, $5, $6, 'withdraw', NOW())`,
+            [txRef, userId, -val, `Saque para ${bank.bank_name} (${bank.iban.slice(-4)})`, JSON.stringify({ iban: bank.iban, holder: bank.holder_name }), newBalance]
         );
 
         await client.query('COMMIT');
@@ -331,20 +343,21 @@ exports.payService = async (req, res) => {
         await client.query('BEGIN');
         await verifyPinInternal(userId, pin, client);
 
-        const userRes = await client.query('SELECT balance FROM users WHERE id = $1 FOR UPDATE',);
-        const currentBalance = parseFloat(userRes.rows.balance);
+        const userRes = await client.query('SELECT balance FROM users WHERE id = $1 FOR UPDATE', [userId]);
+        const currentBalance = parseFloat(userRes.rows[0].balance);
         const fixedFee = 50.00;
         const totalCost = val + fixedFee;
 
         if (currentBalance < totalCost) throw new Error(`Saldo insuficiente. Necessário: ${totalCost} Kz.`);
 
         const newBalance = currentBalance - totalCost;
-        await client.query("UPDATE users SET balance = $1, updated_at = NOW() WHERE id = $2",);
+        await client.query("UPDATE users SET balance = $1, updated_at = NOW() WHERE id = $2", [newBalance, userId]);
 
         const txRef = generateRef('PAY');
         await client.query(
             `INSERT INTO wallet_transactions (reference_id, user_id, amount, fee, type, method, status, description, balance_after, category, created_at)
              VALUES ($1, $2, $3, $4, 'bill_payment', 'internal', 'completed', $5, $6, 'services', NOW())`,
+            [txRef, userId, -val, fixedFee, `Pagamento ${service_id} - ${reference}`, newBalance]
         );
 
         await client.query('COMMIT');
@@ -371,8 +384,8 @@ exports.setPin = async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        const userRes = await client.query("SELECT wallet_pin_hash FROM users WHERE id = $1 FOR UPDATE",);
-        const currentHash = userRes.rows?.wallet_pin_hash;
+        const userRes = await client.query("SELECT wallet_pin_hash FROM users WHERE id = $1 FOR UPDATE", [userId]);
+        const currentHash = userRes.rows[0]?.wallet_pin_hash;
 
         if (currentHash) {
             if (!old_pin) throw new Error("Informe o PIN atual para alterá-lo.");
@@ -381,7 +394,7 @@ exports.setPin = async (req, res) => {
         }
 
         const newHash = await bcrypt.hash(pin, 10);
-        await client.query("UPDATE users SET wallet_pin_hash = $1, updated_at = NOW() WHERE id = $2",);
+        await client.query("UPDATE users SET wallet_pin_hash = $1, updated_at = NOW() WHERE id = $2", [newHash, userId]);
         await client.query('COMMIT');
 
         res.json({ success: true, message: "PIN definido com sucesso." });
@@ -423,15 +436,16 @@ exports.addAccount = async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        const countRes = await client.query("SELECT COUNT(*) FROM external_bank_accounts WHERE user_id = $1",);
-        if (parseInt(countRes.rows.count) >= 10) throw new Error("Limite máximo de contas.");
+        const countRes = await client.query("SELECT COUNT(*) FROM external_bank_accounts WHERE user_id = $1", [userId]);
+        if (parseInt(countRes.rows[0].count) >= 10) throw new Error("Limite máximo de contas.");
 
         const insertRes = await client.query(
             `INSERT INTO external_bank_accounts (user_id, bank_name, iban, holder_name, is_verified, is_default, created_at)
-             VALUES ($1, $2, $3, $4, true, $5, NOW()) RETURNING id, bank_name, iban, holder_name`,.count) === 0]
+             VALUES ($1, $2, $3, $4, true, $5, NOW()) RETURNING id, bank_name, iban, holder_name`,
+            [userId, provider, accountNumber, holderName, parseInt(countRes.rows[0].count) === 0]
         );
         await client.query('COMMIT');
-        res.status(201).json({ success: true, account: insertRes.rows });
+        res.status(201).json({ success: true, account: insertRes.rows[0] });
     } catch (error) {
         await client.query('ROLLBACK');
         res.status(400).json({ error: error.message });
@@ -442,7 +456,7 @@ exports.addAccount = async (req, res) => {
 
 exports.deleteAccount = async (req, res) => {
     try {
-        const result = await pool.query("DELETE FROM external_bank_accounts WHERE id = $1 AND user_id = $2 RETURNING id",);
+        const result = await pool.query("DELETE FROM external_bank_accounts WHERE id = $1 AND user_id = $2 RETURNING id", [req.params.id, req.user.id]);
         if (result.rows.length === 0) return res.status(404).json({ error: "Conta não encontrada." });
         res.json({ success: true, message: "Removida com sucesso." });
     } catch (e) {
@@ -457,15 +471,16 @@ exports.addCard = async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        const countRes = await client.query("SELECT COUNT(*) FROM wallet_cards WHERE user_id = $1",);
-        if (parseInt(countRes.rows.count) >= 10) throw new Error("Limite de cartões atingido.");
+        const countRes = await client.query("SELECT COUNT(*) FROM wallet_cards WHERE user_id = $1", [req.user.id]);
+        if (parseInt(countRes.rows[0].count) >= 10) throw new Error("Limite de cartões atingido.");
 
         const lastFour = number.slice(-4);
         const token = crypto.createHash('sha256').update(number + req.user.id + Date.now()).digest('hex');
 
         await client.query(
             `INSERT INTO wallet_cards (user_id, card_alias, last_four, provider_token, expiry_date, card_network, is_default, is_active, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, true, NOW())`,[req.user.id, alias || `Cartão ${lastFour}`, lastFour, token, expiry, type || 'VISA', parseInt(countRes.rows.count) === 0]
+             VALUES ($1, $2, $3, $4, $5, $6, $7, true, NOW())`,
+            [req.user.id, alias || `Cartão ${lastFour}`, lastFour, token, expiry, type || 'VISA', parseInt(countRes.rows[0].count) === 0]
         );
         await client.query('COMMIT');
         res.json({ success: true, message: "Cartão adicionado." });
@@ -479,10 +494,16 @@ exports.addCard = async (req, res) => {
 
 exports.deleteCard = async (req, res) => {
     try {
-        const result = await pool.query("DELETE FROM wallet_cards WHERE id = $1 AND user_id = $2 RETURNING id",);
+        const result = await pool.query("DELETE FROM wallet_cards WHERE id = $1 AND user_id = $2 RETURNING id", [req.params.id, req.user.id]);
         if (result.rows.length === 0) return res.status(404).json({ error: "Cartão não encontrado." });
         res.json({ success: true, message: "Cartão removido." });
     } catch (e) {
         res.status(500).json({ error: "Erro ao remover cartão." });
     }
 };
+
+/**
+ * =================================================================================================
+ * FIM DO ARQUIVO - WALLET CONTROLLER CORRIGIDO
+ * =================================================================================================
+ */
