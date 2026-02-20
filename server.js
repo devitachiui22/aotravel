@@ -2,12 +2,12 @@
  * =================================================================================================
  * 🚀 AOTRAVEL SERVER PRO - PRODUCTION COMMAND CENTER v11.1.0 (VERSÃO FINAL - CORRIGIDA)
  * =================================================================================================
- * 
+ *
  * ✅ CORREÇÃO CRÍTICA APLICADA:
  *   - Unificado os eventos de aceite. Agora APENAS 'ride_accepted' é emitido.
  *   - Removido 'match_found' que causava inconsistência.
  *   - Garantido que o payload contenha 'driver_data' e 'passenger_data' completos.
- * 
+ *
  * STATUS: PRODUCTION READY - FLUXO 100% CONSISTENTE
  * =================================================================================================
  */
@@ -311,10 +311,10 @@ io.on('connection', (socket) => {
             // 🔥 CORREÇÃO: Emitir APENAS 'ride_accepted' (NADA DE match_found)
             // Passageiro recebe via socket
             io.to(`user_${passengerId}`).emit('ride_accepted', fullRide);
-            
+
             // Motorista recebe via resposta HTTP + socket (redundância segura)
             io.to(`user_${data.driver_id}`).emit('ride_accepted', fullRide);
-            
+
             // Sala da corrida
             io.to(`ride_${data.ride_id}`).emit('ride_accepted', fullRide);
 
