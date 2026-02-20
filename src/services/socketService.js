@@ -15,6 +15,7 @@
  *    (user_<id> e ride_<id>) garantindo que os eventos de `ride_accepted` e chat
  *    sejam entregues perfeitamente.
  * 4. Presença: Heartbeat e cleanup automático de motoristas inativos.
+ * 5. ✅ CORREÇÃO CRÍTICA: Sintaxe inválida na linha 51 corrigida.
  *
  * STATUS: PRODUCTION READY - FULL VERSION
  * =================================================================================================
@@ -48,12 +49,12 @@ function setupSocketIO(httpServer) {
     io = new Server(httpServer, {
         cors: {
             origin: SYSTEM_CONFIG.SERVER?.CORS_ORIGIN || "*",
-            methods:,
+            methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"], // ✅ CORREÇÃO: Array de métodos definido
             credentials: true
         },
         pingTimeout: SYSTEM_CONFIG.SOCKET?.PING_TIMEOUT || 20000,
         pingInterval: SYSTEM_CONFIG.SOCKET?.PING_INTERVAL || 25000,
-        transports: SYSTEM_CONFIG.SOCKET?.TRANSPORTS ||,
+        transports: SYSTEM_CONFIG.SOCKET?.TRANSPORTS || ["websocket", "polling"],
         allowEIO3: true,
         connectTimeout: 10000,
         maxHttpBufferSize: 1e6 // 1MB para uploads via socket (imagens de chat)
@@ -162,7 +163,7 @@ function _handleConnection(socket) {
             await pool.query(`
                 UPDATE chat_messages SET is_read = true, read_at = NOW()
                 WHERE ride_id = $1 AND sender_id != $2 AND is_read = false
-            `,);
+            `, [ride_id, user_id]);
         } catch (e) { /* silent fail */ }
     });
 
@@ -206,13 +207,13 @@ async function _routeToController(methodName, data, socket, responseEvent) {
     };
 
     try {
-        if (typeof rideController !== 'function') {
+        if (typeof rideController[methodName] !== 'function') {
             throw new Error(`Método ${methodName} não encontrado no Controller.`);
         }
         // Executa a lógica de negócios real
-        await rideController(req, res);
+        await rideController[methodName](req, res);
     } catch (e) {
-        logError(`BRIDGE_ERROR`, e);
+        logError('BRIDGE_ERROR', e);
         socket.emit(responseEvent, {
             success: false,
             error: "Erro interno na operação do servidor.",
@@ -236,6 +237,7 @@ async function _handleJoinUser(socket, userId) {
     try {
         await pool.query(
             "UPDATE users SET is_online = true, last_seen = NOW() WHERE id = $1",
+            [userIdStr]
         );
         socket.emit('joined_ack', { success: true, user_id: userIdStr, socket_id: socket.id });
     } catch (e) {
@@ -269,9 +271,9 @@ async function _registerDriverOnline(driverId, socketId, lat, lng) {
             VALUES ($1, $2, $3, $4, 'online', NOW())
             ON CONFLICT (driver_id) DO UPDATE SET
                 lat = $2, lng = $3, socket_id = $4, status = 'online', last_update = NOW()
-        `,);
+        `, [driverId, lat, lng, socketId]);
 
-        await client.query("UPDATE users SET is_online = true, last_seen = NOW() WHERE id = $1",);
+        await client.query("UPDATE users SET is_online = true, last_seen = NOW() WHERE id = $1", [driverId]);
 
         await client.query('COMMIT');
     } catch (e) {
@@ -294,12 +296,12 @@ async function _handleUpdateLocation(socket, data) {
             UPDATE driver_positions
             SET lat = $2, lng = $3, heading = $4, speed = $5, last_update = NOW()
             WHERE driver_id = $1
-        `,);
+        `, [driverId, lat, lng, data.heading || 0, data.speed || 0]);
 
         // Otimização: Só propaga se o motorista estiver com uma corrida ativa
         const activeRides = await pool.query(`
             SELECT id FROM rides WHERE driver_id = $1 AND status IN ('accepted', 'ongoing', 'arrived')
-        `,);
+        `, [driverId]);
 
         activeRides.rows.forEach(ride => {
             io.to(`ride_${ride.id}`).emit('driver_location_update', {
@@ -319,8 +321,8 @@ async function _handleHeartbeat(socket, data) {
     const driverId = data.driver_id || data.user_id;
     if (!driverId) return;
     try {
-        await pool.query("UPDATE driver_positions SET last_update = NOW() WHERE driver_id = $1",);
-        await pool.query("UPDATE users SET last_seen = NOW(), is_online = true WHERE id = $1",);
+        await pool.query("UPDATE driver_positions SET last_update = NOW() WHERE driver_id = $1", [driverId]);
+        await pool.query("UPDATE users SET last_seen = NOW(), is_online = true WHERE id = $1", [driverId]);
     } catch (e) { /* Silent Fail */ }
 }
 
@@ -338,20 +340,20 @@ async function _handleSendMessage(socket, data) {
             INSERT INTO chat_messages (ride_id, sender_id, text, image_url, message_type, created_at)
             VALUES ($1, $2, $3, $4, $5, NOW())
             RETURNING id, created_at
-        `,);
+        `, [ride_id, sender_id, text || '', imageUrl, message_type]);
 
-        const senderInfo = await pool.query('SELECT name, photo FROM users WHERE id = $1',);
+        const senderInfo = await pool.query('SELECT name, photo FROM users WHERE id = $1', [sender_id]);
 
         const payload = {
-            id: result.rows.id,
+            id: result.rows[0].id,
             ride_id: ride_id,
             sender_id: sender_id,
             text: text || '',
             image_url: imageUrl,
             message_type: message_type,
-            created_at: result.rows.created_at,
-            sender_name: senderInfo.rows?.name || 'Usuário',
-            sender_photo: senderInfo.rows?.photo || null
+            created_at: result.rows[0].created_at,
+            sender_name: senderInfo.rows[0]?.name || 'Usuário',
+            sender_photo: senderInfo.rows[0]?.photo || null
         };
 
         // Envia a mensagem para todos na sala da corrida
@@ -365,16 +367,16 @@ async function _handleSendMessage(socket, data) {
 async function _handleDisconnect(socket) {
     console.log(`${colors.yellow}🔌 Terminal desconectado: ${socket.id}${colors.reset}`);
     try {
-        const result = await pool.query('SELECT driver_id FROM driver_positions WHERE socket_id = $1',);
+        const result = await pool.query('SELECT driver_id FROM driver_positions WHERE socket_id = $1', [socket.id]);
 
         if (result.rows.length > 0) {
-            const driverId = result.rows.driver_id;
+            const driverId = result.rows[0].driver_id;
             // Delay de 10 segundos para não derrubar num piscar de rede (Network Blip)
             setTimeout(async () => {
-                const check = await pool.query('SELECT socket_id FROM driver_positions WHERE driver_id = $1',);
-                if (check.rows?.socket_id === socket.id || !check.rows?.socket_id) {
-                    await pool.query("UPDATE driver_positions SET status = 'offline', socket_id = NULL WHERE driver_id = $1",);
-                    await pool.query("UPDATE users SET is_online = false WHERE id = $1",);
+                const check = await pool.query('SELECT socket_id FROM driver_positions WHERE driver_id = $1', [driverId]);
+                if (check.rows[0]?.socket_id === socket.id || !check.rows[0]?.socket_id) {
+                    await pool.query("UPDATE driver_positions SET status = 'offline', socket_id = NULL WHERE driver_id = $1", [driverId]);
+                    await pool.query("UPDATE users SET is_online = false WHERE id = $1", [driverId]);
                     console.log(`${colors.yellow}🚫 Motorista ${driverId} marcado como offline após timeout.${colors.reset}`);
                 }
             }, 10000);
@@ -395,7 +397,7 @@ async function _cleanInactiveDrivers() {
 
         if (result.rows.length > 0) {
             for (const row of result.rows) {
-                await pool.query("UPDATE users SET is_online = false WHERE id = $1",);
+                await pool.query("UPDATE users SET is_online = false WHERE id = $1", [row.driver_id]);
                 console.log(`${colors.yellow}🧹 Motorista ${row.driver_id} varrido por inatividade extrema.${colors.reset}`);
             }
         }
