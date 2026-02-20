@@ -103,7 +103,7 @@ exports.proposePrice = async (req, res) => {
 };
 
 /**
- RESPONDER A PROPOSTA (Passageiro)
+ * RESPONDER A PROPOSTA (Passageiro)
  * Rota: POST /api/rides/:ride_id/negotiate/respond
  * Descrição: Passageiro aceita ou rejeita a proposta de preço do motorista.
  */
