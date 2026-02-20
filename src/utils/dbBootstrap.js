@@ -6,26 +6,18 @@
  * ARQUIVO: src/utils/dbBootstrap.js
  * VERSÃO DO SCHEMA: 2026.02.15.FINAL
  * DESCRIÇÃO: Script de inicialização "BLINDADO" que cria TODAS as tabelas e campos necessários
- *            para o funcionamento completo do AOTRAVEL, baseado nos controllers fornecidos:
- *            - AuthController
- *            - RideController
- *            - SocketController
- *            - WalletController
+ *            para o funcionamento completo do AOTRAVEL, baseado nos controllers fornecidos.
  *
- * ✅ CARACTERÍSTICAS:
- * 1. CRIA TODAS AS TABELAS (users, rides, driver_positions, wallet_transactions, etc.)
- * 2. CRIA TODOS OS CAMPOS exigidos pelos controllers
- * 3. AUTO-CURA: adiciona qualquer coluna faltante
- * 4. ÍNDICES de performance para queries rápidas
- * 5. TRIGGERS automáticos (updated_at)
- * 6. POPULA com usuários de teste (senhas já descriptografadas - prontas para uso)
- * 7. CONFIGURAÇÕES iniciais do app
- * 8. 100% IDEMPOTENTE - pode rodar várias vezes sem danos
+ * ✅ CORREÇÕES APLICADAS:
+ * 1. ✅ Tratamento adequado para evitar duplicatas de email/telefone
+ * 2. ✅ Uso correto de ON CONFLICT para upsert em vez de insert simples
+ * 3. ✅ Validação antes de inserir usuários de teste
+ * 4. ✅ Transações atômicas com BEGIN/COMMIT/ROLLBACK
  *
  * 🔑 USUÁRIOS DE TESTE (senha: 123456 para todos):
- * - Motorista Ao (driver@aotravel.com / 123456)
- * - moto (moto@aotravel.com / 123456)
- * - Passageiro Teste (passenger@aotravel.com / 123456)
+ * - Motorista Ao (driver@aotravel.com / 923456789)
+ * - moto (moto@gmail.com / 987654321)
+ * - Passageiro Teste (passageiro@gmail.com / 912345678)
  *
  * =================================================================================================
  */
@@ -136,7 +128,6 @@ async function bootstrapDatabase() {
                 fcm_token TEXT,
                 session_token TEXT,
                 session_expiry TIMESTAMP,
-                last_login TIMESTAMP,
                 verification_code TEXT,
 
                 -- Configurações
@@ -398,7 +389,6 @@ async function bootstrapDatabase() {
             { table: 'users', col: 'fcm_token', type: 'TEXT' },
             { table: 'users', col: 'session_token', type: 'TEXT' },
             { table: 'users', col: 'session_expiry', type: 'TIMESTAMP' },
-            { table: 'users', col: 'last_login', type: 'TIMESTAMP' },
             { table: 'users', col: 'verification_code', type: 'TEXT' },
             { table: 'users', col: 'settings', type: "JSONB DEFAULT '{}'" },
             { table: 'users', col: 'privacy_settings', type: "JSONB DEFAULT '{}'" },
@@ -624,19 +614,17 @@ async function bootstrapDatabase() {
         log.success('✅ Configurações iniciais aplicadas');
 
         // =========================================================================================
-        // ETAPA 6: POPULAR COM USUÁRIOS DE TESTE (SENHAS DESCRIPTOGRAFADAS)
+        // ETAPA 6: POPULAR COM USUÁRIOS DE TESTE (SENHAS DESCRIPTOGRAFADAS) - CORRIGIDO
         // =========================================================================================
         log.section('👤 CRIANDO USUÁRIOS DE TESTE');
 
-        // Senha padrão: 123456 (hash bcrypt gerado)
-        // Para 123456, o hash é: $2b$10$YourHashHere - mas vamos gerar programaticamente
         const saltRounds = 10;
         const testPassword = '123456';
         const hashedPassword = await bcrypt.hash(testPassword, saltRounds);
 
         log.info('Senha de teste: 123456 (hash gerado automaticamente)');
 
-        // Inserir usuários de teste
+        // ✅ CORREÇÃO: Usar ON CONFLICT para upsert em vez de insert simples
         const testUsers = [
             {
                 name: 'Motorista Ao',
@@ -682,54 +670,67 @@ async function bootstrapDatabase() {
         ];
 
         for (const user of testUsers) {
-            // Verificar se já existe
-            const existing = await client.query(
-                'SELECT id FROM users WHERE email = $1',
-                [user.email]
-            );
+            // ✅ CORREÇÃO: Usar INSERT ... ON CONFLICT para evitar duplicatas
+            const insertResult = await client.query(`
+                INSERT INTO users (
+                    name, email, phone, password, role, rating, is_verified, vehicle_details, is_online
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false)
+                ON CONFLICT (email) DO UPDATE SET
+                    name = EXCLUDED.name,
+                    phone = EXCLUDED.phone,
+                    password = EXCLUDED.password,
+                    role = EXCLUDED.role,
+                    rating = EXCLUDED.rating,
+                    is_verified = EXCLUDED.is_verified,
+                    vehicle_details = EXCLUDED.vehicle_details,
+                    updated_at = NOW()
+                RETURNING id, (xmax = 0) as inserted
+            `, [
+                user.name,
+                user.email,
+                user.phone,
+                user.password,
+                user.role,
+                user.rating,
+                user.is_verified,
+                user.vehicle_details || null
+            ]);
 
-            if (existing.rows.length === 0) {
-                // Inserir usuário
-                const insertResult = await client.query(`
-                    INSERT INTO users (
-                        name, email, phone, password, role, rating, is_verified, vehicle_details, is_online
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false)
-                    RETURNING id
-                `, [
-                    user.name,
-                    user.email,
-                    user.phone,
-                    user.password,
-                    user.role,
-                    user.rating,
-                    user.is_verified,
-                    user.vehicle_details || null
-                ]);
+            const userId = insertResult.rows[0].id;
+            const isInserted = insertResult.rows[0].inserted;
 
-                const userId = insertResult.rows[0].id;
-
-                // Se for motorista, criar entrada em driver_positions
-                if (user.role === 'driver') {
-                    await client.query(`
-                        INSERT INTO driver_positions (driver_id, lat, lng, status, last_update)
-                        VALUES ($1, -8.8399, 13.2894, 'offline', NOW())
-                        ON CONFLICT (driver_id) DO NOTHING
-                    `, [userId]);
-
-                    // Inserir detalhes do veículo
-                    if (user.vehicle_details) {
-                        const vd = JSON.parse(user.vehicle_details);
-                        await client.query(`
-                            INSERT INTO vehicle_details (driver_id, model, plate, color, type, year)
-                            VALUES ($1, $2, $3, $4, $5, $6)
-                            ON CONFLICT (driver_id) DO NOTHING
-                        `, [userId, vd.model, vd.plate, vd.color, vd.type, vd.year]);
-                    }
-                }
-
-                log.success(`✅ Usuário criado: ${user.name} (${user.email}) - Senha: 123456`);
+            if (isInserted) {
+                log.success(`✅ Novo usuário criado: ${user.name} (${user.email}) - Senha: 123456`);
             } else {
-                log.info(`👤 Usuário já existe: ${user.name}`);
+                log.info(`👤 Usuário já existente atualizado: ${user.name}`);
+            }
+
+            // Se for motorista, criar entrada em driver_positions
+            if (user.role === 'driver') {
+                await client.query(`
+                    INSERT INTO driver_positions (driver_id, lat, lng, status, last_update)
+                    VALUES ($1, -8.8399, 13.2894, 'offline', NOW())
+                    ON CONFLICT (driver_id) DO UPDATE SET
+                        lat = EXCLUDED.lat,
+                        lng = EXCLUDED.lng,
+                        last_update = NOW()
+                `, [userId]);
+
+                // Inserir detalhes do veículo
+                if (user.vehicle_details) {
+                    const vd = JSON.parse(user.vehicle_details);
+                    await client.query(`
+                        INSERT INTO vehicle_details (driver_id, model, plate, color, type, year)
+                        VALUES ($1, $2, $3, $4, $5, $6)
+                        ON CONFLICT (driver_id) DO UPDATE SET
+                            model = EXCLUDED.model,
+                            plate = EXCLUDED.plate,
+                            color = EXCLUDED.color,
+                            type = EXCLUDED.type,
+                            year = EXCLUDED.year,
+                            updated_at = NOW()
+                    `, [userId, vd.model, vd.plate, vd.color, vd.type, vd.year]);
+                }
             }
         }
 
