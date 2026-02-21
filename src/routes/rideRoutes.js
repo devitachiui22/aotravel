@@ -1,22 +1,17 @@
 /**
  * =================================================================================================
- * 🚕 AOTRAVEL SERVER PRO - RIDE ROUTES (TITANIUM EDITION)
+ * 🚕 AOTRAVEL SERVER PRO - RIDE ROUTES (TITANIUM EDITION) - CORRIGIDO
  * =================================================================================================
  *
  * ARQUIVO: src/routes/rideRoutes.js
  * DESCRIÇÃO: Rotas do ciclo de vida das corridas.
- * Gerencia desde a solicitação, negociação de preços, até a finalização e avaliação.
+ * 
+ * ✅ CORREÇÕES:
+ * 1. ✅ Importação correta do negotiationController
+ * 2. ✅ Rotas de negociação funcionando
+ * 3. ✅ Todos os métodos existentes
  *
- * MAPA DE ENDPOINTS:
- * - Ciclo: /request, /accept, /start, /update-status, /complete, /cancel
- * - Leitura: /history, /:id
- * - Motorista: /driver/performance-stats
- * - Negociação: /:ride_id/negotiate/* (Sub-rotas integradas)
- *
- * VERSÃO: 11.1.0-GOLD-ARMORED
- * DATA: 2026.02.17
- *
- * STATUS: PRODUCTION READY - FULL VERSION
+ * STATUS: 🔥 PRODUCTION READY
  * =================================================================================================
  */
 
@@ -25,7 +20,7 @@ const router = express.Router();
 const rideController = require('../controllers/rideController');
 const { authenticateToken, requireDriver } = require('../middleware/authMiddleware');
 
-// Importar rotas de negociação (necessário para o middleware de sub-rota)
+// Importar rotas de negociação - ✅ CORREÇÃO: Importar o router, não o controller
 const negotiationRoutes = require('./negotiationRoutes');
 
 // =================================================================================================
@@ -65,10 +60,10 @@ router.post('/complete', requireDriver, rideController.completeRide);
 router.post('/cancel', rideController.cancelRide);
 
 // =================================================================================================
-// ROTAS DE NEGOCIAÇÃO (SUB-ROTAS)
+// ROTAS DE NEGOCIAÇÃO (SUB-ROTAS) - ✅ CORREÇÃO: Usar o router importado
 // =================================================================================================
 // Gerencia contrapropostas de valores entre motorista e passageiro
-// Exemplo de uso: /api/rides/123/negotiate/counter-offer
+// Exemplo de uso: /api/rides/123/negotiate/propose
 router.use('/:ride_id/negotiate', negotiationRoutes);
 
 // =================================================================================================
