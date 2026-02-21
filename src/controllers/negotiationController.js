@@ -5,7 +5,6 @@
  *
  * ARQUIVO: src/controllers/negotiationController.js
  * DESCRIÇÃO: Controlador para negociação de preço entre passageiro e motorista.
- *            Permite que o motorista proponha um novo preço e o passageiro aceite/rejeite.
  *
  * STATUS: PRODUCTION READY - FULL VERSION
  * =================================================================================================
@@ -17,7 +16,6 @@ const { logSystem, logError, generateRef } = require('../utils/helpers');
 /**
  * PROPOR NOVO PREÇO (Motorista)
  * Rota: POST /api/rides/:ride_id/negotiate/propose
- * Descrição: Motorista propõe um novo preço para a corrida.
  */
 exports.proposePrice = async (req, res) => {
     const { ride_id } = req.params;
@@ -33,7 +31,6 @@ exports.proposePrice = async (req, res) => {
     try {
         await client.query('BEGIN');
 
-        // Verificar se a corrida existe e se o motorista é o responsável
         const rideRes = await client.query(
             "SELECT * FROM rides WHERE id = $1 FOR UPDATE",
             [ride_id]
@@ -56,7 +53,6 @@ exports.proposePrice = async (req, res) => {
             return res.status(400).json({ error: "Não é possível negociar o preço nesta fase da corrida." });
         }
 
-        // Registrar proposta no histórico de negociação
         const negotiationEntry = {
             proposed_by: 'driver',
             proposed_at: new Date().toISOString(),
@@ -76,7 +72,6 @@ exports.proposePrice = async (req, res) => {
 
         await client.query('COMMIT');
 
-        // Notificar passageiro via socket
         if (req.io) {
             req.io.to(`user_${ride.passenger_id}`).emit('price_proposal', {
                 ride_id: ride_id,
@@ -104,12 +99,10 @@ exports.proposePrice = async (req, res) => {
 
 /**
  * RESPONDER A PROPOSTA (Passageiro)
- * Rota: POST /api/rides/:ride_id/negotiate/respond
- * Descrição: Passageiro aceita ou rejeita a proposta de preço do motorista.
  */
 exports.respondToProposal = async (req, res) => {
     const { ride_id } = req.params;
-    const { accept, reason } = req.body; // accept: boolean
+    const { accept, reason } = req.body;
     const passengerId = req.user.id;
 
     const client = await pool.connect();
@@ -142,14 +135,12 @@ exports.respondToProposal = async (req, res) => {
             return res.status(404).json({ error: "Nenhuma proposta pendente encontrada." });
         }
 
-        // Pega a proposta mais recente
         const latestProposal = pendingProposals[pendingProposals.length - 1];
         latestProposal.status = accept ? 'accepted' : 'rejected';
         latestProposal.responded_at = new Date().toISOString();
         latestProposal.response_reason = reason || (accept ? 'Aceito pelo passageiro' : 'Rejeitado pelo passageiro');
 
         if (accept) {
-            // Atualizar o preço da corrida
             await client.query(
                 "UPDATE rides SET final_price = $1, negotiation_history = $2 WHERE id = $3",
                 [latestProposal.proposed_price, JSON.stringify(history), ride_id]
@@ -163,7 +154,6 @@ exports.respondToProposal = async (req, res) => {
 
         await client.query('COMMIT');
 
-        // Notificar motorista via socket
         if (req.io) {
             req.io.to(`user_${ride.driver_id}`).emit('price_proposal_response', {
                 ride_id: ride_id,
@@ -192,8 +182,6 @@ exports.respondToProposal = async (req, res) => {
 
 /**
  * OBTER HISTÓRICO DE NEGOCIAÇÃO
- * Rota: GET /api/rides/:ride_id/negotiate/history
- * Descrição: Retorna o histórico completo de negociações da corrida.
  */
 exports.getNegotiationHistory = async (req, res) => {
     const { ride_id } = req.params;
@@ -211,7 +199,6 @@ exports.getNegotiationHistory = async (req, res) => {
 
         const ride = result.rows[0];
 
-        // Verificar se o usuário é participante da corrida
         const participantCheck = await pool.query(
             "SELECT passenger_id, driver_id FROM rides WHERE id = $1",
             [ride_id]
