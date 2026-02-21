@@ -1,12 +1,18 @@
 /**
  * =================================================================================================
- * 💬 AOTRAVEL SERVER PRO - NEGOTIATION CONTROLLER (TITANIUM EDITION)
+ * 💬 AOTRAVEL SERVER PRO - NEGOTIATION CONTROLLER (TITANIUM EDITION) - VERSÃO FINAL
  * =================================================================================================
  *
  * ARQUIVO: src/controllers/negotiationController.js
  * DESCRIÇÃO: Controlador para negociação de preço entre passageiro e motorista.
  *
- * STATUS: PRODUCTION READY - FULL VERSION
+ * ✅ CORREÇÕES:
+ * 1. ✅ Todos os métodos exportados corretamente
+ * 2. ✅ Tratamento de erros completo
+ * 3. ✅ Transações ACID
+ * 4. ✅ Notificações em tempo real
+ *
+ * STATUS: 🔥 PRODUCTION READY
  * =================================================================================================
  */
 
@@ -17,13 +23,17 @@ const { logSystem, logError, generateRef } = require('../utils/helpers');
  * PROPOR NOVO PREÇO (Motorista)
  * Rota: POST /api/rides/:ride_id/negotiate/propose
  */
-exports.proposePrice = async (req, res) => {
+const proposePrice = async (req, res) => {
     const { ride_id } = req.params;
     const { proposed_price, reason } = req.body;
     const driverId = req.user.id;
 
+    // Validação básica
     if (!proposed_price || proposed_price < 100) {
-        return res.status(400).json({ error: "Preço proposto inválido." });
+        return res.status(400).json({ 
+            success: false,
+            error: "Preço proposto inválido. Mínimo: 100 Kz." 
+        });
     }
 
     const client = await pool.connect();
@@ -31,6 +41,7 @@ exports.proposePrice = async (req, res) => {
     try {
         await client.query('BEGIN');
 
+        // Buscar a corrida com lock
         const rideRes = await client.query(
             "SELECT * FROM rides WHERE id = $1 FOR UPDATE",
             [ride_id]
@@ -38,22 +49,35 @@ exports.proposePrice = async (req, res) => {
 
         if (rideRes.rows.length === 0) {
             await client.query('ROLLBACK');
-            return res.status(404).json({ error: "Corrida não encontrada." });
+            return res.status(404).json({ 
+                success: false,
+                error: "Corrida não encontrada." 
+            });
         }
 
         const ride = rideRes.rows[0];
 
+        // Verificar permissão (apenas o motorista da corrida)
         if (ride.driver_id !== driverId) {
             await client.query('ROLLBACK');
-            return res.status(403).json({ error: "Apenas o motorista responsável pode propor novo preço." });
+            return res.status(403).json({ 
+                success: false,
+                error: "Apenas o motorista responsável pode propor novo preço." 
+            });
         }
 
+        // Verificar status da corrida
         if (ride.status !== 'accepted' && ride.status !== 'ongoing') {
             await client.query('ROLLBACK');
-            return res.status(400).json({ error: "Não é possível negociar o preço nesta fase da corrida." });
+            return res.status(400).json({ 
+                success: false,
+                error: "Não é possível negociar o preço nesta fase da corrida." 
+            });
         }
 
+        // Criar entrada de negociação
         const negotiationEntry = {
+            id: generateRef('NEG'),
             proposed_by: 'driver',
             proposed_at: new Date().toISOString(),
             original_price: parseFloat(ride.initial_price),
@@ -62,6 +86,7 @@ exports.proposePrice = async (req, res) => {
             status: 'pending'
         };
 
+        // Atualizar histórico
         const currentHistory = ride.negotiation_history || [];
         currentHistory.push(negotiationEntry);
 
@@ -72,6 +97,7 @@ exports.proposePrice = async (req, res) => {
 
         await client.query('COMMIT');
 
+        // Notificar passageiro via socket
         if (req.io) {
             req.io.to(`user_${ride.passenger_id}`).emit('price_proposal', {
                 ride_id: ride_id,
@@ -80,7 +106,7 @@ exports.proposePrice = async (req, res) => {
             });
         }
 
-        logSystem('NEGOTIATION', `Motorista ${driverId} propôs novo preço para corrida ${ride_id}: ${proposed_price} Kz`);
+        logSystem('NEGOTIATION', `Motorista ${driverId} propôs ${proposed_price} Kz para corrida ${ride_id}`);
 
         res.json({
             success: true,
@@ -91,7 +117,10 @@ exports.proposePrice = async (req, res) => {
     } catch (e) {
         await client.query('ROLLBACK');
         logError('NEGOTIATION_PROPOSE', e);
-        res.status(500).json({ error: "Erro ao processar proposta." });
+        res.status(500).json({ 
+            success: false,
+            error: "Erro ao processar proposta." 
+        });
     } finally {
         client.release();
     }
@@ -99,8 +128,9 @@ exports.proposePrice = async (req, res) => {
 
 /**
  * RESPONDER A PROPOSTA (Passageiro)
+ * Rota: POST /api/rides/:ride_id/negotiate/respond
  */
-exports.respondToProposal = async (req, res) => {
+const respondToProposal = async (req, res) => {
     const { ride_id } = req.params;
     const { accept, reason } = req.body;
     const passengerId = req.user.id;
@@ -110,6 +140,7 @@ exports.respondToProposal = async (req, res) => {
     try {
         await client.query('BEGIN');
 
+        // Buscar a corrida com lock
         const rideRes = await client.query(
             "SELECT * FROM rides WHERE id = $1 FOR UPDATE",
             [ride_id]
@@ -117,35 +148,49 @@ exports.respondToProposal = async (req, res) => {
 
         if (rideRes.rows.length === 0) {
             await client.query('ROLLBACK');
-            return res.status(404).json({ error: "Corrida não encontrada." });
+            return res.status(404).json({ 
+                success: false,
+                error: "Corrida não encontrada." 
+            });
         }
 
         const ride = rideRes.rows[0];
 
+        // Verificar permissão (apenas o passageiro da corrida)
         if (ride.passenger_id !== passengerId) {
             await client.query('ROLLBACK');
-            return res.status(403).json({ error: "Apenas o passageiro pode responder à proposta." });
+            return res.status(403).json({ 
+                success: false,
+                error: "Apenas o passageiro pode responder à proposta." 
+            });
         }
 
+        // Buscar propostas pendentes
         const history = ride.negotiation_history || [];
         const pendingProposals = history.filter(p => p.status === 'pending');
 
         if (pendingProposals.length === 0) {
             await client.query('ROLLBACK');
-            return res.status(404).json({ error: "Nenhuma proposta pendente encontrada." });
+            return res.status(404).json({ 
+                success: false,
+                error: "Nenhuma proposta pendente encontrada." 
+            });
         }
 
+        // Pegar a proposta mais recente
         const latestProposal = pendingProposals[pendingProposals.length - 1];
         latestProposal.status = accept ? 'accepted' : 'rejected';
         latestProposal.responded_at = new Date().toISOString();
         latestProposal.response_reason = reason || (accept ? 'Aceito pelo passageiro' : 'Rejeitado pelo passageiro');
 
         if (accept) {
+            // Atualizar o preço da corrida
             await client.query(
                 "UPDATE rides SET final_price = $1, negotiation_history = $2 WHERE id = $3",
                 [latestProposal.proposed_price, JSON.stringify(history), ride_id]
             );
         } else {
+            // Apenas atualizar o histórico
             await client.query(
                 "UPDATE rides SET negotiation_history = $1 WHERE id = $2",
                 [JSON.stringify(history), ride_id]
@@ -154,6 +199,7 @@ exports.respondToProposal = async (req, res) => {
 
         await client.query('COMMIT');
 
+        // Notificar motorista via socket
         if (req.io) {
             req.io.to(`user_${ride.driver_id}`).emit('price_proposal_response', {
                 ride_id: ride_id,
@@ -174,7 +220,10 @@ exports.respondToProposal = async (req, res) => {
     } catch (e) {
         await client.query('ROLLBACK');
         logError('NEGOTIATION_RESPOND', e);
-        res.status(500).json({ error: "Erro ao processar resposta." });
+        res.status(500).json({ 
+            success: false,
+            error: "Erro ao processar resposta." 
+        });
     } finally {
         client.release();
     }
@@ -182,8 +231,9 @@ exports.respondToProposal = async (req, res) => {
 
 /**
  * OBTER HISTÓRICO DE NEGOCIAÇÃO
+ * Rota: GET /api/rides/:ride_id/negotiate/history
  */
-exports.getNegotiationHistory = async (req, res) => {
+const getNegotiationHistory = async (req, res) => {
     const { ride_id } = req.params;
     const userId = req.user.id;
 
@@ -194,30 +244,45 @@ exports.getNegotiationHistory = async (req, res) => {
         );
 
         if (result.rows.length === 0) {
-            return res.status(404).json({ error: "Corrida não encontrada." });
+            return res.status(404).json({ 
+                success: false,
+                error: "Corrida não encontrada." 
+            });
         }
 
-        const ride = result.rows[0];
-
+        // Verificar se o usuário é participante da corrida
         const participantCheck = await pool.query(
             "SELECT passenger_id, driver_id FROM rides WHERE id = $1",
             [ride_id]
         );
 
         const participants = participantCheck.rows[0];
-        if (participants.passenger_id !== userId && participants.driver_id !== userId && req.user.role !== 'admin') {
-            return res.status(403).json({ error: "Acesso negado." });
+        if (participants.passenger_id !== userId && 
+            participants.driver_id !== userId && 
+            req.user.role !== 'admin') {
+            return res.status(403).json({ 
+                success: false,
+                error: "Acesso negado." 
+            });
         }
 
         res.json({
             success: true,
-            history: ride.negotiation_history || []
+            history: result.rows[0].negotiation_history || []
         });
 
     } catch (e) {
         logError('NEGOTIATION_HISTORY', e);
-        res.status(500).json({ error: "Erro ao buscar histórico de negociação." });
+        res.status(500).json({ 
+            success: false,
+            error: "Erro ao buscar histórico de negociação." 
+        });
     }
 };
 
-module.exports = exports;
+// ✅ EXPORTAÇÃO CORRETA - TODOS OS MÉTODOS
+module.exports = {
+    proposePrice,
+    respondToProposal,
+    getNegotiationHistory
+};
