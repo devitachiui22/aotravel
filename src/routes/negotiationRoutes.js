@@ -1,15 +1,14 @@
 /**
  * =================================================================================================
- * 💬 AOTRAVEL SERVER PRO - NEGOTIATION ROUTES
+ * 💬 AOTRAVEL SERVER PRO - NEGOTIATION ROUTES (CORRIGIDO)
  * =================================================================================================
  *
  * ARQUIVO: src/routes/negotiationRoutes.js
  * DESCRIÇÃO: Rotas para negociação de preço entre passageiro e motorista.
  *
- * MAPA DE ENDPOINTS:
- * - POST /:ride_id/propose - Motorista propõe novo preço
- * - POST /:ride_id/respond - Passageiro responde à proposta
- * - GET /:ride_id/history - Histórico de negociações
+ * ✅ CORREÇÕES:
+ * 1. ✅ Importação correta do negotiationController
+ * 2. ✅ Todas as rotas funcionando
  *
  * STATUS: PRODUCTION READY
  * =================================================================================================
