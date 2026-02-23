@@ -1,21 +1,16 @@
 /**
  * =================================================================================================
- * ⚡ AOTRAVEL SERVER PRO - TITANIUM SOCKET ENGINE v12.0.0 (CORE DE TEMPO REAL)
+ * ⚡ AOTRAVEL SERVER PRO - TITANIUM SOCKET ENGINE v13.0.0 (CORE DE TEMPO REAL)
  * =================================================================================================
  *
  * ARQUIVO: src/services/socketService.js
  * DESCRIÇÃO: Motor centralizado e exclusivo de WebSockets.
- *            Gerencia conexões, salas de chat, telemetria de motoristas e faz
- *            a ponte (Bridge) com os Controllers HTTP.
  *
- * ✅ CORREÇÕES APLICADAS:
- * 1. Fim da duplicidade: Nenhuma lógica de socket no server.js. Tudo acontece aqui.
- * 2. Bridge Perfeita: Os eventos chamam os controllers oficiais injetando req/res.
- * 3. Salas (Rooms): Motoristas e passageiros agora entram nas salas corretas
- *    (user_<id> e ride_<id>) garantindo que os eventos de `ride_accepted` e chat
- *    sejam entregues perfeitamente.
- * 4. Presença: Heartbeat e cleanup automático de motoristas inativos.
- * 5. ✅ CORREÇÃO CRÍTICA: Sintaxe inválida na linha 51 corrigida.
+ * ✅ CORREÇÕES APLICADAS NESTA VERSÃO:
+ * 1. RESYNC AUTOMÁTICO: Quando o motorista liga o terminal, o backend varre o DB e
+ *    envia imediatamente todas as corridas "searching" pendentes num raio de 20km.
+ * 2. MODO OFFLINE MANUAL: Adicionado listener 'driver_offline' para limpar a presença no DB
+ *    apenas quando o motorista realmente clicar no botão vermelho.
  *
  * STATUS: PRODUCTION READY - FULL VERSION
  * =================================================================================================
@@ -23,7 +18,7 @@
 
 const { Server } = require("socket.io");
 const pool = require('../config/db');
-const { getFullRideDetails, logSystem, logError } = require('../utils/helpers');
+const { getFullRideDetails, logSystem, logError, getDistance } = require('../utils/helpers');
 const SYSTEM_CONFIG = require('../config/appConfig');
 
 // Instância global do Socket.IO
@@ -49,7 +44,7 @@ function setupSocketIO(httpServer) {
     io = new Server(httpServer, {
         cors: {
             origin: SYSTEM_CONFIG.SERVER?.CORS_ORIGIN || "*",
-            methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"], // ✅ CORREÇÃO: Array de métodos definido
+            methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
             credentials: true
         },
         pingTimeout: SYSTEM_CONFIG.SOCKET?.PING_TIMEOUT || 20000,
@@ -57,7 +52,7 @@ function setupSocketIO(httpServer) {
         transports: SYSTEM_CONFIG.SOCKET?.TRANSPORTS || ["websocket", "polling"],
         allowEIO3: true,
         connectTimeout: 10000,
-        maxHttpBufferSize: 1e6 // 1MB para uploads via socket (imagens de chat)
+        maxHttpBufferSize: 1e6 // 1MB para uploads via socket
     });
 
     global.io = io;
@@ -66,7 +61,7 @@ function setupSocketIO(httpServer) {
 
     console.log(`${colors.green}✅ Motor de Tempo Real iniciado com sucesso.${colors.reset}`);
 
-    // Job de Fundo: Limpa motoristas inativos a cada 2 minutos (Zombie connection cleanup)
+    // Job de Fundo: Limpa motoristas inativos a cada 2 minutos
     setInterval(() => {
         _cleanInactiveDrivers();
     }, 120000);
@@ -90,14 +85,13 @@ function _handleConnection(socket) {
         const userId = query.userId;
         const role = query.role || 'passenger';
 
-        // Sala pessoal para notificações diretas (ex: emitToUser)
+        // Sala pessoal para notificações diretas
         socket.join(`user_${userId}`);
 
-        // Se for motorista, entra no pool de drivers e registra online
         if (role === 'driver') {
             socket.join('drivers');
             socket.join(`driver_${userId}`);
-            _registerDriverOnline(userId, socketId, -8.8399, 13.2894); // Lat/Lng padrão (Luanda) até receber update
+            _registerDriverOnline(userId, socketId, -8.8399, 13.2894);
         }
     }
 
@@ -111,8 +105,19 @@ function _handleConnection(socket) {
     socket.on('update_location', (data) => _handleUpdateLocation(socket, data));
     socket.on('heartbeat', (data) => _handleHeartbeat(socket, data));
 
+    // NOVO: Evento para quando o motorista clica em "Ficar Offline"
+    socket.on('driver_offline', async (data) => {
+        const driverId = data.driver_id || data.user_id;
+        if (!driverId) return;
+        try {
+            await pool.query("UPDATE driver_positions SET status = 'offline', socket_id = NULL WHERE driver_id = $1", [driverId]);
+            await pool.query("UPDATE users SET is_online = false WHERE id = $1", [driverId]);
+            socket.leave('drivers');
+            console.log(`${colors.yellow}🛑 Motorista ${driverId} marcou-se como OFFLINE manualmente.${colors.reset}`);
+        } catch (e) { logError('DRIVER_OFFLINE', e); }
+    });
+
     // --- CICLO DE VIDA DA MISSÃO (CORRIDA) ---
-    // Usamos o padrão Bridge para reaproveitar a lógica blindada do RideController
     socket.on('request_ride', (data) => _routeToController('requestRide', data, socket, 'ride_request_response'));
     socket.on('accept_ride', (data) => _routeToController('acceptRide', data, socket, 'ride_accepted_confirmation'));
     socket.on('start_trip', (data) => _routeToController('startRide', data, socket, 'trip_started_ack'));
@@ -175,16 +180,13 @@ function _handleConnection(socket) {
  * =================================================================================================
  * 4. PONTES DE LIGAÇÃO (CONTROLLER BRIDGE)
  * =================================================================================================
- * Transforma uma chamada de Socket numa chamada de Controller HTTP simulando req/res.
  */
 async function _routeToController(methodName, data, socket, responseEvent) {
     const rideController = require('../controllers/rideController');
 
-    // Identificação do Usuário extraída do Payload
     const userId = data.driver_id || data.passenger_id || data.user_id;
     const role = data.role || (data.driver_id ? 'driver' : 'passenger');
 
-    // Construção de um Request Express Mockado
     const req = {
         body: data,
         user: { id: userId, role: role },
@@ -192,7 +194,6 @@ async function _routeToController(methodName, data, socket, responseEvent) {
         ip: socket.handshake.address
     };
 
-    // Construção de um Response Express Mockado
     const res = {
         statusCode: 200,
         status: function(code) {
@@ -200,7 +201,6 @@ async function _routeToController(methodName, data, socket, responseEvent) {
             return this;
         },
         json: function(payload) {
-            // Emite de volta para o cliente específico que chamou
             socket.emit(responseEvent, payload);
             return this;
         }
@@ -210,7 +210,6 @@ async function _routeToController(methodName, data, socket, responseEvent) {
         if (typeof rideController[methodName] !== 'function') {
             throw new Error(`Método ${methodName} não encontrado no Controller.`);
         }
-        // Executa a lógica de negócios real
         await rideController[methodName](req, res);
     } catch (e) {
         logError('BRIDGE_ERROR', e);
@@ -259,6 +258,39 @@ async function _handleJoinDriver(socket, data) {
     await _registerDriverOnline(driverId, socket.id, lat, lng);
 
     socket.emit('joined_ack', { success: true, driver_id: driverId, status: 'online' });
+
+    // 🔥 O GRANDE FIX: ENVIAR CORRIDAS PENDENTES QUANDO O MOTORISTA FICA ONLINE
+    try {
+        const pendingRides = await pool.query(`
+            SELECT id, origin_lat, origin_lng FROM rides
+            WHERE status = 'searching'
+              AND created_at > NOW() - INTERVAL '30 minutes'
+        `);
+
+        if (pendingRides.rows.length > 0) {
+            console.log(`${colors.green}🔄 Sincronizando ${pendingRides.rows.length} corridas pendentes para o motorista ${driverId}...${colors.reset}`);
+            for (const row of pendingRides.rows) {
+                let distanceToPickup = getDistance(
+                    lat, lng,
+                    parseFloat(row.origin_lat), parseFloat(row.origin_lng)
+                );
+
+                if (distanceToPickup <= 20) { // 20km de raio
+                    const fullRide = await getFullRideDetails(row.id);
+                    if (fullRide) {
+                        const payload = {
+                            ...fullRide,
+                            distance_to_pickup: parseFloat(distanceToPickup.toFixed(1))
+                        };
+                        // Envia direto para o motorista que acabou de conectar
+                        socket.emit('ride_opportunity', payload);
+                    }
+                }
+            }
+        }
+    } catch (e) {
+        logError('FETCH_PENDING_RIDES', e);
+    }
 }
 
 async function _registerDriverOnline(driverId, socketId, lat, lng) {
@@ -298,7 +330,6 @@ async function _handleUpdateLocation(socket, data) {
             WHERE driver_id = $1
         `, [driverId, lat, lng, data.heading || 0, data.speed || 0]);
 
-        // Otimização: Só propaga se o motorista estiver com uma corrida ativa
         const activeRides = await pool.query(`
             SELECT id FROM rides WHERE driver_id = $1 AND status IN ('accepted', 'ongoing', 'arrived')
         `, [driverId]);
@@ -314,7 +345,7 @@ async function _handleUpdateLocation(socket, data) {
                 timestamp: new Date().toISOString()
             });
         });
-    } catch (e) { /* Silent Fail para alta frequência */ }
+    } catch (e) { /* Silent Fail */ }
 }
 
 async function _handleHeartbeat(socket, data) {
@@ -356,7 +387,6 @@ async function _handleSendMessage(socket, data) {
             sender_photo: senderInfo.rows[0]?.photo || null
         };
 
-        // Envia a mensagem para todos na sala da corrida
         io.to(`ride_${ride_id}`).emit('receive_message', payload);
 
     } catch (e) {
@@ -371,7 +401,6 @@ async function _handleDisconnect(socket) {
 
         if (result.rows.length > 0) {
             const driverId = result.rows[0].driver_id;
-            // Delay de 10 segundos para não derrubar num piscar de rede (Network Blip)
             setTimeout(async () => {
                 const check = await pool.query('SELECT socket_id FROM driver_positions WHERE driver_id = $1', [driverId]);
                 if (check.rows[0]?.socket_id === socket.id || !check.rows[0]?.socket_id) {
@@ -405,10 +434,6 @@ async function _cleanInactiveDrivers() {
         logError('CLEAN_INACTIVE_DRIVERS', e);
     }
 }
-
-// =================================================================================================
-// 6. MÉTODOS PÚBLICOS DE EMISSÃO GERAL
-// =================================================================================================
 
 function getIO() {
     if (!io) throw new Error("Socket.IO não inicializado!");
