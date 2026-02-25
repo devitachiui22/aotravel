@@ -1,21 +1,22 @@
 /**
  * =================================================================================================
- * 🚕 AOTRAVEL SERVER PRO - RIDE LIFECYCLE CONTROLLER (TITANIUM KYC EDITION - VERSÃO SUPREMA)
+ * 🚕 AOTRAVEL SERVER PRO - RIDE LIFECYCLE CONTROLLER (TITANIUM KYC & MATCHING)
  * =================================================================================================
  *
- * ✅ CORREÇÃO KYC (KNOW YOUR CUSTOMER):
- * - O método `findAvailableDrivers` agora EXIGE `u.is_verified = true`
- * - Motoristas com documentos pendentes são invisíveis para o algoritmo de despacho
- * - Aceitação de corrida também verifica se motorista é verificado
+ * ✅ CORREÇÃO MATCHING:
+ * - O algoritmo `findAvailableDrivers` agora filtra EXATAMENTE o tipo de corrida solicitado.
+ * - Motorista de 'moto' só recebe chamada de 'moto'. Motorista de 'car' só recebe de 'ride'.
+ * - Apenas motoristas VERIFICADOS e APROVADOS PELO ADMIN entram no radar de distribuição.
  *
  * ✅ FUNCIONALIDADES COMPLETAS:
  * 1. ✅ Preço ÚNICO calculado no backend
- * 2. ✅ Aceitação de corrida SEM ERRO 500 (debug absoluto)
- * 3. ✅ Logs detalhados em cada etapa
- * 4. ✅ Transações ACID em todas as operações
- * 5. ✅ Redirecionamento automático via socket
- * 6. ✅ Negociação de preço completa
- * 7. ✅ Histórico e performance de motoristas
+ * 2. ✅ Matching por tipo de veículo (car, moto, delivery)
+ * 3. ✅ Aceitação de corrida SEM ERRO 500 (debug absoluto)
+ * 4. ✅ Logs detalhados em cada etapa
+ * 5. ✅ Transações ACID em todas as operações
+ * 6. ✅ Redirecionamento automático via socket
+ * 7. ✅ Negociação de preço completa
+ * 8. ✅ Histórico e performance de motoristas
  *
  * STATUS: 🔥 PRODUCTION READY - 100% BLINDADO - ZERO ERROS
  * =================================================================================================
@@ -38,7 +39,7 @@ exports.requestRide = async (req, res) => {
     const destLat = parseFloat(body.dest_lat || body.destLat);
     const destLng = parseFloat(body.dest_lng || body.destLng);
     const passengerId = req.user.id;
-    const rideType = body.ride_type || 'ride';
+    const rideType = body.ride_type || 'ride'; // ride | moto | delivery
     const distance = parseFloat(body.distance_km) || 0;
 
     console.log('\n🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴');
@@ -124,10 +125,10 @@ exports.requestRide = async (req, res) => {
             console.log(`📡 Notificação enviada ao passageiro ${passengerId}`);
         }
 
-        // Buscar motoristas disponíveis E VERIFICADOS (KYC)
-        let drivers = await exports.findAvailableDrivers(originLat, originLng, 10);
+        // ✅ Passa o rideType explícito para o buscador
+        let drivers = await exports.findAvailableDrivers(originLat, originLng, 10, { rideType });
         if (drivers.length === 0) {
-            drivers = await exports.findAvailableDrivers(originLat, originLng, 20, { includeGpsZero: true });
+            drivers = await exports.findAvailableDrivers(originLat, originLng, 20, { includeGpsZero: true, rideType });
         }
 
         console.log(`👥 Motoristas verificados e encontrados: ${drivers.length}`);
@@ -218,12 +219,18 @@ exports.requestRide = async (req, res) => {
 };
 
 // =================================================================================================
-// 2. BUSCAR MOTORISTAS DISPONÍVEIS E VERIFICADOS (KYC STRICT)
+// 2. BUSCAR MOTORISTAS DISPONÍVEIS E VERIFICADOS COM FILTRO DE CATEGORIA
 // =================================================================================================
 exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => {
-    const { includeGpsZero = false } = options;
+    const { includeGpsZero = false, rideType = 'ride' } = options;
 
-    // ✅ KYC BLOCK: Adicionado "AND u.is_verified = true"
+    // ✅ Normalização: Se o usuário pedir 'ride', procura por veículo do tipo 'car'
+    let requiredVehicleType = rideType;
+    if (rideType === 'ride') requiredVehicleType = 'car';
+
+    console.log(`🔍 Buscando motoristas para tipo: ${rideType} (veículo: ${requiredVehicleType})`);
+
+    // ✅ Query com KYC e filtro por tipo de veículo
     const query = `
         SELECT
             dp.driver_id, dp.lat, dp.lng, dp.socket_id, dp.status,
@@ -235,6 +242,7 @@ exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => 
           AND u.is_blocked = false
           AND u.is_verified = true
           AND u.role = 'driver'
+          AND COALESCE(u.vehicle_details->>'type', 'car') = $4
           AND (
               (dp.lat != 0 AND dp.lng != 0 AND
                   (6371 * acos(cos(radians($1)) * cos(radians(dp.lat)) *
@@ -246,7 +254,8 @@ exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => 
     `;
 
     try {
-        const result = await pool.query(query, [lat, lng, radiusKm]);
+        const result = await pool.query(query, [lat, lng, radiusKm, requiredVehicleType]);
+        console.log(`✅ Encontrados ${result.rows.length} motoristas do tipo ${requiredVehicleType}`);
         return result.rows;
     } catch (e) {
         logError('FIND_DRIVERS', e);
@@ -324,7 +333,7 @@ exports.acceptRide = async (req, res) => {
 
         console.log(`🔍 Buscando corrida #${ride_id} com FOR UPDATE...`);
         const rideRes = await client.query(
-            "SELECT id, status, passenger_id, initial_price FROM rides WHERE id = $1 FOR UPDATE",
+            "SELECT id, status, passenger_id, initial_price, ride_type FROM rides WHERE id = $1 FOR UPDATE",
             [ride_id]
         );
 
@@ -356,6 +365,25 @@ exports.acceptRide = async (req, res) => {
             return res.status(400).json({
                 success: false,
                 error: "Você não pode aceitar sua própria corrida."
+            });
+        }
+
+        // ✅ Verificação adicional: garantir que o motorista tem o veículo adequado
+        const vehicleCheck = await client.query(
+            "SELECT vehicle_details FROM users WHERE id = $1",
+            [actualDriverId]
+        );
+
+        const vehicleType = vehicleCheck.rows[0]?.vehicle_details?.type || 'car';
+        let requiredType = ride.ride_type;
+        if (requiredType === 'ride') requiredType = 'car';
+
+        if (vehicleType !== requiredType) {
+            console.log(`❌ ERRO: Tipo de veículo incompatível. Motorista: ${vehicleType}, Necessário: ${requiredType}`);
+            await client.release();
+            return res.status(400).json({
+                success: false,
+                error: `Seu veículo (${vehicleType}) não é compatível com este tipo de corrida (${ride.ride_type}).`
             });
         }
 
@@ -392,7 +420,8 @@ exports.acceptRide = async (req, res) => {
             ride_id: fullRide.id,
             passenger: fullRide.passenger_data?.name,
             driver: fullRide.driver_data?.name,
-            price: fullRide.initial_price
+            price: fullRide.initial_price,
+            ride_type: fullRide.ride_type
         });
 
         // PREPARAR PAYLOAD
