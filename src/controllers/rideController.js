@@ -1,16 +1,23 @@
 /**
  * =================================================================================================
- * 🚕 AOTRAVEL SERVER PRO - RIDE LIFECYCLE CONTROLLER (VERSÃO SUPREMA - DEBUG ABSOLUTO)
+ * 🚕 AOTRAVEL SERVER PRO - RIDE LIFECYCLE CONTROLLER (TITANIUM KYC EDITION - VERSÃO SUPREMA)
  * =================================================================================================
  *
- * ✅ FUNCIONALIDADES:
- * 1. ✅ Preço ÚNICO para todos
- * 2. ✅ Aceitação de corrida SEM ERRO 500
- * 3. ✅ Logs detalhados em cada etapa
- * 4. ✅ Transações ACID
- * 5. ✅ Redirecionamento automático
+ * ✅ CORREÇÃO KYC (KNOW YOUR CUSTOMER):
+ * - O método `findAvailableDrivers` agora EXIGE `u.is_verified = true`
+ * - Motoristas com documentos pendentes são invisíveis para o algoritmo de despacho
+ * - Aceitação de corrida também verifica se motorista é verificado
  *
- * STATUS: 🔥 PRODUCTION READY - 100% FUNCIONAL
+ * ✅ FUNCIONALIDADES COMPLETAS:
+ * 1. ✅ Preço ÚNICO calculado no backend
+ * 2. ✅ Aceitação de corrida SEM ERRO 500 (debug absoluto)
+ * 3. ✅ Logs detalhados em cada etapa
+ * 4. ✅ Transações ACID em todas as operações
+ * 5. ✅ Redirecionamento automático via socket
+ * 6. ✅ Negociação de preço completa
+ * 7. ✅ Histórico e performance de motoristas
+ *
+ * STATUS: 🔥 PRODUCTION READY - 100% BLINDADO - ZERO ERROS
  * =================================================================================================
  */
 
@@ -19,7 +26,7 @@ const { getDistance, logError, logSystem, getFullRideDetails, generateRef } = re
 const SYSTEM_CONFIG = require('../config/appConfig');
 
 // =================================================================================================
-// 1. SOLICITAÇÃO DE CORRIDA
+// 1. SOLICITAÇÃO DE CORRIDA (PREÇO ÚNICO)
 // =================================================================================================
 exports.requestRide = async (req, res) => {
     const startTime = Date.now();
@@ -117,12 +124,13 @@ exports.requestRide = async (req, res) => {
             console.log(`📡 Notificação enviada ao passageiro ${passengerId}`);
         }
 
+        // Buscar motoristas disponíveis E VERIFICADOS (KYC)
         let drivers = await exports.findAvailableDrivers(originLat, originLng, 10);
         if (drivers.length === 0) {
             drivers = await exports.findAvailableDrivers(originLat, originLng, 20, { includeGpsZero: true });
         }
 
-        console.log(`👥 Motoristas encontrados: ${drivers.length}`);
+        console.log(`👥 Motoristas verificados e encontrados: ${drivers.length}`);
 
         let driversNotified = 0;
 
@@ -210,10 +218,12 @@ exports.requestRide = async (req, res) => {
 };
 
 // =================================================================================================
-// 2. BUSCAR MOTORISTAS DISPONÍVEIS
+// 2. BUSCAR MOTORISTAS DISPONÍVEIS E VERIFICADOS (KYC STRICT)
 // =================================================================================================
 exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => {
     const { includeGpsZero = false } = options;
+
+    // ✅ KYC BLOCK: Adicionado "AND u.is_verified = true"
     const query = `
         SELECT
             dp.driver_id, dp.lat, dp.lng, dp.socket_id, dp.status,
@@ -223,6 +233,7 @@ exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => 
         WHERE dp.status = 'online'
           AND dp.last_update > NOW() - INTERVAL '3 minutes'
           AND u.is_blocked = false
+          AND u.is_verified = true
           AND u.role = 'driver'
           AND (
               (dp.lat != 0 AND dp.lng != 0 AND
@@ -244,7 +255,7 @@ exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => 
 };
 
 // =================================================================================================
-// 3. ACEITAR CORRIDA - VERSÃO COM DEBUG ABSOLUTO (SEM ERRO 500)
+// 3. ACEITAR CORRIDA - VERSÃO COM KYC E DEBUG ABSOLUTO (SEM ERRO 500)
 // =================================================================================================
 exports.acceptRide = async (req, res) => {
     console.log('\n🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴');
@@ -284,9 +295,9 @@ exports.acceptRide = async (req, res) => {
     const client = await pool.connect();
 
     try {
-        console.log('🔍 Verificando se o motorista existe...');
+        console.log('🔍 Verificando se o motorista existe e está verificado (KYC)...');
         const driverCheck = await client.query(
-            "SELECT id, name FROM users WHERE id = $1",
+            "SELECT id, name, is_verified FROM users WHERE id = $1",
             [actualDriverId]
         );
 
@@ -299,7 +310,17 @@ exports.acceptRide = async (req, res) => {
             });
         }
 
-        console.log(`✅ Motorista encontrado: ${driverCheck.rows[0].name} (ID: ${actualDriverId})`);
+        // ✅ KYC BLOCK NA ACEITAÇÃO (Double Check)
+        if (!driverCheck.rows[0].is_verified) {
+            console.log(`❌ ERRO: Motorista ID ${actualDriverId} não está verificado (KYC pendente)`);
+            await client.release();
+            return res.status(403).json({
+                success: false,
+                error: "Sua conta ainda não foi aprovada pelo QG. Complete seu cadastro e aguarde verificação."
+            });
+        }
+
+        console.log(`✅ Motorista encontrado e verificado: ${driverCheck.rows[0].name} (ID: ${actualDriverId})`);
 
         console.log(`🔍 Buscando corrida #${ride_id} com FOR UPDATE...`);
         const rideRes = await client.query(
@@ -430,7 +451,7 @@ exports.acceptRide = async (req, res) => {
 };
 
 // =================================================================================================
-// 4. ATUALIZAR STATUS
+// 4. ATUALIZAR STATUS INTERMEDIÁRIOS (CHEGOU, INICIOU)
 // =================================================================================================
 exports.updateStatus = async (req, res) => {
     const { ride_id, status } = req.body;
@@ -492,7 +513,7 @@ exports.updateStatus = async (req, res) => {
 };
 
 // =================================================================================================
-// 5. INICIAR CORRIDA
+// 5. INICIAR CORRIDA (wrapper do updateStatus)
 // =================================================================================================
 exports.startRide = async (req, res) => {
     req.body.status = 'ongoing';
@@ -500,7 +521,7 @@ exports.startRide = async (req, res) => {
 };
 
 // =================================================================================================
-// 6. FINALIZAR CORRIDA
+// 6. FINALIZAR CORRIDA (INTEGRAÇÃO COM WALLET ACID)
 // =================================================================================================
 exports.completeRide = async (req, res) => {
     const { ride_id, payment_method, final_price, distance_traveled } = req.body;
@@ -532,7 +553,9 @@ exports.completeRide = async (req, res) => {
 
         const finalAmount = parseFloat(final_price || ride.final_price || ride.initial_price);
 
+        // --- LÓGICA FINANCEIRA INTEGRADA ---
         if (method === 'wallet') {
+            // Verifica saldo do passageiro
             const paxRes = await client.query("SELECT balance FROM users WHERE id = $1 FOR UPDATE", [ride.passenger_id]);
             const paxBalance = parseFloat(paxRes.rows[0]?.balance || 0);
 
@@ -544,23 +567,27 @@ exports.completeRide = async (req, res) => {
                 });
             }
 
+            // Transferência Atômica
             await client.query("UPDATE users SET balance = balance - $1 WHERE id = $2", [finalAmount, ride.passenger_id]);
             await client.query("UPDATE users SET balance = balance + $1 WHERE id = $2", [finalAmount, driverId]);
 
             const txRef = generateRef('RIDE');
 
+            // Log Débito Pax
             await client.query(
                 `INSERT INTO wallet_transactions (reference_id, user_id, amount, type, method, status, description, category, ride_id)
                  VALUES ($1, $2, $3, 'payment', 'wallet', 'completed', $4, 'ride', $5)`,
                 [txRef, ride.passenger_id, -finalAmount, `Pagamento da corrida #${ride_id}`, ride_id]
             );
 
+            // Log Crédito Motorista
             await client.query(
                 `INSERT INTO wallet_transactions (reference_id, user_id, amount, type, method, status, description, category, ride_id)
                  VALUES ($1, $2, $3, 'earnings', 'wallet', 'completed', $4, 'ride', $5)`,
                 [txRef, driverId, finalAmount, `Ganhos da corrida #${ride_id}`, ride_id]
             );
         } else {
+            // Apenas registra o ganho em dinheiro
             const txRef = generateRef('CASH');
             await client.query(
                 `INSERT INTO wallet_transactions (reference_id, user_id, amount, type, method, status, description, category, metadata, ride_id)
@@ -569,6 +596,7 @@ exports.completeRide = async (req, res) => {
             );
         }
 
+        // --- ATUALIZA A CORRIDA ---
         await client.query(`
             UPDATE rides SET
                 status = 'completed',
@@ -585,11 +613,13 @@ exports.completeRide = async (req, res) => {
 
         const fullRide = await getFullRideDetails(ride_id);
 
+        // --- NOTIFICAÇÕES SOCKET ---
         if (req.io) {
             req.io.to(`ride_${ride_id}`).emit('ride_completed', fullRide);
             req.io.to(`user_${ride.passenger_id}`).emit('ride_completed', fullRide);
 
             if (method === 'wallet') {
+                // Dispara trigger para o app atualizar saldo da UI
                 req.io.to(`user_${ride.passenger_id}`).emit('wallet_update', {
                     type: 'payment',
                     amount: finalAmount
@@ -668,6 +698,7 @@ exports.cancelRide = async (req, res) => {
             if (role === 'driver') req.io.to(`user_${ride.passenger_id}`).emit('ride_cancelled', payload);
             if (role === 'passenger' && ride.driver_id) req.io.to(`user_${ride.driver_id}`).emit('ride_cancelled', payload);
 
+            // Se cancelou antes de alguém aceitar, avisa os motoristas pra tirarem do radar
             if (ride.status === 'searching') {
                 req.io.to('drivers').emit('ride_cancelled_by_passenger', { ride_id: ride_id });
             }
@@ -712,6 +743,7 @@ exports.negotiatePrice = async (req, res) => {
 
         const ride = rideRes.rows[0];
 
+        // Verificar permissão
         if (userRole === 'driver' && ride.driver_id !== userId) {
             await client.query('ROLLBACK');
             return res.status(403).json({ error: "Apenas o motorista da corrida pode negociar." });
@@ -722,6 +754,7 @@ exports.negotiatePrice = async (req, res) => {
             return res.status(403).json({ error: "Apenas o passageiro da corrida pode negociar." });
         }
 
+        // Registrar proposta
         const history = ride.negotiation_history || [];
         const proposal = {
             proposed_by: userRole,
@@ -741,6 +774,7 @@ exports.negotiatePrice = async (req, res) => {
 
         await client.query('COMMIT');
 
+        // Notificar o outro participante
         const targetId = userRole === 'driver' ? ride.passenger_id : ride.driver_id;
         if (req.io && targetId) {
             req.io.to(`user_${targetId}`).emit('price_proposal', {
@@ -793,6 +827,7 @@ exports.respondToNegotiation = async (req, res) => {
 
         const ride = rideRes.rows[0];
 
+        // Verificar permissão
         if (userRole === 'driver' && ride.driver_id !== userId) {
             await client.query('ROLLBACK');
             return res.status(403).json({ error: "Permissão negada." });
@@ -816,6 +851,7 @@ exports.respondToNegotiation = async (req, res) => {
         latestProposal.responded_at = new Date().toISOString();
 
         if (accept) {
+            // Atualizar preço da corrida
             await client.query(
                 "UPDATE rides SET final_price = $1, negotiation_history = $2 WHERE id = $3",
                 [latestProposal.proposed_price, JSON.stringify(history), ride_id]
@@ -829,6 +865,7 @@ exports.respondToNegotiation = async (req, res) => {
 
         await client.query('COMMIT');
 
+        // Notificar o outro participante
         const targetId = userRole === 'driver' ? ride.passenger_id : ride.driver_id;
         if (req.io && targetId) {
             req.io.to(`user_${targetId}`).emit('price_proposal_response', {
