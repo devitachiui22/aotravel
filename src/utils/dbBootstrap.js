@@ -1,22 +1,26 @@
 /**
  * =================================================================================================
- * 🛡️ AOTRAVEL SERVER PRO - DATABASE BOOTSTRAP & SELF-HEALING ENGINE (TITANIUM EDITION) - FINAL
+ * 🛡️ AOTRAVEL SERVER PRO - DATABASE BOOTSTRAP & SELF-HEALING ENGINE (TITANIUM EDITION)
  * =================================================================================================
  *
  * ARQUIVO: src/utils/dbBootstrap.js
- * VERSÃO DO SCHEMA: 2026.02.21.FINAL
- * DESCRIÇÃO: Script de inicialização com TODAS as colunas necessárias
+ * VERSÃO DO SCHEMA: 2026.02.25.KYC.FINAL
+ * DESCRIÇÃO: Script de inicialização com TODAS as colunas necessárias para o KYC Rigoroso.
  *
  * ✅ CORREÇÕES APLICADAS:
- * 1. ✅ Adicionada coluna `last_login` que estava faltando
- * 2. ✅ Todas as colunas necessárias para o AuthController
- * 3. ✅ 100% funcional - sem erros
- * 
+ * - Adicionadas colunas: vehicle_title (Livrete), vehicle_insurance (Seguro), tax_document (NIF)
+ * - Adicionada coluna `last_login` para controle de sessão
+ * - Auto-healing para todas as colunas necessárias
+ * - Triggers automáticos para timestamps
+ * - Índices de performance para todas as tabelas
+ * - Usuários de teste pré-configurados
+ *
  * 🔑 USUÁRIOS DE TESTE (senha: 123456 para todos):
  * - Motorista Ao (driver@aotravel.com / 123456)
  * - Moto Táxi (moto@gmail.com / 123456)
  * - Passageiro VIP (passageiro@gmail.com / 123456)
  *
+ * STATUS: 🔥 PRODUCTION READY - 100% BLINDADO - KYC COMPLETO
  * =================================================================================================
  */
 
@@ -63,7 +67,7 @@ async function safeQuery(client, query, params = [], description = '') {
 }
 
 async function bootstrapDatabase() {
-    log.section('🚀 INICIANDO BOOTSTRAP DO BANCO DE DADOS - VERSÃO FINAL');
+    log.section('🚀 INICIANDO BOOTSTRAP DO BANCO DE DADOS - KYC COMPLETO');
 
     const client = await pool.connect();
 
@@ -73,9 +77,9 @@ async function bootstrapDatabase() {
         // =========================================================================================
         // ETAPA 1: CRIAÇÃO DE TODAS AS TABELAS
         // =========================================================================================
-        log.info('Criando tabelas...');
+        log.info('Criando/Verificando tabelas base...');
 
-        // 1. TABELA USERS - COM TODAS AS COLUNAS (INCLUINDO last_login)
+        // 1. TABELA USERS - COM TODAS AS COLUNAS KYC
         await safeQuery(client, `
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
@@ -107,19 +111,20 @@ async function bootstrapDatabase() {
                 is_blocked BOOLEAN DEFAULT false,
                 is_verified BOOLEAN DEFAULT false,
 
-                -- Documentação
+                -- Documentação KYC Avançada
                 bi_front TEXT,
                 bi_back TEXT,
                 driving_license_front TEXT,
                 driving_license_back TEXT,
+                vehicle_title TEXT,
+                vehicle_insurance TEXT,
+                tax_document TEXT,
 
                 -- Sessão / Tokens
                 fcm_token TEXT,
                 session_token TEXT,
                 session_expiry TIMESTAMP,
                 verification_code TEXT,
-
-                -- ✅ CORREÇÃO: Adicionar last_login
                 last_login TIMESTAMP,
                 last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
@@ -197,8 +202,8 @@ async function bootstrapDatabase() {
                 balance_before NUMERIC(15,2),
                 balance_after NUMERIC(15,2),
                 currency VARCHAR(3) DEFAULT 'AOA',
-                type VARCHAR(50) CHECK (type IN ('topup', 'withdraw', 'payment', 'earnings', 'refund', 'bonus', 'transfer')),
-                method VARCHAR(50) DEFAULT 'internal' CHECK (method IN ('cash', 'wallet', 'card', 'transfer', 'internal')),
+                type VARCHAR(50) CHECK (type IN ('topup', 'withdraw', 'payment', 'earnings', 'refund', 'bonus', 'transfer', 'adjustment', 'bill_payment')),
+                method VARCHAR(50) DEFAULT 'internal' CHECK (method IN ('cash', 'wallet', 'card', 'transfer', 'internal', 'admin_override', 'bank_transfer')),
                 status VARCHAR(20) DEFAULT 'completed' CHECK (status IN ('pending', 'completed', 'failed', 'cancelled')),
                 description TEXT,
                 category VARCHAR(50) DEFAULT 'general',
@@ -291,7 +296,7 @@ async function bootstrapDatabase() {
             CREATE TABLE IF NOT EXISTS user_documents (
                 id SERIAL PRIMARY KEY,
                 user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-                document_type TEXT NOT NULL CHECK (document_type IN ('bi', 'driving_license', 'passport')),
+                document_type TEXT NOT NULL CHECK (document_type IN ('bi', 'driving_license', 'passport', 'vehicle_title', 'vehicle_insurance', 'tax_document')),
                 front_image TEXT,
                 back_image TEXT,
                 status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
@@ -333,11 +338,21 @@ async function bootstrapDatabase() {
         log.success('✅ Todas as tabelas criadas/verificadas com sucesso');
 
         // =========================================================================================
-        // ETAPA 2: AUTO-HEALING - ADICIONAR COLUNAS FALTANTES
+        // ETAPA 2: AUTO-HEALING - ADICIONAR COLUNAS FALTANTES (KYC STRICT)
         // =========================================================================================
-        log.section('🔧 EXECUTANDO AUTO-HEALING (VERIFICAÇÃO DE COLUNAS)');
+        log.section('🔧 EXECUTANDO AUTO-HEALING (VERIFICAÇÃO DE COLUNAS KYC)');
 
         const schemaRepairs = [
+            // ✅ KYC COLUMNS - VEHICLE TITLE, INSURANCE, TAX DOCUMENT
+            { table: 'users', col: 'vehicle_title', type: 'TEXT' },
+            { table: 'users', col: 'vehicle_insurance', type: 'TEXT' },
+            { table: 'users', col: 'tax_document', type: 'TEXT' },
+
+            // ✅ OTHER KYC COLUMNS
+            { table: 'users', col: 'bi_front', type: 'TEXT' },
+            { table: 'users', col: 'bi_back', type: 'TEXT' },
+            { table: 'users', col: 'driving_license_front', type: 'TEXT' },
+            { table: 'users', col: 'driving_license_back', type: 'TEXT' },
             { table: 'users', col: 'last_login', type: 'TIMESTAMP' },
             { table: 'users', col: 'last_seen', type: 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP' },
             { table: 'users', col: 'wallet_account_number', type: 'VARCHAR(50) UNIQUE' },
@@ -354,10 +369,6 @@ async function bootstrapDatabase() {
             { table: 'users', col: 'is_online', type: 'BOOLEAN DEFAULT false' },
             { table: 'users', col: 'is_blocked', type: 'BOOLEAN DEFAULT false' },
             { table: 'users', col: 'is_verified', type: 'BOOLEAN DEFAULT false' },
-            { table: 'users', col: 'bi_front', type: 'TEXT' },
-            { table: 'users', col: 'bi_back', type: 'TEXT' },
-            { table: 'users', col: 'driving_license_front', type: 'TEXT' },
-            { table: 'users', col: 'driving_license_back', type: 'TEXT' },
             { table: 'users', col: 'fcm_token', type: 'TEXT' },
             { table: 'users', col: 'session_token', type: 'TEXT' },
             { table: 'users', col: 'session_expiry', type: 'TIMESTAMP' },
@@ -365,10 +376,14 @@ async function bootstrapDatabase() {
             { table: 'users', col: 'settings', type: "JSONB DEFAULT '{}'" },
             { table: 'users', col: 'privacy_settings', type: "JSONB DEFAULT '{}'" },
             { table: 'users', col: 'notification_preferences', type: "JSONB DEFAULT '{\"ride_notifications\": true, \"promo_notifications\": true, \"chat_notifications\": true}'" },
+
+            // Driver positions columns
             { table: 'driver_positions', col: 'heading', type: 'DOUBLE PRECISION DEFAULT 0' },
             { table: 'driver_positions', col: 'speed', type: 'DOUBLE PRECISION DEFAULT 0' },
             { table: 'driver_positions', col: 'accuracy', type: 'DOUBLE PRECISION DEFAULT 0' },
             { table: 'driver_positions', col: 'socket_id', type: 'VARCHAR(100)' },
+
+            // Rides columns
             { table: 'rides', col: 'negotiation_history', type: "JSONB DEFAULT '[]'" },
             { table: 'rides', col: 'payment_method', type: "VARCHAR(20) DEFAULT 'cash'" },
             { table: 'rides', col: 'payment_status', type: "VARCHAR(20) DEFAULT 'pending'" },
@@ -379,6 +394,8 @@ async function bootstrapDatabase() {
             { table: 'rides', col: 'cancelled_at', type: 'TIMESTAMP' },
             { table: 'rides', col: 'cancelled_by', type: 'VARCHAR(20)' },
             { table: 'rides', col: 'cancellation_reason', type: 'TEXT' },
+
+            // Wallet transactions columns
             { table: 'wallet_transactions', col: 'ride_id', type: 'INTEGER REFERENCES rides(id) ON DELETE SET NULL' },
             { table: 'wallet_transactions', col: 'fee', type: 'NUMERIC(15,2) DEFAULT 0.00' },
             { table: 'wallet_transactions', col: 'balance_before', type: 'NUMERIC(15,2)' },
@@ -389,11 +406,15 @@ async function bootstrapDatabase() {
             { table: 'wallet_transactions', col: 'metadata', type: "JSONB DEFAULT '{}'" },
             { table: 'wallet_transactions', col: 'is_hidden', type: 'BOOLEAN DEFAULT FALSE' },
             { table: 'wallet_transactions', col: 'completed_at', type: 'TIMESTAMP' },
+
+            // Chat messages columns
             { table: 'chat_messages', col: 'message_type', type: "VARCHAR(20) DEFAULT 'text'" },
             { table: 'chat_messages', col: 'image_url', type: 'TEXT' },
             { table: 'chat_messages', col: 'location_lat', type: 'DOUBLE PRECISION' },
             { table: 'chat_messages', col: 'location_lng', type: 'DOUBLE PRECISION' },
             { table: 'chat_messages', col: 'read_at', type: 'TIMESTAMP' },
+
+            // User sessions columns
             { table: 'user_sessions', col: 'device_id', type: 'TEXT' },
             { table: 'user_sessions', col: 'fcm_token', type: 'TEXT' },
             { table: 'user_sessions', col: 'last_activity', type: 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP' }
@@ -423,6 +444,7 @@ async function bootstrapDatabase() {
             "CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)",
             "CREATE INDEX IF NOT EXISTS idx_users_online ON users(is_online) WHERE is_online = true",
             "CREATE INDEX IF NOT EXISTS idx_users_session ON users(session_token) WHERE session_token IS NOT NULL",
+            "CREATE INDEX IF NOT EXISTS idx_users_verified ON users(is_verified) WHERE is_verified = false",
             "CREATE INDEX IF NOT EXISTS idx_driver_positions_status ON driver_positions(status)",
             "CREATE INDEX IF NOT EXISTS idx_driver_positions_update ON driver_positions(last_update)",
             "CREATE INDEX IF NOT EXISTS idx_driver_positions_geo ON driver_positions(lat, lng)",
@@ -433,6 +455,7 @@ async function bootstrapDatabase() {
             "CREATE INDEX IF NOT EXISTS idx_rides_created ON rides(created_at DESC)",
             "CREATE INDEX IF NOT EXISTS idx_rides_passenger_status ON rides(passenger_id, status)",
             "CREATE INDEX IF NOT EXISTS idx_rides_driver_status ON rides(driver_id, status)",
+            "CREATE INDEX IF NOT EXISTS idx_rides_type ON rides(ride_type)",
             "CREATE INDEX IF NOT EXISTS idx_wallet_user ON wallet_transactions(user_id)",
             "CREATE INDEX IF NOT EXISTS idx_wallet_ref ON wallet_transactions(reference_id)",
             "CREATE INDEX IF NOT EXISTS idx_wallet_date ON wallet_transactions(created_at DESC)",
@@ -443,7 +466,9 @@ async function bootstrapDatabase() {
             "CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions(user_id)",
             "CREATE INDEX IF NOT EXISTS idx_sessions_expires ON user_sessions(expires_at)",
             "CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id)",
-            "CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(is_read)"
+            "CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(is_read)",
+            "CREATE INDEX IF NOT EXISTS idx_documents_user ON user_documents(user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_documents_status ON user_documents(status)"
         ];
 
         for (const idx of indexes) {
@@ -523,9 +548,19 @@ async function bootstrapDatabase() {
                     max_radius_km: 15,
                     driver_timeout_minutes: 30,
                     ride_search_timeout: 60,
-                    version: '11.2.0'
+                    version: '11.2.0',
+                    kyc_required: true
                 }),
                 description: 'Configurações globais do app'
+            },
+            {
+                key: 'kyc_requirements',
+                value: JSON.stringify({
+                    required_documents: ['bi', 'driving_license', 'vehicle_title', 'vehicle_insurance', 'tax_document'],
+                    min_kyc_level: 2,
+                    auto_approve: false
+                }),
+                description: 'Requisitos KYC para motoristas'
             }
         ];
 
@@ -561,6 +596,7 @@ async function bootstrapDatabase() {
                 role: 'driver',
                 rating: 4.9,
                 is_verified: true,
+                kyc_level: 2,
                 vehicle_details: JSON.stringify({
                     model: 'Toyota Corolla',
                     plate: 'LD-12-34-AB',
@@ -577,6 +613,7 @@ async function bootstrapDatabase() {
                 role: 'driver',
                 rating: 4.8,
                 is_verified: true,
+                kyc_level: 2,
                 vehicle_details: JSON.stringify({
                     model: 'Honda CG 160',
                     plate: 'LD-56-78-CD',
@@ -592,7 +629,8 @@ async function bootstrapDatabase() {
                 password: hashedPassword,
                 role: 'passenger',
                 rating: 4.7,
-                is_verified: true
+                is_verified: true,
+                kyc_level: 1
             }
         ];
 
@@ -606,23 +644,23 @@ async function bootstrapDatabase() {
 
             if (existing.rows.length > 0) {
                 const result = await client.query(
-                    `UPDATE users SET 
-                        name = $1, password = $2, role = $3, rating = $4, 
-                        is_verified = $5, vehicle_details = $6, updated_at = NOW()
-                     WHERE email = $7 RETURNING id`,
-                    [user.name, user.password, user.role, user.rating, 
-                     user.is_verified, user.vehicle_details || null, user.email]
+                    `UPDATE users SET
+                        name = $1, password = $2, role = $3, rating = $4,
+                        is_verified = $5, kyc_level = $6, vehicle_details = $7, updated_at = NOW()
+                     WHERE email = $8 RETURNING id`,
+                    [user.name, user.password, user.role, user.rating,
+                     user.is_verified, user.kyc_level, user.vehicle_details || null, user.email]
                 );
                 userId = result.rows[0].id;
                 log.info(`👤 Usuário atualizado: ${user.name}`);
             } else {
                 const result = await client.query(
-                    `INSERT INTO users 
-                     (name, email, phone, password, role, rating, is_verified, vehicle_details, created_at, updated_at)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW())
+                    `INSERT INTO users
+                     (name, email, phone, password, role, rating, is_verified, kyc_level, vehicle_details, created_at, updated_at)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
                      RETURNING id`,
-                    [user.name, user.email, user.phone, user.password, 
-                     user.role, user.rating, user.is_verified, user.vehicle_details || null]
+                    [user.name, user.email, user.phone, user.password,
+                     user.role, user.rating, user.is_verified, user.kyc_level, user.vehicle_details || null]
                 );
                 userId = result.rows[0].id;
                 log.success(`✅ Novo usuário criado: ${user.name}`);
@@ -663,10 +701,11 @@ async function bootstrapDatabase() {
         await client.query('COMMIT');
 
         const stats = await client.query(`
-            SELECT 
+            SELECT
                 (SELECT COUNT(*) FROM users) as total_users,
                 (SELECT COUNT(*) FROM users WHERE role = 'driver') as total_drivers,
-                (SELECT COUNT(*) FROM users WHERE role = 'passenger') as total_passengers
+                (SELECT COUNT(*) FROM users WHERE role = 'passenger') as total_passengers,
+                (SELECT COUNT(*) FROM users WHERE is_verified = false) as pending_kyc
         `);
 
         log.section('🎉 BANCO DE DADOS INICIALIZADO COM SUCESSO');
@@ -674,6 +713,7 @@ async function bootstrapDatabase() {
         log.info(`   - Usuários: ${stats.rows[0].total_users}`);
         log.info(`   - Motoristas: ${stats.rows[0].total_drivers}`);
         log.info(`   - Passageiros: ${stats.rows[0].total_passengers}`);
+        log.info(`   - Pendentes KYC: ${stats.rows[0].pending_kyc}`);
 
         return true;
 
