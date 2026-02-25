@@ -4,14 +4,19 @@
  * =================================================================================================
  *
  * ARQUIVO: src/utils/helpers.js
- * DESCRIÇÃO: Biblioteca de funções utilitárias - VERSÃO CORRIGIDA
+ * DESCRIÇÃO: Biblioteca de funções utilitárias.
  *
- * ✅ CORREÇÕES:
- * 1. ✅ Função getFullRideDetails corrigida para retornar TODOS os dados
- * 2. ✅ Tratamento de erros melhorado
- * 3. ✅ Logs detalhados para debug
+ * ✅ CORREÇÃO KYC STRICT: Adicionado vehicle_title, vehicle_insurance, tax_document e
+ *    cartas de condução ao helper de detalhes do usuário.
  *
- * STATUS: 🔥 PRODUCTION READY
+ * ✅ FUNCIONALIDADES:
+ * 1. ✅ Sistema de logs com timestamp (Luanda/Africa)
+ * 2. ✅ Cálculo de distância geográfica (Haversine)
+ * 3. ✅ Geradores de códigos e referências
+ * 4. ✅ Validações de segurança
+ * 5. ✅ Helpers de banco de dados com todos os campos KYC
+ *
+ * STATUS: 🔥 PRODUCTION READY - 100% BLINDADO
  * =================================================================================================
  */
 
@@ -23,12 +28,22 @@ const SYSTEM_CONFIG = require('../config/appConfig');
 // 1. SISTEMA DE LOGS E FORMATAÇÃO
 // =================================================================================================
 
+/**
+ * Log de sistema com timestamp (Luanda)
+ * @param {string} tag - Tag identificadora
+ * @param {string} message - Mensagem a ser logada
+ */
 function logSystem(tag, message) {
     const now = new Date();
     const timeString = now.toLocaleTimeString('pt-AO', { hour12: false, timeZone: 'Africa/Luanda' });
     console.log(`[${timeString}] ℹ️ [${tag}] ${message}`);
 }
 
+/**
+ * Log de erro com stack trace (apenas em desenvolvimento)
+ * @param {string} tag - Tag identificadora
+ * @param {Error} error - Objeto de erro
+ */
 function logError(tag, error) {
     const now = new Date();
     const timeString = now.toLocaleTimeString('pt-AO', { hour12: false, timeZone: 'Africa/Luanda' });
@@ -43,6 +58,14 @@ function logError(tag, error) {
 // 2. UTILITÁRIOS MATEMÁTICOS E GEOGRÁFICOS
 // =================================================================================================
 
+/**
+ * Calcula distância entre duas coordenadas (Fórmula de Haversine)
+ * @param {number} lat1 - Latitude do ponto 1
+ * @param {number} lon1 - Longitude do ponto 1
+ * @param {number} lat2 - Latitude do ponto 2
+ * @param {number} lon2 - Longitude do ponto 2
+ * @returns {number} Distância em quilômetros
+ */
 function getDistance(lat1, lon1, lat2, lon2) {
     const pLat1 = parseFloat(lat1);
     const pLon1 = parseFloat(lon1);
@@ -52,7 +75,7 @@ function getDistance(lat1, lon1, lat2, lon2) {
     if (isNaN(pLat1) || isNaN(pLon1) || isNaN(pLat2) || isNaN(pLon2)) return 99999;
     if ((pLat1 === pLat2) && (pLon1 === pLon2)) return 0;
 
-    const R = 6371;
+    const R = 6371; // Raio da Terra em km
     const dLat = (pLat2 - pLat1) * Math.PI / 180;
     const dLon = (pLon2 - pLon1) * Math.PI / 180;
 
@@ -68,6 +91,11 @@ function getDistance(lat1, lon1, lat2, lon2) {
 // 3. GERADORES DE CÓDIGOS, REFS E CONTAS
 // =================================================================================================
 
+/**
+ * Gera código numérico aleatório
+ * @param {number} length - Tamanho do código (padrão: 6)
+ * @returns {string} Código gerado
+ */
 function generateCode(length = 6) {
     if (length <= 0) length = 6;
     const min = Math.pow(10, length - 1);
@@ -75,6 +103,11 @@ function generateCode(length = 6) {
     return Math.floor(min + Math.random() * (max - min + 1)).toString();
 }
 
+/**
+ * Gera referência única para transações
+ * @param {string} prefix - Prefixo da referência (ex: 'RIDE', 'PAY')
+ * @returns {string} Referência única
+ */
 function generateRef(prefix) {
     const safePrefix = (prefix || 'TX').toUpperCase().substring(0, 4);
     const date = new Date();
@@ -83,6 +116,11 @@ function generateRef(prefix) {
     return `${safePrefix}-${dateStr}-${rand}`;
 }
 
+/**
+ * Gera número de conta baseado no telefone
+ * @param {string} phone - Número de telefone
+ * @returns {string|null} Número de conta ou null
+ */
 function generateAccountNumber(phone) {
     if (!phone) return null;
     const cleanPhone = phone.replace(/\D/g, '').slice(-9);
@@ -97,18 +135,34 @@ function generateAccountNumber(phone) {
 // 4. VALIDAÇÕES E SEGURANÇA
 // =================================================================================================
 
+/**
+ * Verifica se um valor é um montante válido
+ * @param {any} amount - Valor a verificar
+ * @returns {boolean} true se for válido
+ */
 function isValidAmount(amount) {
     if (amount === null || amount === undefined) return false;
     const val = parseFloat(amount);
     return !isNaN(val) && isFinite(val) && val > 0.00;
 }
 
+/**
+ * Valida IBAN angolano (AO06 + 21 dígitos)
+ * @param {string} iban - IBAN a validar
+ * @returns {boolean} true se for válido
+ */
 function isValidAOIBAN(iban) {
     if (!iban) return false;
     const cleanIban = iban.replace(/\s/g, '').toUpperCase();
     return /^AO06[0-9]{21}$/.test(cleanIban) && cleanIban.length === 25;
 }
 
+/**
+ * Mascara dados sensíveis (ex: cartão, telefone)
+ * @param {string} data - Dado a mascarar
+ * @param {number} visibleEnd - Quantos caracteres visíveis no final
+ * @returns {string} Dado mascarado
+ */
 function maskData(data, visibleEnd = 4) {
     if (!data) return '';
     const str = String(data);
@@ -117,9 +171,14 @@ function maskData(data, visibleEnd = 4) {
 }
 
 // =================================================================================================
-// 5. HELPERS DE BANCO DE DADOS (VERSÃO CORRIGIDA)
+// 5. HELPERS DE BANCO DE DADOS (KYC STRICT)
 // =================================================================================================
 
+/**
+ * Busca detalhes completos de uma corrida
+ * @param {number} rideId - ID da corrida
+ * @returns {Object|null} Detalhes da corrida ou null
+ */
 async function getFullRideDetails(rideId) {
     console.log(`🔍 [HELPER] Buscando detalhes completos da corrida ${rideId}...`);
 
@@ -136,7 +195,7 @@ async function getFullRideDetails(rideId) {
             r.rating, r.feedback,
             r.payment_method, r.payment_status,
 
-            -- DADOS DO MOTORISTA (JSON OBJECT)
+            -- DADOS DO MOTORISTA (JSON OBJECT) - KYC COMPLETO
             CASE WHEN d.id IS NOT NULL THEN
                 json_build_object(
                     'id', d.id,
@@ -145,8 +204,14 @@ async function getFullRideDetails(rideId) {
                     'phone', d.phone,
                     'email', d.email,
                     'vehicle_details', d.vehicle_details,
+                    'vehicle_title', COALESCE(d.vehicle_title, ''),
+                    'vehicle_insurance', COALESCE(d.vehicle_insurance, ''),
+                    'tax_document', COALESCE(d.tax_document, ''),
+                    'driving_license_front', COALESCE(d.driving_license_front, ''),
+                    'driving_license_back', COALESCE(d.driving_license_back, ''),
                     'rating', d.rating,
                     'is_online', d.is_online,
+                    'is_verified', d.is_verified,
                     'bi_front', COALESCE(d.bi_front, ''),
                     'bi_back', COALESCE(d.bi_back, '')
                 )
@@ -160,6 +225,7 @@ async function getFullRideDetails(rideId) {
                 'phone', p.phone,
                 'email', p.email,
                 'rating', p.rating,
+                'is_verified', p.is_verified,
                 'bi_front', COALESCE(p.bi_front, ''),
                 'bi_back', COALESCE(p.bi_back, '')
             ) as passenger_data
@@ -188,7 +254,14 @@ async function getFullRideDetails(rideId) {
     }
 }
 
+/**
+ * Busca detalhes completos de um usuário (KYC COMPLETO)
+ * @param {number} userId - ID do usuário
+ * @returns {Object|null} Detalhes do usuário ou null
+ */
 async function getUserFullDetails(userId) {
+    console.log(`🔍 [HELPER] Buscando detalhes completos do usuário ${userId}...`);
+
     const query = `
         SELECT
             id, name, email, phone, photo, role,
@@ -199,10 +272,14 @@ async function getUserFullDetails(userId) {
             account_tier,
             (wallet_pin_hash IS NOT NULL) as has_pin,
             vehicle_details,
+            vehicle_title,
+            vehicle_insurance,
+            tax_document,
+            driving_license_front,
+            driving_license_back,
             rating,
             is_online,
             bi_front, bi_back,
-            driving_license_front, driving_license_back,
             is_verified,
             is_blocked,
             fcm_token,
@@ -210,22 +287,32 @@ async function getUserFullDetails(userId) {
             privacy_settings,
             notification_preferences,
             created_at,
-            last_login
+            last_login,
+            updated_at
         FROM users
         WHERE id = $1
     `;
 
     try {
         const res = await pool.query(query, [userId]);
-        return res.rows[0] || null;
+
+        if (res.rows.length === 0) {
+            console.log(`❌ [HELPER] Usuário ${userId} não encontrado`);
+            return null;
+        }
+
+        console.log(`✅ [HELPER] Dados do usuário ${userId} obtidos com sucesso`);
+        return res.rows[0];
+
     } catch (e) {
         logError('USER_FETCH', e);
+        console.error(`❌ [HELPER] Erro ao buscar usuário ${userId}:`, e.message);
         return null;
     }
 }
 
 // =================================================================================================
-// EXPORTAÇÃO UNIFICADA
+// 6. EXPORTAÇÃO UNIFICADA
 // =================================================================================================
 module.exports = {
     logSystem,
