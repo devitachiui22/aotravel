@@ -1,16 +1,17 @@
 /**
  * =================================================================================================
- * 🚕 AOTRAVEL SERVER PRO - RIDE LIFECYCLE CONTROLLER (TITANIUM KYC & MATCHING)
+ * 🚕 AOTRAVEL SERVER PRO - RIDE CONTROLLER (MATCHING & PAYMENT ENGINE)
  * =================================================================================================
- * STATUS: 🔥 PRODUCTION READY - 100% BLINDADO - ZERO ERROS DE PREÇO/CATEGORIA
+ * STATUS: 🔥 PRODUCTION READY - TRANSAÇÃO ACID & PIN VALIDATION
  * =================================================================================================
  */
 
 const pool = require('../config/db');
+const bcrypt = require('bcrypt');
 const { getDistance, logError, logSystem, getFullRideDetails, generateRef } = require('../utils/helpers');
 
 // =================================================================================================
-// 1. SOLICITAÇÃO DE CORRIDA (PREÇO ÚNICO E MATCHING EXATO)
+// 1. SOLICITAÇÃO DE CORRIDA (MATCHING RESTRITO)
 // =================================================================================================
 exports.requestRide = async (req, res) => {
     const startTime = Date.now();
@@ -256,7 +257,6 @@ exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => 
         const result = await pool.query(query, [lat, lng, radiusKm, requiredVehicleType]);
         console.log(`✅ Encontrados ${result.rows.length} motoristas do tipo ${requiredVehicleType}`);
 
-        // Log detalhado dos motoristas encontrados
         result.rows.forEach((driver, index) => {
             if (driver.lat && driver.lng && driver.lat !== 0 && driver.lng !== 0) {
                 const dist = getDistance(lat, lng, parseFloat(driver.lat), parseFloat(driver.lng));
@@ -378,7 +378,6 @@ exports.acceptRide = async (req, res) => {
             });
         }
 
-        // Validar tipo do veículo na aceitação final
         const vType = driverCheck.rows[0].vehicle_details?.type || 'car';
         let reqType = 'car';
         if (ride.ride_type === 'moto' || ride.ride_type === 'delivery_moto') reqType = 'moto';
@@ -558,11 +557,11 @@ exports.startRide = async (req, res) => {
 };
 
 // =================================================================================================
-// 6. FINALIZAR CORRIDA
+// 6. FINALIZAR CORRIDA (COM VALIDAÇÃO DE PIN DO PASSAGEIRO)
 // =================================================================================================
 exports.completeRide = async (req, res) => {
-    const { ride_id, payment_method, final_price, distance_traveled } = req.body;
-    const driverId = req.user.id;
+    const { ride_id, payment_method, final_price, distance_traveled, pin } = req.body;
+    const userId = req.user.id; // Pode ser motorista ou passageiro
     const method = payment_method || 'cash';
 
     console.log('\n✅ [COMPLETE_RIDE] INICIANDO FINALIZAÇÃO');
@@ -570,6 +569,7 @@ exports.completeRide = async (req, res) => {
     console.log(`   Method: ${method}`);
     console.log(`   Final Price: ${final_price}`);
     console.log(`   Distance Traveled: ${distance_traveled}`);
+    console.log(`   User ID: ${userId}`);
     console.log('----------------------------------------\n');
 
     const client = await pool.connect();
@@ -598,8 +598,9 @@ exports.completeRide = async (req, res) => {
             initial_price: ride.initial_price
         });
 
-        if (ride.driver_id !== driverId) {
-            console.log(`❌ ERRO: Motorista ${driverId} não é o responsável`);
+        // Verifica se quem está a chamar a rota pertence a corrida
+        if (ride.driver_id !== userId && ride.passenger_id !== userId) {
+            console.log(`❌ ERRO: Usuário ${userId} não pertence a esta corrida`);
             await client.query('ROLLBACK');
             return res.status(403).json({ error: "Acesso negado." });
         }
@@ -607,83 +608,119 @@ exports.completeRide = async (req, res) => {
         if (ride.status !== 'ongoing' && ride.status !== 'accepted') {
             console.log(`❌ ERRO: Status inválido para finalização: ${ride.status}`);
             await client.query('ROLLBACK');
-            return res.status(400).json({ error: "Status inválido para finalização." });
+            return res.status(400).json({ error: "A corrida já foi finalizada." });
         }
 
         const finalAmount = parseFloat(final_price || ride.final_price || ride.initial_price);
         console.log(`💰 Valor final: ${finalAmount} Kz`);
 
-        // LÓGICA FINANCEIRA INTEGRADA
+        // --- LÓGICA FINANCEIRA INTEGRADA (WALLET) ---
         if (method === 'wallet') {
-            console.log(`💳 Processando pagamento via carteira...`);
+            // Se foi o passageiro que chamou a rota (Digitou PIN na UI dele)
+            if (userId === ride.passenger_id) {
+                console.log(`💳 Passageiro ${userId} tentando pagar via wallet...`);
 
-            // Verifica saldo do passageiro
-            const paxRes = await client.query(
-                "SELECT balance FROM users WHERE id = $1 FOR UPDATE",
-                [ride.passenger_id]
-            );
-            const paxBalance = parseFloat(paxRes.rows[0]?.balance || 0);
+                if (!pin) {
+                    console.log(`❌ ERRO: PIN não fornecido`);
+                    await client.query('ROLLBACK');
+                    return res.status(400).json({ error: "PIN de segurança obrigatório." });
+                }
 
-            console.log(`   Saldo do passageiro: ${paxBalance} Kz`);
+                // Validar PIN
+                console.log(`🔍 Validando PIN do passageiro...`);
+                const paxRes = await client.query(
+                    "SELECT wallet_pin_hash, balance FROM users WHERE id = $1 FOR UPDATE",
+                    [ride.passenger_id]
+                );
 
-            if (paxBalance < finalAmount) {
-                console.log(`❌ ERRO: Saldo insuficiente. Necessário: ${finalAmount}, Disponível: ${paxBalance}`);
+                const paxData = paxRes.rows[0];
+
+                const isPinValid = await bcrypt.compare(pin, paxData.wallet_pin_hash);
+                if (!isPinValid) {
+                    console.log(`❌ ERRO: PIN incorreto`);
+                    await client.query('ROLLBACK');
+                    return res.status(403).json({ error: "PIN incorreto." });
+                }
+                console.log(`✅ PIN validado com sucesso`);
+
+                const paxBalance = parseFloat(paxData.balance);
+                console.log(`   Saldo do passageiro: ${paxBalance} Kz`);
+
+                if (paxBalance < finalAmount) {
+                    console.log(`❌ ERRO: Saldo insuficiente. Necessário: ${finalAmount}, Disponível: ${paxBalance}`);
+                    await client.query('ROLLBACK');
+                    return res.status(402).json({
+                        error: "Saldo insuficiente.",
+                        code: "INSUFFICIENT_FUNDS"
+                    });
+                }
+
+                // Transferência Atômica
+                await client.query(
+                    "UPDATE users SET balance = balance - $1 WHERE id = $2",
+                    [finalAmount, ride.passenger_id]
+                );
+                await client.query(
+                    "UPDATE users SET balance = balance + $1 WHERE id = $2",
+                    [finalAmount, ride.driver_id]
+                );
+
+                const txRef = generateRef('RIDE');
+
+                // Log Débito Pax
+                await client.query(
+                    `INSERT INTO wallet_transactions (
+                        reference_id, user_id, amount, type, method, status,
+                        description, category, ride_id, created_at
+                    ) VALUES ($1, $2, $3, 'payment', 'wallet', 'completed', $4, 'ride', $5, NOW())`,
+                    [txRef, ride.passenger_id, -finalAmount, `Pagamento da corrida #${ride_id}`, ride_id]
+                );
+
+                // Log Crédito Motorista
+                await client.query(
+                    `INSERT INTO wallet_transactions (
+                        reference_id, user_id, amount, type, method, status,
+                        description, category, ride_id, created_at
+                    ) VALUES ($1, $2, $3, 'earnings', 'wallet', 'completed', $4, 'ride', $5, NOW())`,
+                    [txRef, ride.driver_id, finalAmount, `Ganhos da corrida #${ride_id}`, ride_id]
+                );
+
+                console.log(`✅ Transação wallet concluída. Referência: ${txRef}`);
+
+            } else {
+                // Se o Motorista tentou chamar 'wallet' diretamente sem passar pelo passageiro
+                console.log(`❌ ERRO: Motorista tentando processar pagamento wallet sem autorização do passageiro`);
                 await client.query('ROLLBACK');
-                return res.status(402).json({
-                    error: "Saldo insuficiente na carteira do passageiro.",
-                    code: "INSUFFICIENT_FUNDS"
+                return res.status(403).json({
+                    error: "Pagamentos em carteira devem ser autorizados pelo passageiro.",
+                    code: "UNAUTHORIZED_PAYMENT"
+                });
+            }
+        } else {
+            // CASH - Apenas motorista pode confirmar
+            if (userId !== ride.driver_id) {
+                console.log(`❌ ERRO: Usuário ${userId} tentando confirmar pagamento em dinheiro`);
+                await client.query('ROLLBACK');
+                return res.status(403).json({
+                    error: "Pagamento em dinheiro deve ser confirmado pelo motorista."
                 });
             }
 
-            // Transferência Atômica
-            await client.query(
-                "UPDATE users SET balance = balance - $1 WHERE id = $2",
-                [finalAmount, ride.passenger_id]
-            );
-            await client.query(
-                "UPDATE users SET balance = balance + $1 WHERE id = $2",
-                [finalAmount, driverId]
-            );
-
-            const txRef = generateRef('RIDE');
-
-            // Log Débito Pax
-            await client.query(
-                `INSERT INTO wallet_transactions (
-                    reference_id, user_id, amount, type, method, status,
-                    description, category, ride_id, created_at
-                ) VALUES ($1, $2, $3, 'payment', 'wallet', 'completed', $4, 'ride', $5, NOW())`,
-                [txRef, ride.passenger_id, -finalAmount, `Pagamento da corrida #${ride_id}`, ride_id]
-            );
-
-            // Log Crédito Motorista
-            await client.query(
-                `INSERT INTO wallet_transactions (
-                    reference_id, user_id, amount, type, method, status,
-                    description, category, ride_id, created_at
-                ) VALUES ($1, $2, $3, 'earnings', 'wallet', 'completed', $4, 'ride', $5, NOW())`,
-                [txRef, driverId, finalAmount, `Ganhos da corrida #${ride_id}`, ride_id]
-            );
-
-            console.log(`✅ Transação wallet concluída. Referência: ${txRef}`);
-
-        } else {
             console.log(`💰 Processando pagamento em dinheiro...`);
 
-            // Apenas registra o ganho em dinheiro
             const txRef = generateRef('CASH');
             await client.query(
                 `INSERT INTO wallet_transactions (
                     reference_id, user_id, amount, type, method, status,
                     description, category, metadata, ride_id, created_at
                 ) VALUES ($1, $2, $3, 'earnings', 'cash', 'completed', $4, 'ride', $5, $6, NOW())`,
-                [txRef, driverId, finalAmount, `Ganhos da corrida #${ride_id} (Dinheiro)`, '{"is_cash": true}', ride_id]
+                [txRef, ride.driver_id, finalAmount, `Ganhos da corrida #${ride_id} (Dinheiro)`, '{"is_cash": true}', ride_id]
             );
 
             console.log(`✅ Transação cash registrada. Referência: ${txRef}`);
         }
 
-        // ATUALIZA A CORRIDA
+        // --- ATUALIZA A CORRIDA ---
         console.log(`📝 Atualizando status da corrida para 'completed'...`);
 
         await client.query(`
@@ -703,22 +740,22 @@ exports.completeRide = async (req, res) => {
 
         const fullRide = await getFullRideDetails(ride_id);
 
-        // NOTIFICAÇÕES SOCKET
+        // --- NOTIFICAÇÕES SOCKET ---
         if (req.io) {
             console.log(`📡 Enviando notificações de finalização...`);
 
             req.io.to(`ride_${ride_id}`).emit('ride_completed', fullRide);
             req.io.to(`user_${ride.passenger_id}`).emit('ride_completed', fullRide);
+            req.io.to(`user_${ride.driver_id}`).emit('ride_completed', fullRide);
 
-            console.log(`   ✅ Notificações enviadas para ride_${ride_id} e user_${ride.passenger_id}`);
+            console.log(`   ✅ Notificações enviadas para ride_${ride_id}, user_${ride.passenger_id} e user_${ride.driver_id}`);
 
             if (method === 'wallet') {
-                // Dispara trigger para o app atualizar saldo da UI
                 req.io.to(`user_${ride.passenger_id}`).emit('wallet_update', {
                     type: 'payment',
                     amount: finalAmount
                 });
-                req.io.to(`user_${driverId}`).emit('wallet_update', {
+                req.io.to(`user_${ride.driver_id}`).emit('wallet_update', {
                     type: 'earnings',
                     amount: finalAmount
                 });
@@ -932,7 +969,6 @@ exports.getRideDetails = async (req, res) => {
             });
         }
 
-        // Verificar se o usuário tem permissão para ver esta corrida
         if (fullRide.passenger_id !== userId && fullRide.driver_id !== userId && req.user.role !== 'admin') {
             console.log(`❌ Usuário ${userId} não tem permissão para ver corrida ${rideId}`);
             return res.status(403).json({
@@ -967,7 +1003,6 @@ exports.getDriverPerformance = async (req, res) => {
     console.log(`📊 [GET_DRIVER_PERFORMANCE] Buscando performance do motorista ${driverId}`);
 
     try {
-        // Estatísticas do dia
         const statsQuery = `
             SELECT
                 COUNT(*) as missions,
@@ -980,7 +1015,6 @@ exports.getDriverPerformance = async (req, res) => {
         `;
         const statsRes = await pool.query(statsQuery, [driverId]);
 
-        // Corridas recentes
         const recentQuery = `
             SELECT
                 id,
@@ -997,7 +1031,6 @@ exports.getDriverPerformance = async (req, res) => {
         `;
         const recentRes = await pool.query(recentQuery, [driverId]);
 
-        // Total de missões
         const totalQuery = `
             SELECT COUNT(*) as total
             FROM rides
@@ -1005,7 +1038,6 @@ exports.getDriverPerformance = async (req, res) => {
         `;
         const totalRes = await pool.query(totalQuery, [driverId]);
 
-        // Rating médio geral
         const ratingQuery = `
             SELECT COALESCE(AVG(rating), 0) as overall_rating
             FROM rides
@@ -1039,6 +1071,419 @@ exports.getDriverPerformance = async (req, res) => {
             success: false,
             error: "Erro ao buscar performance do motorista."
         });
+    }
+};
+
+// =================================================================================================
+// 11. SOLICITAR PAGAMENTO VIA WALLET
+// =================================================================================================
+exports.requestPayment = async (req, res) => {
+    const { ride_id, amount } = req.body;
+    const driverId = req.user.id;
+
+    console.log(`💰 [REQUEST_PAYMENT] Motorista ${driverId} solicitando pagamento para ride ${ride_id}`);
+
+    try {
+        const rideCheck = await pool.query(
+            "SELECT passenger_id FROM rides WHERE id = $1 AND driver_id = $2 AND status = 'ongoing'",
+            [ride_id, driverId]
+        );
+
+        if (rideCheck.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                error: "Corrida não encontrada ou não autorizada."
+            });
+        }
+
+        if (req.io) {
+            req.io.to(`user_${rideCheck.rows[0].passenger_id}`).emit('payment_requested', {
+                ride_id: ride_id,
+                driver_id: driverId,
+                amount: amount,
+                method: 'wallet',
+                timestamp: new Date().toISOString()
+            });
+        }
+
+        res.json({
+            success: true,
+            message: "Solicitação de pagamento enviada ao passageiro."
+        });
+
+    } catch (e) {
+        console.error('❌ ERRO AO SOLICITAR PAGAMENTO:', e);
+        res.status(500).json({ error: "Erro ao solicitar pagamento." });
+    }
+};
+
+// =================================================================================================
+// 12. PROCESSAR PAGAMENTO WALLET (MÉTODO AUXILIAR)
+// =================================================================================================
+exports.processWalletPayment = async (req, res) => {
+    req.body.payment_method = 'wallet';
+    return exports.completeRide(req, res);
+};
+
+// =================================================================================================
+// 13. CONFIRMAR PAGAMENTO EM DINHEIRO
+// =================================================================================================
+exports.confirmCashPayment = async (req, res) => {
+    req.body.payment_method = 'cash';
+    return exports.completeRide(req, res);
+};
+
+// =================================================================================================
+// 14. AVALIAR CORRIDA
+// =================================================================================================
+exports.rateRide = async (req, res) => {
+    const { ride_id, rating, feedback } = req.body;
+    const userId = req.user.id;
+
+    console.log(`⭐ [RATE_RIDE] Usuário ${userId} avaliando ride ${ride_id} com nota ${rating}`);
+
+    try {
+        const rideCheck = await pool.query(
+            "SELECT * FROM rides WHERE id = $1 AND (passenger_id = $2 OR driver_id = $2)",
+            [ride_id, userId]
+        );
+
+        if (rideCheck.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                error: "Corrida não encontrada."
+            });
+        }
+
+        const role = rideCheck.rows[0].passenger_id === userId ? 'passenger' : 'driver';
+
+        if (role === 'passenger') {
+            await pool.query(
+                "UPDATE rides SET passenger_rating = $1, passenger_feedback = $2, rated_at = NOW() WHERE id = $3",
+                [rating, feedback, ride_id]
+            );
+        } else {
+            await pool.query(
+                "UPDATE rides SET driver_rating = $1, driver_feedback = $2, rated_at = NOW() WHERE id = $3",
+                [rating, feedback, ride_id]
+            );
+        }
+
+        res.json({
+            success: true,
+            message: "Avaliação registrada com sucesso."
+        });
+
+    } catch (e) {
+        console.error('❌ ERRO AO AVALIAR CORRIDA:', e);
+        res.status(500).json({ error: "Erro ao registrar avaliação." });
+    }
+};
+
+// =================================================================================================
+// 15. OBTER CORRIDA ATIVA DO USUÁRIO
+// =================================================================================================
+exports.getActiveRide = async (req, res) => {
+    const userId = req.user.id;
+
+    console.log(`🔍 [GET_ACTIVE_RIDE] Buscando corrida ativa para usuário ${userId}`);
+
+    try {
+        const result = await pool.query(`
+            SELECT * FROM rides
+            WHERE (passenger_id = $1 OR driver_id = $1)
+              AND status IN ('searching', 'accepted', 'arrived', 'ongoing')
+            ORDER BY created_at DESC
+            LIMIT 1
+        `, [userId]);
+
+        if (result.rows.length === 0) {
+            return res.json({
+                success: true,
+                active: false,
+                ride: null
+            });
+        }
+
+        const fullRide = await getFullRideDetails(result.rows[0].id);
+
+        res.json({
+            success: true,
+            active: true,
+            ride: fullRide
+        });
+
+    } catch (e) {
+        console.error('❌ ERRO AO BUSCAR CORRIDA ATIVA:', e);
+        res.status(500).json({ error: "Erro ao buscar corrida ativa." });
+    }
+};
+
+// =================================================================================================
+// 16. OBTER ESTATÍSTICAS DO USUÁRIO
+// =================================================================================================
+exports.getUserStats = async (req, res) => {
+    const userId = req.user.id;
+
+    console.log(`📊 [GET_USER_STATS] Buscando estatísticas para usuário ${userId}`);
+
+    try {
+        const passengerStats = await pool.query(`
+            SELECT
+                COUNT(*) as total_rides,
+                COALESCE(AVG(passenger_rating), 0) as avg_rating,
+                SUM(final_price) as total_spent
+            FROM rides
+            WHERE passenger_id = $1 AND status = 'completed'
+        `, [userId]);
+
+        const driverStats = await pool.query(`
+            SELECT
+                COUNT(*) as total_rides,
+                COALESCE(AVG(driver_rating), 0) as avg_rating,
+                SUM(final_price) as total_earned
+            FROM rides
+            WHERE driver_id = $1 AND status = 'completed'
+        `, [userId]);
+
+        res.json({
+            success: true,
+            stats: {
+                asPassenger: {
+                    totalRides: parseInt(passengerStats.rows[0].total_rides),
+                    averageRating: parseFloat(passengerStats.rows[0].avg_rating),
+                    totalSpent: parseFloat(passengerStats.rows[0].total_spent || 0)
+                },
+                asDriver: {
+                    totalRides: parseInt(driverStats.rows[0].total_rides),
+                    averageRating: parseFloat(driverStats.rows[0].avg_rating),
+                    totalEarned: parseFloat(driverStats.rows[0].total_earned || 0)
+                }
+            }
+        });
+
+    } catch (e) {
+        console.error('❌ ERRO AO BUSCAR ESTATÍSTICAS:', e);
+        res.status(500).json({ error: "Erro ao buscar estatísticas." });
+    }
+};
+
+// =================================================================================================
+// 17. OBTER CORRIDAS PRÓXIMAS (PARA MOTORISTAS)
+// =================================================================================================
+exports.getNearbyRides = async (req, res) => {
+    const driverId = req.user.id;
+    const { lat, lng, radius = 10 } = req.query;
+
+    console.log(`📍 [GET_NEARBY_RIDES] Motorista ${driverId} buscando corridas num raio de ${radius}km`);
+
+    try {
+        const driverInfo = await pool.query(
+            "SELECT vehicle_details->>'type' as vehicle_type FROM users WHERE id = $1",
+            [driverId]
+        );
+
+        const vehicleType = driverInfo.rows[0]?.vehicle_type || 'car';
+
+        const query = `
+            SELECT
+                id,
+                passenger_id,
+                origin_lat,
+                origin_lng,
+                origin_name,
+                dest_name,
+                initial_price,
+                ride_type,
+                distance_km,
+                created_at
+            FROM rides
+            WHERE status = 'searching'
+              AND ride_type IN ($1, $2)
+              AND created_at > NOW() - INTERVAL '30 minutes'
+              AND (6371 * acos(cos(radians($3)) * cos(radians(origin_lat)) *
+                   cos(radians(origin_lng) - radians($4)) + sin(radians($3)) * sin(radians(origin_lat)))) <= $5
+            ORDER BY created_at DESC
+        `;
+
+        const types = vehicleType === 'car' ? ['car', 'delivery_car'] : ['moto', 'delivery_moto'];
+        const result = await pool.query(query, [types[0], types[1], lat, lng, radius]);
+
+        const rides = await Promise.all(
+            result.rows.map(async (row) => {
+                const distance = getDistance(
+                    parseFloat(lat), parseFloat(lng),
+                    parseFloat(row.origin_lat), parseFloat(row.origin_lng)
+                );
+                return {
+                    ...row,
+                    distance_to_pickup: parseFloat(distance.toFixed(1))
+                };
+            })
+        );
+
+        res.json({
+            success: true,
+            rides: rides
+        });
+
+    } catch (e) {
+        console.error('❌ ERRO AO BUSCAR CORRIDAS PRÓXIMAS:', e);
+        res.status(500).json({ error: "Erro ao buscar corridas próximas." });
+    }
+};
+
+// =================================================================================================
+// 18. REPORTAR PROBLEMA NA CORRIDA
+// =================================================================================================
+exports.reportIssue = async (req, res) => {
+    const { ride_id } = req.params;
+    const { issue_type, description } = req.body;
+    const userId = req.user.id;
+
+    console.log(`⚠️ [REPORT_ISSUE] Usuário ${userId} reportando problema na ride ${ride_id}`);
+
+    try {
+        await pool.query(`
+            INSERT INTO ride_issues (ride_id, user_id, issue_type, description, created_at)
+            VALUES ($1, $2, $3, $4, NOW())
+        `, [ride_id, userId, issue_type, description]);
+
+        res.json({
+            success: true,
+            message: "Problema reportado com sucesso. Nossa equipe irá analisar."
+        });
+
+    } catch (e) {
+        console.error('❌ ERRO AO REPORTAR PROBLEMA:', e);
+        res.status(500).json({ error: "Erro ao reportar problema." });
+    }
+};
+
+// =================================================================================================
+// 19. OBTER RECIBO DA CORRIDA
+// =================================================================================================
+exports.getRideReceipt = async (req, res) => {
+    const { ride_id } = req.params;
+    const userId = req.user.id;
+
+    console.log(`🧾 [GET_RIDE_RECEIPT] Buscando recibo da ride ${ride_id}`);
+
+    try {
+        const rideCheck = await pool.query(
+            "SELECT * FROM rides WHERE id = $1 AND (passenger_id = $2 OR driver_id = $2)",
+            [ride_id, userId]
+        );
+
+        if (rideCheck.rows.length === 0) {
+            return res.status(404).json({
+                success: false,
+                error: "Recibo não encontrado."
+            });
+        }
+
+        const fullRide = await getFullRideDetails(ride_id);
+
+        const receipt = {
+            ride_id: fullRide.id,
+            date: fullRide.completed_at || fullRide.created_at,
+            passenger: fullRide.passenger_data?.name,
+            driver: fullRide.driver_data?.name,
+            origin: fullRide.origin_name,
+            destination: fullRide.dest_name,
+            distance: fullRide.distance_km,
+            duration: fullRide.duration_minutes,
+            price: fullRide.final_price,
+            payment_method: fullRide.payment_method,
+            ride_type: fullRide.ride_type
+        };
+
+        res.json({
+            success: true,
+            receipt: receipt
+        });
+
+    } catch (e) {
+        console.error('❌ ERRO AO BUSCAR RECIBO:', e);
+        res.status(500).json({ error: "Erro ao buscar recibo." });
+    }
+};
+
+// =================================================================================================
+// 20. ATUALIZAR CORRIDA (ADMIN)
+// =================================================================================================
+exports.updateRide = async (req, res) => {
+    const { id } = req.params;
+    const updates = req.body;
+
+    console.log(`🔄 [UPDATE_RIDE] Admin atualizando ride ${id}`);
+
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ error: "Acesso negado." });
+    }
+
+    const client = await pool.connect();
+
+    try {
+        await client.query('BEGIN');
+
+        const fields = [];
+        const values = [];
+        let paramCounter = 1;
+
+        Object.entries(updates).forEach(([key, value]) => {
+            if (value !== undefined) {
+                fields.push(`${key} = $${paramCounter}`);
+                values.push(value);
+                paramCounter++;
+            }
+        });
+
+        fields.push(`updated_at = NOW()`);
+        values.push(id);
+
+        const query = `UPDATE rides SET ${fields.join(', ')} WHERE id = $${paramCounter} RETURNING *`;
+        const result = await client.query(query, values);
+
+        await client.query('COMMIT');
+
+        res.json({
+            success: true,
+            ride: result.rows[0]
+        });
+
+    } catch (e) {
+        await client.query('ROLLBACK');
+        console.error('❌ ERRO AO ATUALIZAR CORRIDA:', e);
+        res.status(500).json({ error: "Erro ao atualizar corrida." });
+    } finally {
+        client.release();
+    }
+};
+
+// =================================================================================================
+// 21. DELETAR CORRIDA (ADMIN)
+// =================================================================================================
+exports.deleteRide = async (req, res) => {
+    const { id } = req.params;
+
+    console.log(`🗑️ [DELETE_RIDE] Admin deletando ride ${id}`);
+
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ error: "Acesso negado." });
+    }
+
+    try {
+        await pool.query("DELETE FROM rides WHERE id = $1", [id]);
+
+        res.json({
+            success: true,
+            message: "Corrida deletada com sucesso."
+        });
+
+    } catch (e) {
+        console.error('❌ ERRO AO DELETAR CORRIDA:', e);
+        res.status(500).json({ error: "Erro ao deletar corrida." });
     }
 };
 
