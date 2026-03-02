@@ -1,6 +1,6 @@
 /**
  * =================================================================================================
- * 🏦 AOTRAVEL SERVER PRO - WALLET SERVICE ENGINE (TITANIUM ACID)
+ * 🏦 AOTRAVEL SERVER PRO - WALLET SERVICE ENGINE (TITANIUM ACID v11.0)
  * =================================================================================================
  *
  * ARQUIVO: src/services/walletService.js
@@ -13,11 +13,12 @@
  * 2. SEMPRE usar row-locking (FOR UPDATE) ao ler saldo para debitar.
  * 3. REGISTRAR todas as operações em `wallet_transactions` (Rastreabilidade).
  *
- * STATUS: PRODUCTION READY - FULL VERSION
+ * STATUS: PRODUCTION READY - FULL VERSION - ARQUITETURA LIMPA (CLEAN ARCHITECTURE)
  * =================================================================================================
  */
 
 const pool = require('../config/db');
+const bcrypt = require('bcrypt');
 const crypto = require('crypto');
 const { generateCode, generateRef, logError, logSystem } = require('../utils/helpers');
 const SYSTEM_CONFIG = require('../config/appConfig');
@@ -112,6 +113,86 @@ class PaymentGateway {
 }
 
 const gateway = new PaymentGateway();
+
+// =================================================================================================
+// 🔐 HELPER INTERNO: VALIDAÇÃO DE PIN
+// =================================================================================================
+async function verifyPinInternal(userId, pinInput, client) {
+    if (!pinInput) throw new Error("PIN de segurança obrigatório.");
+
+    const res = await client.query("SELECT wallet_pin_hash FROM users WHERE id = $1 FOR UPDATE", [userId]);
+    const storedHash = res.rows[0]?.wallet_pin_hash;
+
+    if (!storedHash) throw new Error("PIN não configurado. Vá em Configurações para criar um PIN.");
+
+    const match = await bcrypt.compare(pinInput.toString(), storedHash);
+    if (!match) throw new Error("PIN incorreto.");
+
+    return true;
+}
+
+// =================================================================================================
+// 🚖 MÓDULO EXCLUSIVO PARA CORRIDAS (CHAMADO PELO RIDE CONTROLLER)
+// =================================================================================================
+
+/**
+ * Processa o pagamento de uma corrida via Carteira (Wallet)
+ * Usa o mesmo 'client' para garantir a transação ACID junto com a finalização da corrida.
+ */
+async function processRidePayment(passengerId, driverId, amount, rideId, pin, client) {
+    logSystem('WALLET_SERVICE', `Processando pagamento de corrida #${rideId} via Wallet`);
+
+    // 1. Valida o PIN do passageiro
+    await verifyPinInternal(passengerId, pin, client);
+
+    // 2. Verifica o Saldo
+    const paxRes = await client.query("SELECT balance FROM users WHERE id = $1", [passengerId]);
+    const paxBalance = parseFloat(paxRes.rows[0].balance);
+
+    if (paxBalance < amount) {
+        const error = new Error("Saldo insuficiente na carteira.");
+        error.code = "INSUFFICIENT_FUNDS";
+        throw error;
+    }
+
+    // 3. Transferência Atômica (Débito e Crédito)
+    await client.query("UPDATE users SET balance = balance - $1 WHERE id = $2", [amount, passengerId]);
+    await client.query("UPDATE users SET balance = balance + $1 WHERE id = $2", [amount, driverId]);
+
+    const txRef = generateRef('RIDE');
+
+    // 4. Registrar Transações no Livro Razão (Ledger)
+    await client.query(
+        `INSERT INTO wallet_transactions (reference_id, user_id, amount, type, method, status, description, category, ride_id, created_at)
+         VALUES ($1, $2, $3, 'payment', 'wallet', 'completed', $4, 'ride', $5, NOW())`,
+        [txRef, passengerId, -amount, `Pagamento Corrida #${rideId}`, rideId]
+    );
+
+    const rxRef = `${txRef}-REC`;
+    await client.query(
+        `INSERT INTO wallet_transactions (reference_id, user_id, amount, type, method, status, description, category, ride_id, created_at)
+         VALUES ($1, $2, $3, 'earnings', 'wallet', 'completed', $4, 'ride', $5, NOW())`,
+        [rxRef, driverId, amount, `Ganhos Corrida #${rideId}`, rideId]
+    );
+
+    return true;
+}
+
+/**
+ * Apenas regista o log financeiro quando o pagamento é em DINHEIRO (Cash)
+ */
+async function processCashRideLog(driverId, amount, rideId, client) {
+    logSystem('WALLET_SERVICE', `Registrando pagamento em dinheiro da corrida #${rideId}`);
+
+    const txRef = generateRef('CASH');
+    await client.query(
+        `INSERT INTO wallet_transactions (reference_id, user_id, amount, type, method, status, description, category, metadata, ride_id, created_at)
+         VALUES ($1, $2, $3, 'earnings', 'cash', 'completed', $4, 'ride', '{"is_cash": true}', $5, NOW())`,
+        [txRef, driverId, amount, `Ganhos Corrida #${rideId} (Dinheiro)`, rideId]
+    );
+
+    return true;
+}
 
 // =================================================================================================
 // 1. LÓGICA DE TRANSFERÊNCIA INTERNA (P2P)
@@ -250,13 +331,6 @@ async function processInternalTransfer(senderId, receiverIdentifier, amount, des
         );
 
         // Log 2: Entrada no Destinatário (Amount Positivo)
-        // Note: Reference ID é o mesmo para rastreamento cruzado, mas com user_id diferente
-        // Como reference_id é UNIQUE, precisamos de um sufixo ou estratégia.
-        // Na nossa modelagem dbBootstrap, reference_id é UNIQUE.
-        // SOLUÇÃO: Usamos reference_id para o SENDER e reference_id + '-IN' para o RECEIVER
-        // ou ajustamos a constraint.
-        // MELHOR: Usar `txRef` para o sender e gerar `txRef-REC` para o receiver.
-
         const receiverRef = `${txRef}-REC`;
 
         await client.query(
@@ -524,10 +598,173 @@ async function processServicePayment(userId, serviceId, reference, amount) {
     }
 }
 
-// Exportação dos Métodos Blindados
+// =================================================================================================
+// 5. FUNÇÕES ADICIONAIS DO WALLET SERVICE (EXISTENTES)
+// =================================================================================================
+
+/**
+ * Verifica se o usuário tem saldo suficiente para uma determinada quantia
+ */
+async function checkBalance(userId, amount) {
+    const client = await pool.connect();
+    try {
+        const result = await client.query("SELECT balance FROM users WHERE id = $1", [userId]);
+        if (result.rows.length === 0) throw new Error("Usuário não encontrado.");
+        const balance = parseFloat(result.rows[0].balance);
+        return balance >= amount;
+    } catch (error) {
+        logError('CHECK_BALANCE', error);
+        throw error;
+    } finally {
+        client.release();
+    }
+}
+
+/**
+ * Obtém o saldo atual do usuário
+ */
+async function getBalance(userId) {
+    const client = await pool.connect();
+    try {
+        const result = await client.query("SELECT balance FROM users WHERE id = $1", [userId]);
+        if (result.rows.length === 0) throw new Error("Usuário não encontrado.");
+        return parseFloat(result.rows[0].balance);
+    } catch (error) {
+        logError('GET_BALANCE', error);
+        throw error;
+    } finally {
+        client.release();
+    }
+}
+
+/**
+ * Obtém o histórico de transações do usuário
+ */
+async function getTransactionHistory(userId, limit = 50, offset = 0) {
+    const client = await pool.connect();
+    try {
+        const result = await client.query(
+            `SELECT * FROM wallet_transactions
+             WHERE user_id = $1
+             ORDER BY created_at DESC
+             LIMIT $2 OFFSET $3`,
+            [userId, limit, offset]
+        );
+        return result.rows;
+    } catch (error) {
+        logError('GET_TRANSACTION_HISTORY', error);
+        throw error;
+    } finally {
+        client.release();
+    }
+}
+
+/**
+ * Altera o PIN da carteira
+ */
+async function changePin(userId, oldPin, newPin) {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        // Verifica PIN antigo
+        await verifyPinInternal(userId, oldPin, client);
+
+        // Hash do novo PIN
+        const newPinHash = await bcrypt.hash(newPin.toString(), 10);
+
+        // Atualiza PIN
+        await client.query(
+            "UPDATE users SET wallet_pin_hash = $1, updated_at = NOW() WHERE id = $2",
+            [newPinHash, userId]
+        );
+
+        await client.query('COMMIT');
+
+        return {
+            success: true,
+            message: "PIN alterado com sucesso."
+        };
+
+    } catch (error) {
+        await client.query('ROLLBACK');
+        logError('CHANGE_PIN', error);
+        throw error;
+    } finally {
+        client.release();
+    }
+}
+
+/**
+ * Define o PIN da carteira (primeira vez)
+ */
+async function setPin(userId, pin) {
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
+
+        // Verifica se já existe PIN
+        const result = await client.query(
+            "SELECT wallet_pin_hash FROM users WHERE id = $1",
+            [userId]
+        );
+
+        if (result.rows[0]?.wallet_pin_hash) {
+            throw new Error("PIN já configurado. Use a função de alterar PIN.");
+        }
+
+        // Hash do PIN
+        const pinHash = await bcrypt.hash(pin.toString(), 10);
+
+        // Atualiza PIN
+        await client.query(
+            "UPDATE users SET wallet_pin_hash = $1, updated_at = NOW() WHERE id = $2",
+            [pinHash, userId]
+        );
+
+        await client.query('COMMIT');
+
+        return {
+            success: true,
+            message: "PIN configurado com sucesso."
+        };
+
+    } catch (error) {
+        await client.query('ROLLBACK');
+        logError('SET_PIN', error);
+        throw error;
+    } finally {
+        client.release();
+    }
+}
+
+// =================================================================================================
+// EXPORTAÇÃO DOS MÉTODOS BLINDADOS
+// =================================================================================================
 module.exports = {
+    // Funções internas de validação
+    verifyPinInternal,
+
+    // Funções específicas para corridas
+    processRidePayment,
+    processCashRideLog,
+
+    // Funções de transferência P2P
     processInternalTransfer,
+
+    // Funções de recarga
     processTopUp,
+
+    // Funções de saque
     processWithdrawal,
-    processServicePayment
+
+    // Funções de pagamento de serviços
+    processServicePayment,
+
+    // Funções utilitárias
+    checkBalance,
+    getBalance,
+    getTransactionHistory,
+    changePin,
+    setPin
 };
