@@ -2,17 +2,18 @@
  * =================================================================================================
  * ⚡ AOTRAVEL SERVER PRO - TITANIUM SOCKET ENGINE v13.0.0 (CORE DE TEMPO REAL)
  * =================================================================================================
- * 
+ *
  * ARQUIVO: src/services/socketService.js
  * DESCRIÇÃO: Motor centralizado e exclusivo de WebSockets.
- * 
+ *
  * ✅ CORREÇÕES APLICADAS NESTA VERSÃO:
  * 1. RESYNC AUTOMÁTICO: Quando o motorista liga o terminal, o backend varre o DB e
  *    envia imediatamente todas as corridas "searching" pendentes num raio de 20km.
  * 2. MODO OFFLINE MANUAL: Adicionado listener 'driver_offline' para limpar a presença no DB
  *    apenas quando o motorista realmente clicar no botão vermelho.
  * 3. REPASSA A DISTÂNCIA E ETA DO MOTORISTA PARA A SALA: Evento update_trip_gps
- * 
+ * 4. SINCRONIA PERFEITA DE TELEMETRIA: Emissão dupla para ride_${ride_id} e passenger_ride_${ride_id}
+ *
  * STATUS: 🔥 PRODUCTION READY - FULL VERSION - 100% BLINDADO
  * =================================================================================================
  */
@@ -104,10 +105,10 @@ function _handleConnection(socket) {
         if (role === 'driver') {
             socket.join('drivers');
             socket.join(`driver_${userId}`);
-            
+
             const lat = parseFloat(query.lat) || -8.8399;
             const lng = parseFloat(query.lng) || 13.2894;
-            
+
             _registerDriverOnline(userId, socketId, lat, lng, socket);
         }
     }
@@ -126,33 +127,33 @@ function _handleConnection(socket) {
     socket.on('driver_offline', async (data) => {
         const driverId = data.driver_id || data.user_id;
         if (!driverId) return;
-        
+
         console.log(`${colors.yellow}🛑 Motorista ${driverId} solicitou modo OFFLINE manualmente.${colors.reset}`);
-        
+
         try {
             await pool.query(
-                "UPDATE driver_positions SET status = 'offline', socket_id = NULL WHERE driver_id = $1", 
+                "UPDATE driver_positions SET status = 'offline', socket_id = NULL WHERE driver_id = $1",
                 [driverId]
             );
             await pool.query(
-                "UPDATE users SET is_online = false WHERE id = $1", 
+                "UPDATE users SET is_online = false WHERE id = $1",
                 [driverId]
             );
-            
+
             socket.leave('drivers');
             socket.leave(`driver_${driverId}`);
-            
-            socket.emit('offline_confirmed', { 
-                success: true, 
-                message: "Você está offline. Para receber novas corridas, volte ao modo online." 
+
+            socket.emit('offline_confirmed', {
+                success: true,
+                message: "Você está offline. Para receber novas corridas, volte ao modo online."
             });
-            
+
             console.log(`${colors.green}✅ Motorista ${driverId} marcado como OFFLINE manualmente.${colors.reset}`);
-        } catch (e) { 
+        } catch (e) {
             logError('DRIVER_OFFLINE', e);
-            socket.emit('offline_confirmed', { 
-                success: false, 
-                error: "Erro ao processar solicitação offline." 
+            socket.emit('offline_confirmed', {
+                success: false,
+                error: "Erro ao processar solicitação offline."
             });
         }
     });
@@ -172,9 +173,11 @@ function _handleConnection(socket) {
     // ✅ RASTREAMENTO TÁTICO (GPS DA CORRIDA) - REPASSA DISTÂNCIA E ETA
     socket.on('update_trip_gps', (data) => {
         const { ride_id, lat, lng, rotation, speed, distance, eta_minutes } = data;
-        
+
         if (!ride_id || !lat || !lng) return;
-        
+
+        console.log(`${colors.cyan}📍 Atualização GPS - Ride ${ride_id}: (${lat}, ${lng}) | Dist: ${distance}km | ETA: ${eta_minutes}min${colors.reset}`);
+
         // Emite para todos na sala da corrida (exceto o remetente)
         socket.to(`ride_${ride_id}`).emit('trip_gps_update', {
             ride_id: ride_id,
@@ -186,7 +189,7 @@ function _handleConnection(socket) {
             eta_minutes: eta_minutes || 0,
             timestamp: new Date().toISOString()
         });
-        
+
         // Também emite diretamente para o passageiro para garantir
         socket.to(`passenger_ride_${ride_id}`).emit('driver_gps_update', {
             ride_id: ride_id,
@@ -198,14 +201,25 @@ function _handleConnection(socket) {
             eta_minutes: eta_minutes || 0,
             timestamp: new Date().toISOString()
         });
+
+        // Emite para compatibilidade com código antigo
+        socket.to(`passenger_ride_${ride_id}`).emit('location_update', {
+            ride_id: ride_id,
+            lat: lat,
+            lng: lng,
+            rotation: rotation || 0,
+            speed: speed || 0,
+            distance: distance || 0,
+            eta_minutes: eta_minutes || 0
+        });
     });
 
     // --- PAGAMENTOS ---
     socket.on('request_payment', (data) => {
         const { ride_id, driver_id, amount, method } = data;
-        
+
         console.log(`${colors.cyan}💰 Pagamento solicitado: Ride ${ride_id}, Amount: ${amount}, Method: ${method}${colors.reset}`);
-        
+
         // Emite diretamente para o passageiro
         io.to(`ride_${ride_id}`).emit('payment_requested', {
             ride_id: ride_id,
@@ -214,7 +228,7 @@ function _handleConnection(socket) {
             method: method,
             timestamp: new Date().toISOString()
         });
-        
+
         // Também emite para a sala do passageiro
         io.to(`passenger_ride_${ride_id}`).emit('wallet_payment_request', {
             ride_id: ride_id,
@@ -223,10 +237,10 @@ function _handleConnection(socket) {
             method: method,
             timestamp: new Date().toISOString()
         });
-        
-        socket.emit('payment_request_ack', { 
-            success: true, 
-            message: "Solicitação de pagamento enviada ao passageiro." 
+
+        socket.emit('payment_request_ack', {
+            success: true,
+            message: "Solicitação de pagamento enviada ao passageiro."
         });
     });
 
@@ -238,33 +252,33 @@ function _handleConnection(socket) {
     // --- COMUNICAÇÃO E CHAT (SALA DA CORRIDA) ---
     socket.on('join_ride', (rideId) => {
         if (!rideId) return;
-        
+
         socket.join(`ride_${rideId}`);
-        
+
         // Também cria sala específica para passageiro
         if (query && query.role === 'passenger') {
             socket.join(`passenger_ride_${rideId}`);
         }
-        
+
         console.log(`${colors.cyan}🚪 Socket ${socket.id} ingressou na sala ride_${rideId}${colors.reset}`);
         socket.emit('ride_joined', { success: true, ride_id: rideId });
     });
 
     socket.on('leave_ride', (rideId) => {
         if (!rideId) return;
-        
+
         socket.leave(`ride_${rideId}`);
         socket.leave(`passenger_ride_${rideId}`);
-        
+
         console.log(`${colors.yellow}🚪 Socket ${socket.id} deixou a sala ride_${rideId}${colors.reset}`);
         socket.emit('ride_left', { success: true, ride_id: rideId });
     });
 
     socket.on('send_message', (data) => _handleSendMessage(socket, data));
-    
+
     socket.on('typing_indicator', (data) => {
         if (!data.ride_id || !data.user_id) return;
-        
+
         socket.to(`ride_${data.ride_id}`).emit('user_typing', {
             user_id: data.user_id,
             is_typing: data.is_typing,
@@ -275,15 +289,15 @@ function _handleConnection(socket) {
     socket.on('mark_messages_read', async (data) => {
         const { ride_id, user_id } = data;
         if (!ride_id || !user_id) return;
-        
+
         try {
             const result = await pool.query(`
-                UPDATE chat_messages 
+                UPDATE chat_messages
                 SET is_read = true, read_at = NOW()
                 WHERE ride_id = $1 AND sender_id != $2 AND is_read = false
                 RETURNING id
             `, [ride_id, user_id]);
-            
+
             if (result.rows.length > 0) {
                 // Notifica o outro usuário que as mensagens foram lidas
                 io.to(`ride_${ride_id}`).emit('messages_read', {
@@ -293,7 +307,7 @@ function _handleConnection(socket) {
                     read_at: new Date().toISOString()
                 });
             }
-        } catch (e) { 
+        } catch (e) {
             logError('MARK_MESSAGES_READ', e);
         }
     });
@@ -366,11 +380,11 @@ async function _routeToController(methodName, data, socket, responseEvent) {
 
 async function _handleJoinUser(socket, userId) {
     if (!userId) return;
-    
+
     const userIdStr = userId.toString();
 
     socket.join(`user_${userIdStr}`);
-    
+
     console.log(`${colors.green}👤 Usuário ${userIdStr} ingressou na sala user_${userIdStr}${colors.reset}`);
 
     try {
@@ -378,18 +392,18 @@ async function _handleJoinUser(socket, userId) {
             "UPDATE users SET is_online = true, last_seen = NOW() WHERE id = $1",
             [userIdStr]
         );
-        
-        socket.emit('joined_ack', { 
-            success: true, 
-            user_id: userIdStr, 
+
+        socket.emit('joined_ack', {
+            success: true,
+            user_id: userIdStr,
             socket_id: socket.id,
             timestamp: new Date().toISOString()
         });
     } catch (e) {
         logError('JOIN_USER', e);
-        socket.emit('joined_ack', { 
-            success: false, 
-            error: "Erro ao atualizar status de online." 
+        socket.emit('joined_ack', {
+            success: false,
+            error: "Erro ao atualizar status de online."
         });
     }
 }
@@ -407,9 +421,9 @@ async function _handleJoinDriver(socket, data) {
 
     await _registerDriverOnline(driverId, socket.id, lat, lng, socket);
 
-    socket.emit('joined_ack', { 
-        success: true, 
-        driver_id: driverId, 
+    socket.emit('joined_ack', {
+        success: true,
+        driver_id: driverId,
         status: 'online',
         timestamp: new Date().toISOString()
     });
@@ -417,9 +431,9 @@ async function _handleJoinDriver(socket, data) {
     // 🔥 O GRANDE FIX: ENVIAR CORRIDAS PENDENTES QUANDO O MOTORISTA FICA ONLINE
     try {
         console.log(`${colors.cyan}🔍 Buscando corridas pendentes para motorista ${driverId}...${colors.reset}`);
-        
+
         const pendingRides = await pool.query(`
-            SELECT id, origin_lat, origin_lng, passenger_id, initial_price, 
+            SELECT id, origin_lat, origin_lng, passenger_id, initial_price,
                    ride_type, distance_km, origin_name, dest_name
             FROM rides
             WHERE status = 'searching'
@@ -429,9 +443,9 @@ async function _handleJoinDriver(socket, data) {
 
         if (pendingRides.rows.length > 0) {
             console.log(`${colors.green}🔄 Encontradas ${pendingRides.rows.length} corridas pendentes para sincronização.${colors.reset}`);
-            
+
             let sentCount = 0;
-            
+
             for (const row of pendingRides.rows) {
                 // Calcula distância do motorista até a origem da corrida
                 let distanceToPickup = getDistance(
@@ -449,14 +463,14 @@ async function _handleJoinDriver(socket, data) {
                             resync: true,
                             timestamp: new Date().toISOString()
                         };
-                        
+
                         // Envia direto para o motorista que acabou de conectar
                         socket.emit('ride_opportunity', payload);
                         sentCount++;
                     }
                 }
             }
-            
+
             console.log(`${colors.green}✅ ${sentCount} corridas reenviadas para motorista ${driverId}${colors.reset}`);
         } else {
             console.log(`${colors.yellow}ℹ️ Nenhuma corrida pendente encontrada.${colors.reset}`);
@@ -473,14 +487,14 @@ async function _registerDriverOnline(driverId, socketId, lat, lng, socket) {
 
         // Verifica se já existe um registro
         const existing = await client.query(
-            "SELECT * FROM driver_positions WHERE driver_id = $1", 
+            "SELECT * FROM driver_positions WHERE driver_id = $1",
             [driverId]
         );
 
         if (existing.rows.length > 0) {
             // Atualiza registro existente
             await client.query(`
-                UPDATE driver_positions 
+                UPDATE driver_positions
                 SET lat = $2, lng = $3, socket_id = $4, status = 'online', last_update = NOW()
                 WHERE driver_id = $1
             `, [driverId, lat, lng, socketId]);
@@ -493,14 +507,14 @@ async function _registerDriverOnline(driverId, socketId, lat, lng, socket) {
         }
 
         await client.query(
-            "UPDATE users SET is_online = true, last_seen = NOW() WHERE id = $1", 
+            "UPDATE users SET is_online = true, last_seen = NOW() WHERE id = $1",
             [driverId]
         );
 
         await client.query('COMMIT');
-        
+
         console.log(`${colors.green}✅ Motorista ${driverId} registrado como ONLINE (Pos: ${lat}, ${lng})${colors.reset}`);
-        
+
         // Notifica outros motoristas sobre o novo online
         socket.to('drivers').emit('driver_online', {
             driver_id: driverId,
@@ -536,7 +550,7 @@ async function _handleUpdateLocation(socket, data) {
 
         // Busca corridas ativas deste motorista
         const activeRides = await pool.query(`
-            SELECT id, passenger_id FROM rides 
+            SELECT id, passenger_id FROM rides
             WHERE driver_id = $1 AND status IN ('accepted', 'ongoing', 'arrived')
         `, [driverId]);
 
@@ -551,12 +565,12 @@ async function _handleUpdateLocation(socket, data) {
                 speed: speed,
                 timestamp: new Date().toISOString()
             };
-            
+
             io.to(`ride_${ride.id}`).emit('driver_location_update', locationPayload);
             io.to(`passenger_ride_${ride.id}`).emit('driver_location', locationPayload);
         });
 
-    } catch (e) { 
+    } catch (e) {
         logError('UPDATE_LOCATION', e);
     }
 }
@@ -564,29 +578,29 @@ async function _handleUpdateLocation(socket, data) {
 async function _handleHeartbeat(socket, data) {
     const driverId = data.driver_id || data.user_id;
     if (!driverId) return;
-    
+
     try {
         await pool.query(
-            "UPDATE driver_positions SET last_update = NOW() WHERE driver_id = $1", 
+            "UPDATE driver_positions SET last_update = NOW() WHERE driver_id = $1",
             [driverId]
         );
         await pool.query(
-            "UPDATE users SET last_seen = NOW(), is_online = true WHERE id = $1", 
+            "UPDATE users SET last_seen = NOW(), is_online = true WHERE id = $1",
             [driverId]
         );
-        
-        socket.emit('heartbeat_ack', { 
-            success: true, 
-            timestamp: new Date().toISOString() 
+
+        socket.emit('heartbeat_ack', {
+            success: true,
+            timestamp: new Date().toISOString()
         });
-    } catch (e) { 
+    } catch (e) {
         logError('HEARTBEAT', e);
     }
 }
 
 async function _handleSendMessage(socket, data) {
     const { ride_id, sender_id, text, image_data, message_type = 'text' } = data;
-    
+
     if (!ride_id || !sender_id) return;
 
     try {
@@ -602,7 +616,7 @@ async function _handleSendMessage(socket, data) {
         `, [ride_id, sender_id, text || '', imageUrl, message_type]);
 
         const senderInfo = await pool.query(
-            'SELECT name, photo FROM users WHERE id = $1', 
+            'SELECT name, photo FROM users WHERE id = $1',
             [sender_id]
         );
 
@@ -621,7 +635,7 @@ async function _handleSendMessage(socket, data) {
 
         // Emite para todos na sala da corrida
         io.to(`ride_${ride_id}`).emit('receive_message', payload);
-        
+
         // Confirma para o remetente
         socket.emit('message_sent', {
             ...payload,
@@ -639,42 +653,42 @@ async function _handleSendMessage(socket, data) {
 
 async function _handleDisconnect(socket) {
     console.log(`${colors.yellow}🔌 Terminal desconectado: ${socket.id}${colors.reset}`);
-    
+
     try {
         // Busca motorista associado a este socket
         const result = await pool.query(
-            'SELECT driver_id FROM driver_positions WHERE socket_id = $1', 
+            'SELECT driver_id FROM driver_positions WHERE socket_id = $1',
             [socket.id]
         );
 
         if (result.rows.length > 0) {
             const driverId = result.rows[0].driver_id;
-            
+
             // Delay de 10 segundos para reconexão rápida
             setTimeout(async () => {
                 try {
                     const check = await pool.query(
-                        'SELECT socket_id, status FROM driver_positions WHERE driver_id = $1', 
+                        'SELECT socket_id, status FROM driver_positions WHERE driver_id = $1',
                         [driverId]
                     );
-                    
+
                     // Se ainda estiver com o mesmo socket ou sem socket, marca como offline
                     if (check.rows[0]?.socket_id === socket.id || !check.rows[0]?.socket_id) {
                         await pool.query(
-                            "UPDATE driver_positions SET status = 'offline', socket_id = NULL WHERE driver_id = $1", 
+                            "UPDATE driver_positions SET status = 'offline', socket_id = NULL WHERE driver_id = $1",
                             [driverId]
                         );
                         await pool.query(
-                            "UPDATE users SET is_online = false WHERE id = $1", 
+                            "UPDATE users SET is_online = false WHERE id = $1",
                             [driverId]
                         );
-                        
+
                         // Notifica outros motoristas
                         io.to('drivers').emit('driver_offline', {
                             driver_id: driverId,
                             timestamp: new Date().toISOString()
                         });
-                        
+
                         console.log(`${colors.yellow}🚫 Motorista ${driverId} marcado como offline após timeout.${colors.reset}`);
                     }
                 } catch (innerError) {
@@ -699,17 +713,17 @@ async function _cleanInactiveDrivers() {
         if (result.rows.length > 0) {
             for (const row of result.rows) {
                 await pool.query(
-                    "UPDATE users SET is_online = false WHERE id = $1", 
+                    "UPDATE users SET is_online = false WHERE id = $1",
                     [row.driver_id]
                 );
-                
+
                 // Notifica outros motoristas
                 io.to('drivers').emit('driver_offline', {
                     driver_id: row.driver_id,
                     reason: 'inactivity',
                     timestamp: new Date().toISOString()
                 });
-                
+
                 console.log(`${colors.yellow}🧹 Motorista ${row.driver_id} varrido por inatividade (3min sem heartbeat).${colors.reset}`);
             }
         }
@@ -722,9 +736,9 @@ async function _updateDriversHeartbeat() {
     try {
         // Atualiza timestamp de todos os motoristas online para evitar limpeza acidental
         await pool.query(`
-            UPDATE driver_positions 
-            SET last_update = NOW() 
-            WHERE status = 'online' 
+            UPDATE driver_positions
+            SET last_update = NOW()
+            WHERE status = 'online'
               AND last_update > NOW() - INTERVAL '2 minutes'
         `);
     } catch (e) {
@@ -745,7 +759,7 @@ function getIO() {
 
 function emitToUser(userId, event, data) {
     if (!userId || !io) return false;
-    
+
     try {
         io.to(`user_${userId}`).emit(event, {
             ...data,
@@ -760,7 +774,7 @@ function emitToUser(userId, event, data) {
 
 function emitToRide(rideId, event, data) {
     if (!rideId || !io) return false;
-    
+
     try {
         io.to(`ride_${rideId}`).emit(event, {
             ...data,
@@ -775,7 +789,7 @@ function emitToRide(rideId, event, data) {
 
 function emitToDrivers(event, data) {
     if (!io) return false;
-    
+
     try {
         io.to('drivers').emit(event, {
             ...data,
@@ -790,7 +804,7 @@ function emitToDrivers(event, data) {
 
 function emitToDriver(driverId, event, data) {
     if (!driverId || !io) return false;
-    
+
     try {
         io.to(`driver_${driverId}`).emit(event, {
             ...data,
