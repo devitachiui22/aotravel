@@ -4,17 +4,16 @@
  * =================================================================================================
  *
  * ARQUIVO: src/utils/dbBootstrap.js
- * VERSÃO DO SCHEMA: 2026.02.25.KYC.FINAL.CORRIGIDA
- * DESCRIÇÃO: Script de inicialização com TODAS as colunas necessárias para o KYC Rigoroso.
+ * VERSÃO DO SCHEMA: 2026.03.02.KYC.FINAL.CORRIGIDA
+ * DESCRIÇÃO: Script de inicialização com TODAS as colunas necessárias para o KYC Rigoroso
+ *            e funcionalidades avançadas (agendamentos, entregas, viagens em grupo).
  *
- * ✅ CORREÇÕES APLICADAS:
- * - Adicionadas colunas: vehicle_title (Livrete), vehicle_insurance (Seguro), tax_document (NIF)
- * - Adicionada coluna `last_login` para controle de sessão
- * - Auto-healing para todas as colunas necessárias
- * - CORREÇÃO CRÍTICA: Linha 654 - Verificação de existência do usuário antes de acessar ID
- * - CORREÇÃO CRÍTICA: Linha 659 - Criação de conta wallet após inserção do usuário
- * - CORREÇÃO CRÍTICA: Linha 672 - Inserção em driver_positions com validação de role
- * - CORREÇÃO CRÍTICA: Linha 688 - Inserção em vehicle_details com validação de dados
+ * ✅ NOVAS FUNCIONALIDADES ADICIONADAS:
+ * - Agendamento de corridas (is_scheduled, scheduled_time)
+ * - Entregas com detalhes personalizados (delivery_details)
+ * - Viagens em grupo (is_group_ride)
+ * - Múltiplas paradas (multi_stops)
+ * - Preço definido pelo usuário (user_defined_price)
  *
  * 🔑 USUÁRIOS DE TESTE (senha: 123456 para todos):
  * - Motorista Ao (driver@aotravel.com / 123456)
@@ -68,7 +67,7 @@ async function safeQuery(client, query, params = [], description = '') {
 }
 
 async function bootstrapDatabase() {
-    log.section('🚀 INICIANDO BOOTSTRAP DO BANCO DE DADOS - KYC COMPLETO');
+    log.section('🚀 INICIANDO BOOTSTRAP DO BANCO DE DADOS - KYC COMPLETO + AGENDAMENTOS');
 
     const client = await pool.connect();
 
@@ -155,7 +154,7 @@ async function bootstrapDatabase() {
             );
         `, [], 'CREATE TABLE driver_positions');
 
-        // 3. TABELA RIDES
+        // 3. TABELA RIDES - COM NOVAS COLUNAS PARA AGENDAMENTOS E ENTREGAS
         await safeQuery(client, `
             CREATE TABLE IF NOT EXISTS rides (
                 id SERIAL PRIMARY KEY,
@@ -170,7 +169,7 @@ async function bootstrapDatabase() {
                 initial_price NUMERIC(15,2) NOT NULL,
                 final_price NUMERIC(15,2),
                 negotiation_history JSONB DEFAULT '[]',
-                ride_type VARCHAR(20) DEFAULT 'ride' CHECK (ride_type IN ('ride', 'moto', 'delivery')),
+                ride_type VARCHAR(20) DEFAULT 'car' CHECK (ride_type IN ('car', 'moto', 'delivery', 'delivery_car', 'delivery_moto', 'group', 'scheduled')),
                 distance_km NUMERIC(10,2),
                 status VARCHAR(20) DEFAULT 'searching' CHECK (status IN ('searching', 'accepted', 'arrived', 'ongoing', 'completed', 'cancelled')),
                 payment_method VARCHAR(20) DEFAULT 'cash' CHECK (payment_method IN ('cash', 'wallet', 'card')),
@@ -179,6 +178,19 @@ async function bootstrapDatabase() {
                 feedback TEXT,
                 cancelled_by VARCHAR(20),
                 cancellation_reason TEXT,
+
+                -- ✅ NOVAS COLUNAS PARA AGENDAMENTOS
+                is_scheduled BOOLEAN DEFAULT false,
+                scheduled_time TIMESTAMP,
+
+                -- ✅ NOVAS COLUNAS PARA ENTREGAS
+                delivery_details JSONB,
+
+                -- ✅ NOVAS COLUNAS PARA VIAGENS EM GRUPO
+                is_group_ride BOOLEAN DEFAULT false,
+                multi_stops JSONB DEFAULT '[]',
+
+                -- Timestamps
                 accepted_at TIMESTAMP,
                 arrived_at TIMESTAMP,
                 started_at TIMESTAMP,
@@ -336,19 +348,38 @@ async function bootstrapDatabase() {
             );
         `, [], 'CREATE TABLE admin_reports');
 
+        // 13. TABELA DELIVERY_DETAILS (detalhes de entregas)
+        await safeQuery(client, `
+            CREATE TABLE IF NOT EXISTS delivery_details (
+                id SERIAL PRIMARY KEY,
+                ride_id INTEGER REFERENCES rides(id) ON DELETE CASCADE,
+                recipient_name VARCHAR(100),
+                recipient_phone VARCHAR(20),
+                recipient_address TEXT,
+                package_description TEXT,
+                package_weight NUMERIC(10,2),
+                package_size VARCHAR(50),
+                fragile BOOLEAN DEFAULT false,
+                requires_signature BOOLEAN DEFAULT true,
+                delivery_instructions TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `, [], 'CREATE TABLE delivery_details');
+
         log.success('✅ Todas as tabelas criadas/verificadas com sucesso');
 
         // =========================================================================================
-        // ETAPA 2: AUTO-HEALING - ADICIONAR COLUNAS FALTANTES (KYC STRICT)
+        // ETAPA 2: AUTO-HEALING - ADICIONAR COLUNAS FALTANTES (KYC STRICT + AGENDAMENTOS)
         // =========================================================================================
-        log.section('🔧 EXECUTANDO AUTO-HEALING (VERIFICAÇÃO DE COLUNAS KYC)');
+        log.section('🔧 EXECUTANDO AUTO-HEALING (VERIFICAÇÃO DE COLUNAS KYC E AGENDAMENTOS)');
 
         const schemaRepairs = [
             // ✅ KYC COLUMNS - VEHICLE TITLE, INSURANCE, TAX DOCUMENT
             { table: 'users', col: 'vehicle_title', type: 'TEXT' },
             { table: 'users', col: 'vehicle_insurance', type: 'TEXT' },
             { table: 'users', col: 'tax_document', type: 'TEXT' },
-            
+
             // ✅ OTHER KYC COLUMNS
             { table: 'users', col: 'bi_front', type: 'TEXT' },
             { table: 'users', col: 'bi_back', type: 'TEXT' },
@@ -377,14 +408,19 @@ async function bootstrapDatabase() {
             { table: 'users', col: 'settings', type: "JSONB DEFAULT '{}'" },
             { table: 'users', col: 'privacy_settings', type: "JSONB DEFAULT '{}'" },
             { table: 'users', col: 'notification_preferences', type: "JSONB DEFAULT '{\"ride_notifications\": true, \"promo_notifications\": true, \"chat_notifications\": true}'" },
-            
+
             // Driver positions columns
             { table: 'driver_positions', col: 'heading', type: 'DOUBLE PRECISION DEFAULT 0' },
             { table: 'driver_positions', col: 'speed', type: 'DOUBLE PRECISION DEFAULT 0' },
             { table: 'driver_positions', col: 'accuracy', type: 'DOUBLE PRECISION DEFAULT 0' },
             { table: 'driver_positions', col: 'socket_id', type: 'VARCHAR(100)' },
-            
-            // Rides columns
+
+            // ✅ RIDES COLUMNS - NOVAS PARA AGENDAMENTOS
+            { table: 'rides', col: 'is_scheduled', type: 'BOOLEAN DEFAULT false' },
+            { table: 'rides', col: 'scheduled_time', type: 'TIMESTAMP' },
+            { table: 'rides', col: 'delivery_details', type: 'JSONB' },
+            { table: 'rides', col: 'is_group_ride', type: 'BOOLEAN DEFAULT false' },
+            { table: 'rides', col: 'multi_stops', type: "JSONB DEFAULT '[]'" },
             { table: 'rides', col: 'negotiation_history', type: "JSONB DEFAULT '[]'" },
             { table: 'rides', col: 'payment_method', type: "VARCHAR(20) DEFAULT 'cash'" },
             { table: 'rides', col: 'payment_status', type: "VARCHAR(20) DEFAULT 'pending'" },
@@ -395,7 +431,7 @@ async function bootstrapDatabase() {
             { table: 'rides', col: 'cancelled_at', type: 'TIMESTAMP' },
             { table: 'rides', col: 'cancelled_by', type: 'VARCHAR(20)' },
             { table: 'rides', col: 'cancellation_reason', type: 'TEXT' },
-            
+
             // Wallet transactions columns
             { table: 'wallet_transactions', col: 'ride_id', type: 'INTEGER REFERENCES rides(id) ON DELETE SET NULL' },
             { table: 'wallet_transactions', col: 'fee', type: 'NUMERIC(15,2) DEFAULT 0.00' },
@@ -407,14 +443,14 @@ async function bootstrapDatabase() {
             { table: 'wallet_transactions', col: 'metadata', type: "JSONB DEFAULT '{}'" },
             { table: 'wallet_transactions', col: 'is_hidden', type: 'BOOLEAN DEFAULT FALSE' },
             { table: 'wallet_transactions', col: 'completed_at', type: 'TIMESTAMP' },
-            
+
             // Chat messages columns
             { table: 'chat_messages', col: 'message_type', type: "VARCHAR(20) DEFAULT 'text'" },
             { table: 'chat_messages', col: 'image_url', type: 'TEXT' },
             { table: 'chat_messages', col: 'location_lat', type: 'DOUBLE PRECISION' },
             { table: 'chat_messages', col: 'location_lng', type: 'DOUBLE PRECISION' },
             { table: 'chat_messages', col: 'read_at', type: 'TIMESTAMP' },
-            
+
             // User sessions columns
             { table: 'user_sessions', col: 'device_id', type: 'TEXT' },
             { table: 'user_sessions', col: 'fcm_token', type: 'TEXT' },
@@ -457,6 +493,8 @@ async function bootstrapDatabase() {
             "CREATE INDEX IF NOT EXISTS idx_rides_passenger_status ON rides(passenger_id, status)",
             "CREATE INDEX IF NOT EXISTS idx_rides_driver_status ON rides(driver_id, status)",
             "CREATE INDEX IF NOT EXISTS idx_rides_type ON rides(ride_type)",
+            "CREATE INDEX IF NOT EXISTS idx_rides_scheduled ON rides(is_scheduled, scheduled_time) WHERE is_scheduled = true",
+            "CREATE INDEX IF NOT EXISTS idx_rides_group ON rides(is_group_ride) WHERE is_group_ride = true",
             "CREATE INDEX IF NOT EXISTS idx_wallet_user ON wallet_transactions(user_id)",
             "CREATE INDEX IF NOT EXISTS idx_wallet_ref ON wallet_transactions(reference_id)",
             "CREATE INDEX IF NOT EXISTS idx_wallet_date ON wallet_transactions(created_at DESC)",
@@ -492,7 +530,7 @@ async function bootstrapDatabase() {
             $$ language 'plpgsql';
         `, [], 'CREATE FUNCTION update_timestamp_column');
 
-        const tablesWithTimestamp = ['users', 'rides', 'wallet_transactions', 'vehicle_details', 'user_documents', 'external_bank_accounts', 'app_settings'];
+        const tablesWithTimestamp = ['users', 'rides', 'wallet_transactions', 'vehicle_details', 'user_documents', 'external_bank_accounts', 'app_settings', 'delivery_details'];
         for (const table of tablesWithTimestamp) {
             await safeQuery(client, `
                 DROP TRIGGER IF EXISTS update_${table}_modtime ON ${table};
@@ -539,9 +577,12 @@ async function bootstrapDatabase() {
                     moto_base: 400,
                     moto_km_rate: 180,
                     delivery_base: 1000,
-                    delivery_km_rate: 450
+                    delivery_km_rate: 450,
+                    group_base: 800,
+                    group_km_rate: 350,
+                    scheduled_min_price: 2000
                 }),
-                description: 'Tabela de preços base das corridas'
+                description: 'Tabela de preços base das corridas (inclui preços para grupo e agendamentos)'
             },
             {
                 key: 'app_config',
@@ -549,6 +590,7 @@ async function bootstrapDatabase() {
                     max_radius_km: 15,
                     driver_timeout_minutes: 30,
                     ride_search_timeout: 60,
+                    scheduled_radius_km: 25,
                     version: '11.2.0',
                     kyc_required: true
                 }),
@@ -652,12 +694,12 @@ async function bootstrapDatabase() {
                         is_verified = $5, kyc_level = $6, vehicle_details = $7, updated_at = NOW()
                      WHERE id = $8 RETURNING id`,
                     [
-                        user.name, 
-                        user.password, 
-                        user.role, 
+                        user.name,
+                        user.password,
+                        user.role,
                         user.rating,
-                        user.is_verified, 
-                        user.kyc_level, 
+                        user.is_verified,
+                        user.kyc_level,
                         user.vehicle_details || null,
                         existing.rows[0].id // ✅ USANDO O ID EXISTENTE
                     ]
@@ -672,14 +714,14 @@ async function bootstrapDatabase() {
                      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
                      RETURNING id`,
                     [
-                        user.name, 
-                        user.email, 
-                        user.phone, 
+                        user.name,
+                        user.email,
+                        user.phone,
                         user.password,
-                        user.role, 
-                        user.rating, 
-                        user.is_verified, 
-                        user.kyc_level, 
+                        user.role,
+                        user.rating,
+                        user.is_verified,
+                        user.kyc_level,
                         user.vehicle_details || null
                     ]
                 );
