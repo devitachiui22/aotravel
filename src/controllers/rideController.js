@@ -1,8 +1,8 @@
 /**
  * =================================================================================================
- * 🚕 AOTRAVEL SERVER PRO - RIDE CONTROLLER (MATCHING & PAYMENT ENGINE)
+ * 🚕 AOTRAVEL SERVER PRO - RIDE CONTROLLER (MATCHING & PAYMENT ENGINE v10.0)
  * =================================================================================================
- * STATUS: 🔥 PRODUCTION READY - TRANSAÇÃO ACID & PIN VALIDATION
+ * STATUS: 🔥 PRODUCTION READY - TRANSAÇÃO ACID & PIN VALIDATION BLINDADA
  * =================================================================================================
  */
 
@@ -557,14 +557,14 @@ exports.startRide = async (req, res) => {
 };
 
 // =================================================================================================
-// 6. FINALIZAR CORRIDA (COM VALIDAÇÃO DE PIN DO PASSAGEIRO)
+// 6. FINALIZAR CORRIDA (COM VALIDAÇÃO DE PIN DO PASSAGEIRO) - BLINDADA v10.0
 // =================================================================================================
 exports.completeRide = async (req, res) => {
     const { ride_id, payment_method, final_price, distance_traveled, pin } = req.body;
     const userId = req.user.id; // Pode ser motorista ou passageiro
     const method = payment_method || 'cash';
 
-    console.log('\n✅ [COMPLETE_RIDE] INICIANDO FINALIZAÇÃO');
+    console.log('\n✅ [COMPLETE_RIDE] INICIANDO FINALIZAÇÃO BLINDADA v10.0');
     console.log(`   Ride: ${ride_id}`);
     console.log(`   Method: ${method}`);
     console.log(`   Final Price: ${final_price}`);
@@ -602,7 +602,7 @@ exports.completeRide = async (req, res) => {
         if (ride.driver_id !== userId && ride.passenger_id !== userId) {
             console.log(`❌ ERRO: Usuário ${userId} não pertence a esta corrida`);
             await client.query('ROLLBACK');
-            return res.status(403).json({ error: "Acesso negado." });
+            return res.status(403).json({ error: "Acesso negado. Você não pertence a esta corrida." });
         }
 
         if (ride.status !== 'ongoing' && ride.status !== 'accepted') {
@@ -635,6 +635,12 @@ exports.completeRide = async (req, res) => {
 
                 const paxData = paxRes.rows[0];
 
+                if (!paxData.wallet_pin_hash) {
+                    console.log(`❌ ERRO: PIN não configurado`);
+                    await client.query('ROLLBACK');
+                    return res.status(403).json({ error: "Configure seu PIN de segurança na aba de configurações primeiro." });
+                }
+
                 const isPinValid = await bcrypt.compare(pin, paxData.wallet_pin_hash);
                 if (!isPinValid) {
                     console.log(`❌ ERRO: PIN incorreto`);
@@ -650,7 +656,7 @@ exports.completeRide = async (req, res) => {
                     console.log(`❌ ERRO: Saldo insuficiente. Necessário: ${finalAmount}, Disponível: ${paxBalance}`);
                     await client.query('ROLLBACK');
                     return res.status(402).json({
-                        error: "Saldo insuficiente.",
+                        error: "Saldo insuficiente na carteira.",
                         code: "INSUFFICIENT_FUNDS"
                     });
                 }
