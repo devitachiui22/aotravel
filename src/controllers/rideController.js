@@ -345,7 +345,7 @@ exports.acceptRide = async (req, res) => {
 
         console.log(`🔍 Buscando corrida #${ride_id} com FOR UPDATE...`);
         const rideRes = await client.query(
-            "SELECT id, status, passenger_id, initial_price, ride_type, origin_name, dest_name, distance_km FROM rides WHERE id = $1 FOR UPDATE",
+            "SELECT id, status, passenger_id, initial_price, ride_type, origin_name, dest_name, distance_km, is_scheduled FROM rides WHERE id = $1 FOR UPDATE",
             [ride_id]
         );
 
@@ -397,9 +397,15 @@ exports.acceptRide = async (req, res) => {
 
         console.log('✅ Validações OK. Atualizando corrida...');
 
+        // =============================================
+        // ATUALIZAÇÃO COM SUPORTE A CORRIDA AGENDADA
+        // =============================================
+        const isScheduled = ride.is_scheduled || (rideRes.rows[0].is_scheduled);
+        const newStatus = isScheduled ? 'scheduled_accepted' : 'accepted';
+
         await client.query(
-            "UPDATE rides SET driver_id = $1, status = 'accepted', accepted_at = NOW(), updated_at = NOW() WHERE id = $2",
-            [actualDriverId, ride_id]
+            "UPDATE rides SET driver_id = $1, status = $2, accepted_at = NOW(), updated_at = NOW() WHERE id = $3",
+            [actualDriverId, newStatus, ride_id]
         );
 
         console.log('✅ Corrida atualizada. Buscando dados completos...');
