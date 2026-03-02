@@ -1,14 +1,16 @@
 /**
  * =================================================================================================
- * 🚕 AOTRAVEL SERVER PRO - RIDE CONTROLLER (MATCHING & PAYMENT ENGINE v10.0)
+ * 🚕 AOTRAVEL SERVER PRO - RIDE CONTROLLER (MATCHING & LIFECYCLE v11.0)
  * =================================================================================================
- * STATUS: 🔥 PRODUCTION READY - TRANSAÇÃO ACID & PIN VALIDATION BLINDADA
+ * STATUS: 🔥 PRODUCTION READY - CLEAN ARCHITECTURE APLICADA
  * =================================================================================================
  */
 
 const pool = require('../config/db');
-const bcrypt = require('bcrypt');
 const { getDistance, logError, logSystem, getFullRideDetails, generateRef } = require('../utils/helpers');
+
+// ✅ Importação da nova camada financeira separada
+const walletService = require('../services/walletService');
 
 // =================================================================================================
 // 1. SOLICITAÇÃO DE CORRIDA (MATCHING RESTRITO)
@@ -557,178 +559,79 @@ exports.startRide = async (req, res) => {
 };
 
 // =================================================================================================
-// 6. FINALIZAR CORRIDA (COM VALIDAÇÃO DE PIN DO PASSAGEIRO) - BLINDADA v10.0
+// 6. FINALIZAR CORRIDA (COM INTEGRAÇÃO AO WALLET SERVICE - CLEAN ARCHITECTURE)
 // =================================================================================================
 exports.completeRide = async (req, res) => {
     const { ride_id, payment_method, final_price, distance_traveled, pin } = req.body;
     const userId = req.user.id; // Pode ser motorista ou passageiro
     const method = payment_method || 'cash';
 
-    console.log('\n✅ [COMPLETE_RIDE] INICIANDO FINALIZAÇÃO BLINDADA v10.0');
-    console.log(`   Ride: ${ride_id}`);
-    console.log(`   Method: ${method}`);
-    console.log(`   Final Price: ${final_price}`);
-    console.log(`   Distance Traveled: ${distance_traveled}`);
-    console.log(`   User ID: ${userId}`);
-    console.log('----------------------------------------\n');
+    console.log('\n✅ [COMPLETE_RIDE] FINALIZAÇÃO | Ride: ${ride_id} | Method: ${method} | User: ${userId}');
 
     const client = await pool.connect();
 
     try {
-        await client.query('BEGIN');
+        await client.query('BEGIN'); // Inicia transação Global (Corrida + Pagamento)
 
-        console.log(`🔍 Buscando corrida #${ride_id}...`);
-        const rideCheck = await client.query(
-            "SELECT * FROM rides WHERE id = $1 FOR UPDATE",
-            [ride_id]
-        );
-
+        const rideCheck = await client.query("SELECT * FROM rides WHERE id = $1 FOR UPDATE", [ride_id]);
         if (rideCheck.rows.length === 0) {
-            console.log(`❌ ERRO: Corrida #${ride_id} não encontrada`);
             await client.query('ROLLBACK');
             return res.status(404).json({ error: "Corrida não encontrada." });
         }
 
         const ride = rideCheck.rows[0];
-        console.log(`📊 Dados da corrida:`, {
-            id: ride.id,
-            status: ride.status,
-            driver_id: ride.driver_id,
-            passenger_id: ride.passenger_id,
-            initial_price: ride.initial_price
-        });
 
-        // Verifica se quem está a chamar a rota pertence a corrida
         if (ride.driver_id !== userId && ride.passenger_id !== userId) {
-            console.log(`❌ ERRO: Usuário ${userId} não pertence a esta corrida`);
             await client.query('ROLLBACK');
-            return res.status(403).json({ error: "Acesso negado. Você não pertence a esta corrida." });
+            return res.status(403).json({ error: "Acesso negado." });
         }
 
         if (ride.status !== 'ongoing' && ride.status !== 'accepted') {
-            console.log(`❌ ERRO: Status inválido para finalização: ${ride.status}`);
             await client.query('ROLLBACK');
-            return res.status(400).json({ error: "A corrida já foi finalizada." });
+            return res.status(400).json({ error: "A corrida já foi finalizada ou cancelada." });
         }
 
         const finalAmount = parseFloat(final_price || ride.final_price || ride.initial_price);
-        console.log(`💰 Valor final: ${finalAmount} Kz`);
 
-        // --- LÓGICA FINANCEIRA INTEGRADA (WALLET) ---
+        // =========================================================================================
+        // DELEGAÇÃO DE RESPONSABILIDADE FINANCEIRA (CLEAN ARCHITECTURE)
+        // =========================================================================================
         if (method === 'wallet') {
-            // Se foi o passageiro que chamou a rota (Digitou PIN na UI dele)
-            if (userId === ride.passenger_id) {
-                console.log(`💳 Passageiro ${userId} tentando pagar via wallet...`);
-
-                if (!pin) {
-                    console.log(`❌ ERRO: PIN não fornecido`);
-                    await client.query('ROLLBACK');
-                    return res.status(400).json({ error: "PIN de segurança obrigatório." });
-                }
-
-                // Validar PIN
-                console.log(`🔍 Validando PIN do passageiro...`);
-                const paxRes = await client.query(
-                    "SELECT wallet_pin_hash, balance FROM users WHERE id = $1 FOR UPDATE",
-                    [ride.passenger_id]
-                );
-
-                const paxData = paxRes.rows[0];
-
-                if (!paxData.wallet_pin_hash) {
-                    console.log(`❌ ERRO: PIN não configurado`);
-                    await client.query('ROLLBACK');
-                    return res.status(403).json({ error: "Configure seu PIN de segurança na aba de configurações primeiro." });
-                }
-
-                const isPinValid = await bcrypt.compare(pin, paxData.wallet_pin_hash);
-                if (!isPinValid) {
-                    console.log(`❌ ERRO: PIN incorreto`);
-                    await client.query('ROLLBACK');
-                    return res.status(403).json({ error: "PIN incorreto." });
-                }
-                console.log(`✅ PIN validado com sucesso`);
-
-                const paxBalance = parseFloat(paxData.balance);
-                console.log(`   Saldo do passageiro: ${paxBalance} Kz`);
-
-                if (paxBalance < finalAmount) {
-                    console.log(`❌ ERRO: Saldo insuficiente. Necessário: ${finalAmount}, Disponível: ${paxBalance}`);
-                    await client.query('ROLLBACK');
-                    return res.status(402).json({
-                        error: "Saldo insuficiente na carteira.",
-                        code: "INSUFFICIENT_FUNDS"
-                    });
-                }
-
-                // Transferência Atômica
-                await client.query(
-                    "UPDATE users SET balance = balance - $1 WHERE id = $2",
-                    [finalAmount, ride.passenger_id]
-                );
-                await client.query(
-                    "UPDATE users SET balance = balance + $1 WHERE id = $2",
-                    [finalAmount, ride.driver_id]
-                );
-
-                const txRef = generateRef('RIDE');
-
-                // Log Débito Pax
-                await client.query(
-                    `INSERT INTO wallet_transactions (
-                        reference_id, user_id, amount, type, method, status,
-                        description, category, ride_id, created_at
-                    ) VALUES ($1, $2, $3, 'payment', 'wallet', 'completed', $4, 'ride', $5, NOW())`,
-                    [txRef, ride.passenger_id, -finalAmount, `Pagamento da corrida #${ride_id}`, ride_id]
-                );
-
-                // Log Crédito Motorista
-                await client.query(
-                    `INSERT INTO wallet_transactions (
-                        reference_id, user_id, amount, type, method, status,
-                        description, category, ride_id, created_at
-                    ) VALUES ($1, $2, $3, 'earnings', 'wallet', 'completed', $4, 'ride', $5, NOW())`,
-                    [txRef, ride.driver_id, finalAmount, `Ganhos da corrida #${ride_id}`, ride_id]
-                );
-
-                console.log(`✅ Transação wallet concluída. Referência: ${txRef}`);
-
-            } else {
-                // Se o Motorista tentou chamar 'wallet' diretamente sem passar pelo passageiro
-                console.log(`❌ ERRO: Motorista tentando processar pagamento wallet sem autorização do passageiro`);
+            if (userId !== ride.passenger_id) {
                 await client.query('ROLLBACK');
-                return res.status(403).json({
-                    error: "Pagamentos em carteira devem ser autorizados pelo passageiro.",
-                    code: "UNAUTHORIZED_PAYMENT"
-                });
-            }
-        } else {
-            // CASH - Apenas motorista pode confirmar
-            if (userId !== ride.driver_id) {
-                console.log(`❌ ERRO: Usuário ${userId} tentando confirmar pagamento em dinheiro`);
-                await client.query('ROLLBACK');
-                return res.status(403).json({
-                    error: "Pagamento em dinheiro deve ser confirmado pelo motorista."
-                });
+                return res.status(403).json({ error: "Apenas o passageiro pode autorizar o débito." });
             }
 
-            console.log(`💰 Processando pagamento em dinheiro...`);
-
-            const txRef = generateRef('CASH');
-            await client.query(
-                `INSERT INTO wallet_transactions (
-                    reference_id, user_id, amount, type, method, status,
-                    description, category, metadata, ride_id, created_at
-                ) VALUES ($1, $2, $3, 'earnings', 'cash', 'completed', $4, 'ride', $5, $6, NOW())`,
-                [txRef, ride.driver_id, finalAmount, `Ganhos da corrida #${ride_id} (Dinheiro)`, '{"is_cash": true}', ride_id]
+            // O controller de corridas não sabe como tirar dinheiro, ele pede ao WalletService
+            // Passamos o 'client' para o WalletService usar a mesma transação SQL.
+            await walletService.processRidePayment(
+                ride.passenger_id,
+                ride.driver_id,
+                finalAmount,
+                ride_id,
+                pin,
+                client
             );
 
-            console.log(`✅ Transação cash registrada. Referência: ${txRef}`);
+        } else {
+            // Pagamento em CASH (Dinheiro)
+            if (userId !== ride.driver_id) {
+                await client.query('ROLLBACK');
+                return res.status(403).json({ error: "O motorista deve confirmar o recebimento em dinheiro." });
+            }
+
+            // Apenas regista no histórico financeiro do motorista
+            await walletService.processCashRideLog(
+                ride.driver_id,
+                finalAmount,
+                ride_id,
+                client
+            );
         }
 
-        // --- ATUALIZA A CORRIDA ---
-        console.log(`📝 Atualizando status da corrida para 'completed'...`);
-
+        // =========================================================================================
+        // ATUALIZAÇÃO DO STATUS DA CORRIDA
+        // =========================================================================================
         await client.query(`
             UPDATE rides SET
                 status = 'completed',
@@ -741,52 +644,45 @@ exports.completeRide = async (req, res) => {
             WHERE id = $4
         `, [finalAmount, method, distance_traveled, ride_id]);
 
+        // Se tudo correu bem (Dinheiro e Corrida), guardamos permanentemente
         await client.query('COMMIT');
-        console.log(`✅ Corrida #${ride_id} finalizada com sucesso`);
 
         const fullRide = await getFullRideDetails(ride_id);
 
-        // --- NOTIFICAÇÕES SOCKET ---
+        // =========================================================================================
+        // NOTIFICAÇÕES (SOCKET.IO)
+        // =========================================================================================
         if (req.io) {
-            console.log(`📡 Enviando notificações de finalização...`);
-
             req.io.to(`ride_${ride_id}`).emit('ride_completed', fullRide);
             req.io.to(`user_${ride.passenger_id}`).emit('ride_completed', fullRide);
             req.io.to(`user_${ride.driver_id}`).emit('ride_completed', fullRide);
 
-            console.log(`   ✅ Notificações enviadas para ride_${ride_id}, user_${ride.passenger_id} e user_${ride.driver_id}`);
-
             if (method === 'wallet') {
-                req.io.to(`user_${ride.passenger_id}`).emit('wallet_update', {
-                    type: 'payment',
-                    amount: finalAmount
-                });
-                req.io.to(`user_${ride.driver_id}`).emit('wallet_update', {
-                    type: 'earnings',
-                    amount: finalAmount
-                });
-                console.log(`   ✅ Atualizações de wallet enviadas`);
+                req.io.to(`user_${ride.passenger_id}`).emit('wallet_update', { type: 'payment', amount: finalAmount });
+                req.io.to(`user_${ride.driver_id}`).emit('wallet_update', { type: 'earnings', amount: finalAmount });
             }
         }
 
-        res.json({
-            success: true,
-            message: "Corrida finalizada com sucesso!",
-            ride: fullRide
-        });
+        res.json({ success: true, ride: fullRide });
 
     } catch (e) {
+        // Se QUALQUER coisa falhar (PIN errado, sem saldo, etc), desfaz tudo!
         await client.query('ROLLBACK');
-        console.error('❌ ERRO FATAL NO COMPLETE_RIDE:', e);
-        console.error('❌ STACK:', e.stack);
-        logError('RIDE_COMPLETE_FATAL', e);
-        res.status(500).json({
-            error: "Erro crítico ao finalizar corrida.",
-            details: process.env.NODE_ENV === 'development' ? e.message : undefined
-        });
+        console.error('❌ ERRO NO COMPLETE_RIDE:', e.message);
+
+        // Se o erro veio do walletService com código (ex: INSUFFICIENT_FUNDS), repassa
+        if (e.code === 'INSUFFICIENT_FUNDS') {
+            return res.status(402).json({ error: e.message, code: e.code });
+        }
+
+        // Se foi erro de PIN (403)
+        if (e.message && e.message.includes('PIN')) {
+            return res.status(403).json({ error: e.message });
+        }
+
+        res.status(500).json({ error: "Erro crítico ao finalizar a corrida." });
     } finally {
         client.release();
-        console.log('🔌 Conexão com banco liberada');
     }
 };
 
