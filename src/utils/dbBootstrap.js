@@ -1,19 +1,16 @@
 /**
  * =================================================================================================
- * 🛡️ AOTRAVEL SERVER PRO - DATABASE BOOTSTRAP & SELF-HEALING ENGINE (TITANIUM EDITION)
+ * 🛡️ AOTRAVEL SERVER PRO - DATABASE BOOTSTRAP & SELF-HEALING ENGINE (TITANIUM HUB EDITION)
  * =================================================================================================
  *
  * ARQUIVO: src/utils/dbBootstrap.js
- * VERSÃO DO SCHEMA: 2026.03.02.KYC.FINAL.CORRIGIDA
- * DESCRIÇÃO: Script de inicialização com TODAS as colunas necessárias para o KYC Rigoroso
- *            e funcionalidades avançadas (agendamentos, entregas, viagens em grupo).
+ * VERSÃO DO SCHEMA: 2026.03.03.TITANIUM.HUB
+ * DESCRIÇÃO: Script de inicialização com suporte ao HUB INTELIGENTE.
  *
- * ✅ NOVAS FUNCIONALIDADES ADICIONADAS:
- * - Agendamento de corridas (is_scheduled, scheduled_time)
- * - Entregas com detalhes personalizados (delivery_details)
- * - Viagens em grupo (is_group_ride)
- * - Múltiplas paradas (multi_stops)
- * - Preço definido pelo usuário (user_defined_price)
+ * ✅ ATUALIZAÇÕES TITANIUM HUB:
+ * - Tabelas: scheduled_rides, group_rides, group_ride_passengers, deliveries, delivery_tracking.
+ * - Chat expansível: Suporte a múltiplos contextos (ride_id, scheduled_id, group_id, delivery_id).
+ * - Colunas adicionadas: chat_room_id em chat_messages para suporte multi-contexto.
  *
  * 🔑 USUÁRIOS DE TESTE (senha: 123456 para todos):
  * - Motorista Ao (driver@aotravel.com / 123456)
@@ -67,7 +64,7 @@ async function safeQuery(client, query, params = [], description = '') {
 }
 
 async function bootstrapDatabase() {
-    log.section('🚀 INICIANDO BOOTSTRAP DO BANCO DE DADOS - KYC COMPLETO + AGENDAMENTOS');
+    log.section('🚀 INICIANDO BOOTSTRAP DO BANCO DE DADOS - TITANIUM HUB');
 
     const client = await pool.connect();
 
@@ -75,9 +72,9 @@ async function bootstrapDatabase() {
         await client.query('BEGIN');
 
         // =========================================================================================
-        // ETAPA 1: CRIAÇÃO DE TODAS AS TABELAS
+        // ETAPA 1: TABELAS CORE EXISTENTES
         // =========================================================================================
-        log.info('Criando/Verificando tabelas base...');
+        log.info('Criando/Verificando tabelas core...');
 
         // 1. TABELA USERS - COM TODAS AS COLUNAS KYC
         await safeQuery(client, `
@@ -154,7 +151,7 @@ async function bootstrapDatabase() {
             );
         `, [], 'CREATE TABLE driver_positions');
 
-        // 3. TABELA RIDES - COM NOVAS COLUNAS PARA AGENDAMENTOS E ENTREGAS
+        // 3. TABELA RIDES
         await safeQuery(client, `
             CREATE TABLE IF NOT EXISTS rides (
                 id SERIAL PRIMARY KEY,
@@ -169,7 +166,7 @@ async function bootstrapDatabase() {
                 initial_price NUMERIC(15,2) NOT NULL,
                 final_price NUMERIC(15,2),
                 negotiation_history JSONB DEFAULT '[]',
-                ride_type VARCHAR(20) DEFAULT 'car' CHECK (ride_type IN ('car', 'moto', 'delivery', 'delivery_car', 'delivery_moto', 'group', 'scheduled')),
+                ride_type VARCHAR(20) DEFAULT 'ride' CHECK (ride_type IN ('ride', 'moto', 'delivery', 'car', 'delivery_car', 'delivery_moto')),
                 distance_km NUMERIC(10,2),
                 status VARCHAR(20) DEFAULT 'searching' CHECK (status IN ('searching', 'accepted', 'arrived', 'ongoing', 'completed', 'cancelled')),
                 payment_method VARCHAR(20) DEFAULT 'cash' CHECK (payment_method IN ('cash', 'wallet', 'card')),
@@ -178,19 +175,6 @@ async function bootstrapDatabase() {
                 feedback TEXT,
                 cancelled_by VARCHAR(20),
                 cancellation_reason TEXT,
-
-                -- ✅ NOVAS COLUNAS PARA AGENDAMENTOS
-                is_scheduled BOOLEAN DEFAULT false,
-                scheduled_time TIMESTAMP,
-
-                -- ✅ NOVAS COLUNAS PARA ENTREGAS
-                delivery_details JSONB,
-
-                -- ✅ NOVAS COLUNAS PARA VIAGENS EM GRUPO
-                is_group_ride BOOLEAN DEFAULT false,
-                multi_stops JSONB DEFAULT '[]',
-
-                -- Timestamps
                 accepted_at TIMESTAMP,
                 arrived_at TIMESTAMP,
                 started_at TIMESTAMP,
@@ -245,24 +229,7 @@ async function bootstrapDatabase() {
             );
         `, [], 'CREATE TABLE user_sessions');
 
-        // 6. TABELA CHAT_MESSAGES
-        await safeQuery(client, `
-            CREATE TABLE IF NOT EXISTS chat_messages (
-                id SERIAL PRIMARY KEY,
-                ride_id INTEGER REFERENCES rides(id) ON DELETE CASCADE,
-                sender_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
-                message_type VARCHAR(20) DEFAULT 'text' CHECK (message_type IN ('text', 'image', 'location', 'payment')),
-                text TEXT,
-                image_url TEXT,
-                location_lat DOUBLE PRECISION,
-                location_lng DOUBLE PRECISION,
-                is_read BOOLEAN DEFAULT false,
-                read_at TIMESTAMP,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        `, [], 'CREATE TABLE chat_messages');
-
-        // 7. TABELA NOTIFICATIONS
+        // 6. TABELA NOTIFICATIONS
         await safeQuery(client, `
             CREATE TABLE IF NOT EXISTS notifications (
                 id SERIAL PRIMARY KEY,
@@ -277,7 +244,7 @@ async function bootstrapDatabase() {
             );
         `, [], 'CREATE TABLE notifications');
 
-        // 8. TABELA APP_SETTINGS
+        // 7. TABELA APP_SETTINGS
         await safeQuery(client, `
             CREATE TABLE IF NOT EXISTS app_settings (
                 key VARCHAR(100) PRIMARY KEY,
@@ -287,7 +254,7 @@ async function bootstrapDatabase() {
             );
         `, [], 'CREATE TABLE app_settings');
 
-        // 9. TABELA VEHICLE_DETAILS
+        // 8. TABELA VEHICLE_DETAILS
         await safeQuery(client, `
             CREATE TABLE IF NOT EXISTS vehicle_details (
                 id SERIAL PRIMARY KEY,
@@ -304,7 +271,7 @@ async function bootstrapDatabase() {
             );
         `, [], 'CREATE TABLE vehicle_details');
 
-        // 10. TABELA USER_DOCUMENTS
+        // 9. TABELA USER_DOCUMENTS
         await safeQuery(client, `
             CREATE TABLE IF NOT EXISTS user_documents (
                 id SERIAL PRIMARY KEY,
@@ -322,7 +289,7 @@ async function bootstrapDatabase() {
             );
         `, [], 'CREATE TABLE user_documents');
 
-        // 11. TABELA EXTERNAL_BANK_ACCOUNTS
+        // 10. TABELA EXTERNAL_BANK_ACCOUNTS
         await safeQuery(client, `
             CREATE TABLE IF NOT EXISTS external_bank_accounts (
                 id SERIAL PRIMARY KEY,
@@ -337,7 +304,7 @@ async function bootstrapDatabase() {
             );
         `, [], 'CREATE TABLE external_bank_accounts');
 
-        // 12. TABELA ADMIN_REPORTS
+        // 11. TABELA ADMIN_REPORTS
         await safeQuery(client, `
             CREATE TABLE IF NOT EXISTS admin_reports (
                 id SERIAL PRIMARY KEY,
@@ -348,31 +315,143 @@ async function bootstrapDatabase() {
             );
         `, [], 'CREATE TABLE admin_reports');
 
-        // 13. TABELA DELIVERY_DETAILS (detalhes de entregas)
+        log.success('✅ Todas as tabelas core criadas/verificadas com sucesso');
+
+        // =========================================================================================
+        // ETAPA 2: NOVAS TABELAS DO SMART HUB (AGENDAMENTO, GRUPO, ENTREGAS)
+        // =========================================================================================
+        log.info('Construindo infraestrutura Smart Hub...');
+
+        // 2.1 Agendamentos
         await safeQuery(client, `
-            CREATE TABLE IF NOT EXISTS delivery_details (
+            CREATE TABLE IF NOT EXISTS scheduled_rides (
                 id SERIAL PRIMARY KEY,
-                ride_id INTEGER REFERENCES rides(id) ON DELETE CASCADE,
-                recipient_name VARCHAR(100),
-                recipient_phone VARCHAR(20),
-                recipient_address TEXT,
-                package_description TEXT,
-                package_weight NUMERIC(10,2),
-                package_size VARCHAR(50),
-                fragile BOOLEAN DEFAULT false,
-                requires_signature BOOLEAN DEFAULT true,
-                delivery_instructions TEXT,
+                passenger_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                driver_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                origin_lat DOUBLE PRECISION NOT NULL,
+                origin_lng DOUBLE PRECISION NOT NULL,
+                dest_lat DOUBLE PRECISION NOT NULL,
+                dest_lng DOUBLE PRECISION NOT NULL,
+                origin_name TEXT,
+                dest_name TEXT,
+                proposed_price NUMERIC(15,2) NOT NULL,
+                scheduled_date DATE NOT NULL,
+                scheduled_time TIME NOT NULL,
+                status VARCHAR(20) DEFAULT 'pending', -- pending, accepted, active, completed, cancelled
+                converted_ride_id INTEGER REFERENCES rides(id) ON DELETE SET NULL,
+                chat_room_id VARCHAR(100) UNIQUE,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
-        `, [], 'CREATE TABLE delivery_details');
+        `, [], 'CREATE TABLE scheduled_rides');
 
-        log.success('✅ Todas as tabelas criadas/verificadas com sucesso');
+        // 2.2 Viagens em Grupo (Carpool)
+        await safeQuery(client, `
+            CREATE TABLE IF NOT EXISTS group_rides (
+                id SERIAL PRIMARY KEY,
+                creator_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                driver_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                origin_lat DOUBLE PRECISION NOT NULL,
+                origin_lng DOUBLE PRECISION NOT NULL,
+                dest_lat DOUBLE PRECISION NOT NULL,
+                dest_lng DOUBLE PRECISION NOT NULL,
+                origin_name TEXT,
+                dest_name TEXT,
+                departure_time TIMESTAMP NOT NULL,
+                price_per_seat NUMERIC(15,2) NOT NULL,
+                total_seats INTEGER NOT NULL,
+                available_seats INTEGER NOT NULL,
+                status VARCHAR(20) DEFAULT 'forming', -- forming, ready, active, completed, cancelled
+                chat_room_id VARCHAR(100) UNIQUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `, [], 'CREATE TABLE group_rides');
+
+        // 2.3 Passageiros do Grupo
+        await safeQuery(client, `
+            CREATE TABLE IF NOT EXISTS group_ride_passengers (
+                group_ride_id INTEGER REFERENCES group_rides(id) ON DELETE CASCADE,
+                passenger_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                seats_booked INTEGER DEFAULT 1,
+                status VARCHAR(20) DEFAULT 'joined',
+                joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (group_ride_id, passenger_id)
+            );
+        `, [], 'CREATE TABLE group_ride_passengers');
+
+        // 2.4 Entregas (Logística)
+        await safeQuery(client, `
+            CREATE TABLE IF NOT EXISTS deliveries (
+                id SERIAL PRIMARY KEY,
+                sender_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                driver_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                origin_lat DOUBLE PRECISION NOT NULL,
+                origin_lng DOUBLE PRECISION NOT NULL,
+                dest_lat DOUBLE PRECISION NOT NULL,
+                dest_lng DOUBLE PRECISION NOT NULL,
+                origin_name TEXT,
+                dest_name TEXT,
+                receiver_name TEXT NOT NULL,
+                receiver_phone TEXT NOT NULL,
+                package_details TEXT,
+                weight_category VARCHAR(20),
+                price NUMERIC(15,2) NOT NULL,
+                tracking_code VARCHAR(50) UNIQUE NOT NULL,
+                status VARCHAR(20) DEFAULT 'searching', -- searching, accepted, picked_up, in_transit, delivered, cancelled
+                proof_image TEXT,
+                chat_room_id VARCHAR(100) UNIQUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `, [], 'CREATE TABLE deliveries');
+
+        // 2.5 Rastreio de Entregas (Real-Time History)
+        await safeQuery(client, `
+            CREATE TABLE IF NOT EXISTS delivery_tracking (
+                id SERIAL PRIMARY KEY,
+                delivery_id INTEGER REFERENCES deliveries(id) ON DELETE CASCADE,
+                lat DOUBLE PRECISION NOT NULL,
+                lng DOUBLE PRECISION NOT NULL,
+                status_at_time VARCHAR(20),
+                recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `, [], 'CREATE TABLE delivery_tracking');
+
+        log.success('✅ Infraestrutura Smart Hub criada com sucesso');
 
         // =========================================================================================
-        // ETAPA 2: AUTO-HEALING - ADICIONAR COLUNAS FALTANTES (KYC STRICT + AGENDAMENTOS)
+        // ETAPA 3: ATUALIZAÇÃO DO CHAT (SUPORTE MULTI-CONTEXTO)
         // =========================================================================================
-        log.section('🔧 EXECUTANDO AUTO-HEALING (VERIFICAÇÃO DE COLUNAS KYC E AGENDAMENTOS)');
+        log.info('Atualizando tabela de chat para suporte multi-contexto...');
+
+        // O Chat agora suporta múltiplos módulos via chat_room_id (String universal)
+        await safeQuery(client, `
+            CREATE TABLE IF NOT EXISTS chat_messages (
+                id SERIAL PRIMARY KEY,
+                ride_id INTEGER REFERENCES rides(id) ON DELETE CASCADE,
+                chat_room_id VARCHAR(100), -- Novo HUB ID (ex: group_12, delivery_4, scheduled_8)
+                sender_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                message_type VARCHAR(20) DEFAULT 'text' CHECK (message_type IN ('text', 'image', 'location', 'payment')),
+                text TEXT,
+                image_url TEXT,
+                location_lat DOUBLE PRECISION,
+                location_lng DOUBLE PRECISION,
+                is_read BOOLEAN DEFAULT false,
+                read_at TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `, [], 'CREATE TABLE chat_messages');
+
+        // Garantir que a coluna chat_room_id exista
+        await safeQuery(client, `ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS chat_room_id VARCHAR(100);`, [], 'ALTER CHAT ADD COLUMN');
+
+        log.success('✅ Chat atualizado com suporte multi-contexto');
+
+        // =========================================================================================
+        // ETAPA 4: AUTO-HEALING - ADICIONAR COLUNAS FALTANTES (KYC STRICT)
+        // =========================================================================================
+        log.section('🔧 EXECUTANDO AUTO-HEALING (VERIFICAÇÃO DE COLUNAS KYC)');
 
         const schemaRepairs = [
             // ✅ KYC COLUMNS - VEHICLE TITLE, INSURANCE, TAX DOCUMENT
@@ -415,12 +494,7 @@ async function bootstrapDatabase() {
             { table: 'driver_positions', col: 'accuracy', type: 'DOUBLE PRECISION DEFAULT 0' },
             { table: 'driver_positions', col: 'socket_id', type: 'VARCHAR(100)' },
 
-            // ✅ RIDES COLUMNS - NOVAS PARA AGENDAMENTOS
-            { table: 'rides', col: 'is_scheduled', type: 'BOOLEAN DEFAULT false' },
-            { table: 'rides', col: 'scheduled_time', type: 'TIMESTAMP' },
-            { table: 'rides', col: 'delivery_details', type: 'JSONB' },
-            { table: 'rides', col: 'is_group_ride', type: 'BOOLEAN DEFAULT false' },
-            { table: 'rides', col: 'multi_stops', type: "JSONB DEFAULT '[]'" },
+            // Rides columns
             { table: 'rides', col: 'negotiation_history', type: "JSONB DEFAULT '[]'" },
             { table: 'rides', col: 'payment_method', type: "VARCHAR(20) DEFAULT 'cash'" },
             { table: 'rides', col: 'payment_status', type: "VARCHAR(20) DEFAULT 'pending'" },
@@ -445,6 +519,7 @@ async function bootstrapDatabase() {
             { table: 'wallet_transactions', col: 'completed_at', type: 'TIMESTAMP' },
 
             // Chat messages columns
+            { table: 'chat_messages', col: 'chat_room_id', type: 'VARCHAR(100)' },
             { table: 'chat_messages', col: 'message_type', type: "VARCHAR(20) DEFAULT 'text'" },
             { table: 'chat_messages', col: 'image_url', type: 'TEXT' },
             { table: 'chat_messages', col: 'location_lat', type: 'DOUBLE PRECISION' },
@@ -454,7 +529,18 @@ async function bootstrapDatabase() {
             // User sessions columns
             { table: 'user_sessions', col: 'device_id', type: 'TEXT' },
             { table: 'user_sessions', col: 'fcm_token', type: 'TEXT' },
-            { table: 'user_sessions', col: 'last_activity', type: 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP' }
+            { table: 'user_sessions', col: 'last_activity', type: 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP' },
+
+            // Scheduled rides columns
+            { table: 'scheduled_rides', col: 'chat_room_id', type: 'VARCHAR(100) UNIQUE' },
+            { table: 'scheduled_rides', col: 'converted_ride_id', type: 'INTEGER REFERENCES rides(id) ON DELETE SET NULL' },
+
+            // Group rides columns
+            { table: 'group_rides', col: 'chat_room_id', type: 'VARCHAR(100) UNIQUE' },
+
+            // Deliveries columns
+            { table: 'deliveries', col: 'chat_room_id', type: 'VARCHAR(100) UNIQUE' },
+            { table: 'deliveries', col: 'tracking_code', type: 'VARCHAR(50) UNIQUE NOT NULL' }
         ];
 
         let repairedCount = 0;
@@ -471,7 +557,7 @@ async function bootstrapDatabase() {
         log.success(`✅ Auto-healing concluído: ${repairedCount} colunas verificadas`);
 
         // =========================================================================================
-        // ETAPA 3: CRIAÇÃO DE ÍNDICES
+        // ETAPA 5: CRIAÇÃO DE ÍNDICES
         // =========================================================================================
         log.section('⚡ OTIMIZANDO COM ÍNDICES DE PERFORMANCE');
 
@@ -493,13 +579,12 @@ async function bootstrapDatabase() {
             "CREATE INDEX IF NOT EXISTS idx_rides_passenger_status ON rides(passenger_id, status)",
             "CREATE INDEX IF NOT EXISTS idx_rides_driver_status ON rides(driver_id, status)",
             "CREATE INDEX IF NOT EXISTS idx_rides_type ON rides(ride_type)",
-            "CREATE INDEX IF NOT EXISTS idx_rides_scheduled ON rides(is_scheduled, scheduled_time) WHERE is_scheduled = true",
-            "CREATE INDEX IF NOT EXISTS idx_rides_group ON rides(is_group_ride) WHERE is_group_ride = true",
             "CREATE INDEX IF NOT EXISTS idx_wallet_user ON wallet_transactions(user_id)",
             "CREATE INDEX IF NOT EXISTS idx_wallet_ref ON wallet_transactions(reference_id)",
             "CREATE INDEX IF NOT EXISTS idx_wallet_date ON wallet_transactions(created_at DESC)",
             "CREATE INDEX IF NOT EXISTS idx_wallet_status ON wallet_transactions(status)",
             "CREATE INDEX IF NOT EXISTS idx_chat_ride ON chat_messages(ride_id)",
+            "CREATE INDEX IF NOT EXISTS idx_chat_room ON chat_messages(chat_room_id)",
             "CREATE INDEX IF NOT EXISTS idx_chat_created ON chat_messages(created_at)",
             "CREATE INDEX IF NOT EXISTS idx_sessions_token ON user_sessions(session_token)",
             "CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions(user_id)",
@@ -507,7 +592,23 @@ async function bootstrapDatabase() {
             "CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id)",
             "CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(is_read)",
             "CREATE INDEX IF NOT EXISTS idx_documents_user ON user_documents(user_id)",
-            "CREATE INDEX IF NOT EXISTS idx_documents_status ON user_documents(status)"
+            "CREATE INDEX IF NOT EXISTS idx_documents_status ON user_documents(status)",
+            "CREATE INDEX IF NOT EXISTS idx_scheduled_passenger ON scheduled_rides(passenger_id)",
+            "CREATE INDEX IF NOT EXISTS idx_scheduled_driver ON scheduled_rides(driver_id)",
+            "CREATE INDEX IF NOT EXISTS idx_scheduled_status ON scheduled_rides(status)",
+            "CREATE INDEX IF NOT EXISTS idx_scheduled_date ON scheduled_rides(scheduled_date)",
+            "CREATE INDEX IF NOT EXISTS idx_group_creator ON group_rides(creator_id)",
+            "CREATE INDEX IF NOT EXISTS idx_group_driver ON group_rides(driver_id)",
+            "CREATE INDEX IF NOT EXISTS idx_group_status ON group_rides(status)",
+            "CREATE INDEX IF NOT EXISTS idx_group_departure ON group_rides(departure_time)",
+            "CREATE INDEX IF NOT EXISTS idx_group_passengers_group ON group_ride_passengers(group_ride_id)",
+            "CREATE INDEX IF NOT EXISTS idx_group_passengers_passenger ON group_ride_passengers(passenger_id)",
+            "CREATE INDEX IF NOT EXISTS idx_deliveries_sender ON deliveries(sender_id)",
+            "CREATE INDEX IF NOT EXISTS idx_deliveries_driver ON deliveries(driver_id)",
+            "CREATE INDEX IF NOT EXISTS idx_deliveries_status ON deliveries(status)",
+            "CREATE INDEX IF NOT EXISTS idx_deliveries_tracking ON deliveries(tracking_code)",
+            "CREATE INDEX IF NOT EXISTS idx_delivery_tracking_delivery ON delivery_tracking(delivery_id)",
+            "CREATE INDEX IF NOT EXISTS idx_delivery_tracking_time ON delivery_tracking(recorded_at)"
         ];
 
         for (const idx of indexes) {
@@ -516,7 +617,7 @@ async function bootstrapDatabase() {
         log.success('✅ Índices de performance criados/verificados');
 
         // =========================================================================================
-        // ETAPA 4: CRIAÇÃO DE TRIGGERS
+        // ETAPA 6: CRIAÇÃO DE TRIGGERS
         // =========================================================================================
         log.section('🔄 CONFIGURANDO TRIGGERS AUTOMÁTICOS');
 
@@ -530,7 +631,13 @@ async function bootstrapDatabase() {
             $$ language 'plpgsql';
         `, [], 'CREATE FUNCTION update_timestamp_column');
 
-        const tablesWithTimestamp = ['users', 'rides', 'wallet_transactions', 'vehicle_details', 'user_documents', 'external_bank_accounts', 'app_settings', 'delivery_details'];
+        const tablesWithTimestamp = [
+            'users', 'rides', 'wallet_transactions', 'vehicle_details',
+            'user_documents', 'external_bank_accounts', 'app_settings',
+            'scheduled_rides', 'group_rides', 'group_ride_passengers',
+            'deliveries', 'delivery_tracking'
+        ];
+
         for (const table of tablesWithTimestamp) {
             await safeQuery(client, `
                 DROP TRIGGER IF EXISTS update_${table}_modtime ON ${table};
@@ -564,7 +671,7 @@ async function bootstrapDatabase() {
         log.success('✅ Triggers configurados com sucesso');
 
         // =========================================================================================
-        // ETAPA 5: CONFIGURAÇÕES INICIAIS
+        // ETAPA 7: CONFIGURAÇÕES INICIAIS
         // =========================================================================================
         log.section('⚙️ APLICANDO CONFIGURAÇÕES INICIAIS');
 
@@ -582,7 +689,7 @@ async function bootstrapDatabase() {
                     group_km_rate: 350,
                     scheduled_min_price: 2000
                 }),
-                description: 'Tabela de preços base das corridas (inclui preços para grupo e agendamentos)'
+                description: 'Tabela de preços base das corridas'
             },
             {
                 key: 'app_config',
@@ -592,7 +699,8 @@ async function bootstrapDatabase() {
                     ride_search_timeout: 60,
                     scheduled_radius_km: 25,
                     version: '11.2.0',
-                    kyc_required: true
+                    kyc_required: true,
+                    hub_enabled: true
                 }),
                 description: 'Configurações globais do app'
             },
@@ -620,7 +728,7 @@ async function bootstrapDatabase() {
         log.success('✅ Configurações iniciais aplicadas');
 
         // =========================================================================================
-        // ETAPA 6: POPULAR COM USUÁRIOS DE TESTE
+        // ETAPA 8: POPULAR COM USUÁRIOS DE TESTE
         // =========================================================================================
         log.section('👤 CRIANDO USUÁRIOS DE TESTE');
 
@@ -781,7 +889,10 @@ async function bootstrapDatabase() {
                 (SELECT COUNT(*) FROM users) as total_users,
                 (SELECT COUNT(*) FROM users WHERE role = 'driver') as total_drivers,
                 (SELECT COUNT(*) FROM users WHERE role = 'passenger') as total_passengers,
-                (SELECT COUNT(*) FROM users WHERE is_verified = false) as pending_kyc
+                (SELECT COUNT(*) FROM users WHERE is_verified = false) as pending_kyc,
+                (SELECT COUNT(*) FROM scheduled_rides) as total_scheduled,
+                (SELECT COUNT(*) FROM group_rides) as total_group_rides,
+                (SELECT COUNT(*) FROM deliveries) as total_deliveries
         `);
 
         log.section('🎉 BANCO DE DADOS INICIALIZADO COM SUCESSO');
@@ -790,6 +901,9 @@ async function bootstrapDatabase() {
         log.info(`   - Motoristas: ${stats.rows[0].total_drivers}`);
         log.info(`   - Passageiros: ${stats.rows[0].total_passengers}`);
         log.info(`   - Pendentes KYC: ${stats.rows[0].pending_kyc}`);
+        log.info(`   - Agendamentos: ${stats.rows[0].total_scheduled}`);
+        log.info(`   - Viagens em Grupo: ${stats.rows[0].total_group_rides}`);
+        log.info(`   - Entregas: ${stats.rows[0].total_deliveries}`);
 
         return true;
 
