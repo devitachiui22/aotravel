@@ -377,6 +377,9 @@ async function bootstrapDatabase() {
                 total_seats INTEGER NOT NULL,
                 available_seats INTEGER NOT NULL,
                 status VARCHAR(20) DEFAULT 'gathering' CHECK (status IN ('gathering', 'full', 'active', 'completed', 'cancelled')),
+                is_private BOOLEAN DEFAULT true,
+                total_fare NUMERIC(15,2) DEFAULT 0.00,
+                split_fare NUMERIC(15,2) DEFAULT 0.00,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
@@ -387,6 +390,8 @@ async function bootstrapDatabase() {
                 group_id INTEGER REFERENCES hub_groups(id) ON DELETE CASCADE,
                 user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
                 seats_reserved INTEGER DEFAULT 1,
+                status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'rejected')),
+                payment_status VARCHAR(20) DEFAULT 'pending' CHECK (payment_status IN ('pending', 'paid', 'failed')),
                 joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 PRIMARY KEY (group_id, user_id)
             );
@@ -410,6 +415,7 @@ async function bootstrapDatabase() {
                 price NUMERIC(15,2) NOT NULL,
                 status VARCHAR(20) DEFAULT 'searching' CHECK (status IN ('searching', 'accepted', 'picked_up', 'in_transit', 'delivered', 'cancelled')),
                 proof_image_url TEXT,
+                stops JSONB DEFAULT '[]',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
@@ -515,9 +521,22 @@ async function bootstrapDatabase() {
 
             // Hub tables columns (auto-healing adicional)
             { table: 'hub_schedules', col: 'driver_id', type: 'INTEGER REFERENCES users(id) ON DELETE SET NULL' },
+
+            // Hub Groups - Novas colunas
+            { table: 'hub_groups', col: 'is_private', type: 'BOOLEAN DEFAULT true' },
+            { table: 'hub_groups', col: 'total_fare', type: 'NUMERIC(15,2) DEFAULT 0.00' },
+            { table: 'hub_groups', col: 'split_fare', type: 'NUMERIC(15,2) DEFAULT 0.00' },
             { table: 'hub_groups', col: 'driver_id', type: 'INTEGER REFERENCES users(id) ON DELETE SET NULL' },
+
+            // Hub Group Participants - Novas colunas
+            { table: 'hub_group_participants', col: 'status', type: "VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'accepted', 'rejected'))" },
+            { table: 'hub_group_participants', col: 'payment_status', type: "VARCHAR(20) DEFAULT 'pending' CHECK (payment_status IN ('pending', 'paid', 'failed'))" },
+
+            // Hub Deliveries - Nova coluna
+            { table: 'hub_deliveries', col: 'stops', type: "JSONB DEFAULT '[]'" },
             { table: 'hub_deliveries', col: 'driver_id', type: 'INTEGER REFERENCES users(id) ON DELETE SET NULL' },
             { table: 'hub_deliveries', col: 'proof_image_url', type: 'TEXT' },
+
             { table: 'hub_delivery_tracking', col: 'status_at_time', type: 'VARCHAR(20)' }
         ];
 
@@ -598,9 +617,12 @@ async function bootstrapDatabase() {
             "CREATE INDEX IF NOT EXISTS idx_hub_groups_departure ON hub_groups(departure_time)",
             "CREATE INDEX IF NOT EXISTS idx_hub_groups_status ON hub_groups(status)",
             "CREATE INDEX IF NOT EXISTS idx_hub_groups_available ON hub_groups(available_seats) WHERE available_seats > 0",
+            "CREATE INDEX IF NOT EXISTS idx_hub_groups_private ON hub_groups(is_private)",
 
             "CREATE INDEX IF NOT EXISTS idx_hub_participants_group ON hub_group_participants(group_id)",
             "CREATE INDEX IF NOT EXISTS idx_hub_participants_user ON hub_group_participants(user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_hub_participants_status ON hub_group_participants(status)",
+            "CREATE INDEX IF NOT EXISTS idx_hub_participants_payment ON hub_group_participants(payment_status)",
 
             "CREATE INDEX IF NOT EXISTS idx_hub_deliveries_sender ON hub_deliveries(sender_id)",
             "CREATE INDEX IF NOT EXISTS idx_hub_deliveries_driver ON hub_deliveries(driver_id)",
@@ -717,7 +739,9 @@ async function bootstrapDatabase() {
                     max_group_seats: 8,
                     schedule_advance_days: 30,
                     delivery_tracking_interval: 10,
-                    group_gathering_timeout_minutes: 120
+                    group_gathering_timeout_minutes: 120,
+                    private_group_enabled: true,
+                    fare_splitting_enabled: true
                 }),
                 description: 'Configurações do Hub Inteligente'
             }
@@ -925,7 +949,7 @@ async function bootstrapDatabase() {
             log.success('✅ Agendamento de exemplo criado');
         }
 
-        // Criar um grupo de viagem de exemplo
+        // Criar um grupo de viagem de exemplo com as novas colunas
         if (driverAo) {
             const departureTime = new Date();
             departureTime.setHours(departureTime.getHours() + 2); // Daqui a 2 horas
@@ -934,24 +958,27 @@ async function bootstrapDatabase() {
                 INSERT INTO hub_groups
                 (creator_id, driver_id, origin_name, origin_lat, origin_lng,
                  dest_name, dest_lat, dest_lng, departure_time,
-                 price_per_seat, total_seats, available_seats, status)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                 price_per_seat, total_seats, available_seats, status,
+                 is_private, total_fare, split_fare)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
                 RETURNING id
             `, [
                 driverAo.id, driverAo.id,
                 'Benfica', -8.9689, 13.2767,
                 'Kilamba', -9.0167, 13.2667,
-                departureTime, 800.00, 4, 3, 'gathering'
+                departureTime,
+                800.00, 4, 3, 'gathering',
+                false, 3200.00, 800.00
             ]);
 
             if (groupResult.rows.length > 0) {
                 const groupId = groupResult.rows[0].id;
 
-                // Adicionar participantes de exemplo
+                // Adicionar participantes de exemplo com os novos campos
                 if (passageiro) {
                     await client.query(`
-                        INSERT INTO hub_group_participants (group_id, user_id, seats_reserved)
-                        VALUES ($1, $2, 1)
+                        INSERT INTO hub_group_participants (group_id, user_id, seats_reserved, status, payment_status)
+                        VALUES ($1, $2, 1, 'accepted', 'pending')
                         ON CONFLICT DO NOTHING
                     `, [groupId, passageiro.id]);
 
@@ -962,26 +989,43 @@ async function bootstrapDatabase() {
                     `, [groupId]);
                 }
 
-                log.success('✅ Grupo de viagem de exemplo criado');
+                log.success('✅ Grupo de viagem de exemplo criado com rateio privado');
             }
         }
 
-        // Criar uma entrega de exemplo
+        // Criar uma entrega de exemplo com stops (paragens)
         if (passageiro && moto) {
+            const stops = JSON.stringify([
+                {
+                    name: 'Paragem 1 - Supermercado',
+                    lat: -8.9167,
+                    lng: 13.2667,
+                    address: 'Supermercado Kero - Talatona'
+                },
+                {
+                    name: 'Paragem 2 - Farmácia',
+                    lat: -8.9250,
+                    lng: 13.2500,
+                    address: 'Farmácia Talatona'
+                }
+            ]);
+
             await client.query(`
                 INSERT INTO hub_deliveries
                 (sender_id, driver_id, pickup_name, pickup_lat, pickup_lng,
                  dropoff_name, dropoff_lat, dropoff_lng,
-                 recipient_name, recipient_phone, package_details, price, status)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                 recipient_name, recipient_phone, package_details, price, status,
+                 stops)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
                 ON CONFLICT DO NOTHING
             `, [
                 passageiro.id, moto.id,
                 'Shopping Kilamba', -8.9167, 13.2667,
                 'Talatona', -8.9358, 13.2147,
-                'João Cliente', '923456789', 'Documentos importantes', 1500.00, 'accepted'
+                'João Cliente', '923456789', 'Documentos importantes com paragens', 1500.00, 'accepted',
+                stops
             ]);
-            log.success('✅ Entrega de exemplo criada');
+            log.success('✅ Entrega de exemplo criada com suporte a paragens');
         }
 
         await client.query('COMMIT');
@@ -994,7 +1038,9 @@ async function bootstrapDatabase() {
                 (SELECT COUNT(*) FROM users WHERE is_verified = false) as pending_kyc,
                 (SELECT COUNT(*) FROM hub_schedules) as total_schedules,
                 (SELECT COUNT(*) FROM hub_groups) as total_groups,
-                (SELECT COUNT(*) FROM hub_deliveries) as total_deliveries
+                (SELECT COUNT(*) FROM hub_deliveries) as total_deliveries,
+                (SELECT COUNT(*) FROM hub_group_participants WHERE status = 'pending') as pending_participants,
+                (SELECT COUNT(*) FROM hub_deliveries WHERE stops != '[]') as deliveries_with_stops
         `);
 
         log.section('🎉 BANCO DE DADOS INICIALIZADO COM SUCESSO - HUB INTELIGENTE ATIVO');
@@ -1006,6 +1052,8 @@ async function bootstrapDatabase() {
         log.info(`   - Agendamentos: ${stats.rows[0].total_schedules}`);
         log.info(`   - Grupos: ${stats.rows[0].total_groups}`);
         log.info(`   - Entregas: ${stats.rows[0].total_deliveries}`);
+        log.info(`   - Participantes Pendentes: ${stats.rows[0].pending_participants}`);
+        log.info(`   - Entregas com Paragens: ${stats.rows[0].deliveries_with_stops}`);
 
         return true;
 
