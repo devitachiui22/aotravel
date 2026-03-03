@@ -33,6 +33,7 @@ const rideRoutes = require('./rideRoutes');
 const walletRoutes = require('./walletRoutes');
 const adminRoutes = require('./adminRoutes');
 const chatRoutes = require('./chatRoutes');
+const hubRoutes = require('./hubRoutes');
 
 // =================================================================================================
 // 1. MAPEAMENTO DE MÓDULOS
@@ -44,6 +45,7 @@ router.use('/rides', rideRoutes);
 router.use('/wallet', walletRoutes);
 router.use('/admin', adminRoutes);
 router.use('/chat', chatRoutes);
+router.use('/hub', hubRoutes);
 
 // =================================================================================================
 // 2. ROTAS DE COMPATIBILIDADE E ALIASES
