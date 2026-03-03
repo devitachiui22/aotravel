@@ -540,7 +540,7 @@ async function bootstrapDatabase() {
         log.section('⚡ OTIMIZANDO COM ÍNDICES DE PERFORMANCE');
 
         const indexes = [
-            -- Índices Users
+            // Índices Users
             "CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)",
             "CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone)",
             "CREATE INDEX IF NOT EXISTS idx_users_role ON users(role)",
@@ -548,13 +548,13 @@ async function bootstrapDatabase() {
             "CREATE INDEX IF NOT EXISTS idx_users_session ON users(session_token) WHERE session_token IS NOT NULL",
             "CREATE INDEX IF NOT EXISTS idx_users_verified ON users(is_verified) WHERE is_verified = false",
 
-            -- Índices Driver Positions
+            // Índices Driver Positions
             "CREATE INDEX IF NOT EXISTS idx_driver_positions_status ON driver_positions(status)",
             "CREATE INDEX IF NOT EXISTS idx_driver_positions_update ON driver_positions(last_update)",
             "CREATE INDEX IF NOT EXISTS idx_driver_positions_geo ON driver_positions(lat, lng)",
             "CREATE INDEX IF NOT EXISTS idx_driver_positions_socket ON driver_positions(socket_id)",
 
-            -- Índices Rides
+            // Índices Rides
             "CREATE INDEX IF NOT EXISTS idx_rides_passenger ON rides(passenger_id)",
             "CREATE INDEX IF NOT EXISTS idx_rides_driver ON rides(driver_id)",
             "CREATE INDEX IF NOT EXISTS idx_rides_status ON rides(status)",
@@ -563,31 +563,31 @@ async function bootstrapDatabase() {
             "CREATE INDEX IF NOT EXISTS idx_rides_driver_status ON rides(driver_id, status)",
             "CREATE INDEX IF NOT EXISTS idx_rides_type ON rides(ride_type)",
 
-            -- Índices Wallet
+            // Índices Wallet
             "CREATE INDEX IF NOT EXISTS idx_wallet_user ON wallet_transactions(user_id)",
             "CREATE INDEX IF NOT EXISTS idx_wallet_ref ON wallet_transactions(reference_id)",
             "CREATE INDEX IF NOT EXISTS idx_wallet_date ON wallet_transactions(created_at DESC)",
             "CREATE INDEX IF NOT EXISTS idx_wallet_status ON wallet_transactions(status)",
 
-            -- Índices Chat
+            // Índices Chat
             "CREATE INDEX IF NOT EXISTS idx_chat_ride ON chat_messages(ride_id)",
             "CREATE INDEX IF NOT EXISTS idx_chat_module ON chat_messages(module_type, module_id)",
             "CREATE INDEX IF NOT EXISTS idx_chat_created ON chat_messages(created_at)",
 
-            -- Índices Sessions
+            // Índices Sessions
             "CREATE INDEX IF NOT EXISTS idx_sessions_token ON user_sessions(session_token)",
             "CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions(user_id)",
             "CREATE INDEX IF NOT EXISTS idx_sessions_expires ON user_sessions(expires_at)",
 
-            -- Índices Notifications
+            // Índices Notifications
             "CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id)",
             "CREATE INDEX IF NOT EXISTS idx_notifications_read ON notifications(is_read)",
 
-            -- Índices Documents
+            // Índices Documents
             "CREATE INDEX IF NOT EXISTS idx_documents_user ON user_documents(user_id)",
             "CREATE INDEX IF NOT EXISTS idx_documents_status ON user_documents(status)",
 
-            -- 🆕 ÍNDICES HUB INTELIGENTE
+            // 🆕 ÍNDICES HUB INTELIGENTE
             "CREATE INDEX IF NOT EXISTS idx_hub_schedules_passenger ON hub_schedules(passenger_id)",
             "CREATE INDEX IF NOT EXISTS idx_hub_schedules_driver ON hub_schedules(driver_id)",
             "CREATE INDEX IF NOT EXISTS idx_hub_schedules_time ON hub_schedules(scheduled_time)",
