@@ -4,7 +4,7 @@
  * =================================================================================================
  *
  * ARQUIVO: src/utils/dbBootstrap.js
- * VERSÃO DO SCHEMA: 2026.03.03.HUB.COMPLETE.FINAL
+ * VERSÃO DO SCHEMA: 2026.03.07.HUB.COMPLETE.FINAL
  * DESCRIÇÃO: Script de inicialização com módulos Core + Hub Inteligente (Agendamento, Grupos, Entregas)
  *
  * ✅ MÓDULOS INCLUÍDOS:
@@ -14,8 +14,16 @@
  * - Hub Entregas: hub_deliveries, hub_delivery_tracking
  * - KYC Completo: Documentos, Vehicle Details, Bank Accounts
  *
+ * ✅ CORREÇÕES APLICADAS:
+ * 1. Adicionada coluna `vehicle_category` (premium, car, moto) nativa na tabela users
+ * 2. Usuários de teste atualizados com categorias específicas
+ * 3. Motorista Premium criado com categoria 'premium'
+ * 4. Motorista Standard com categoria 'car'
+ * 5. Moto Táxi com categoria 'moto'
+ *
  * 🔑 USUÁRIOS DE TESTE (senha: 123456 para todos):
- * - Motorista Ao (driver@aotravel.com / 123456)
+ * - Motorista Premium (premium@aotravel.com / 123456)
+ * - Motorista Standard (driver@aotravel.com / 123456)
  * - Moto Táxi (moto@gmail.com / 123456)
  * - Passageiro VIP (passageiro@gmail.com / 123456)
  *
@@ -78,7 +86,7 @@ async function bootstrapDatabase() {
         // =========================================================================================
         log.info('Criando/Verificando tabelas base...');
 
-        // 1. TABELA USERS - COM TODAS AS COLUNAS KYC
+        // 1. TABELA USERS - COM TODAS AS COLUNAS KYC E VEHICLE_CATEGORY
         await safeQuery(client, `
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
@@ -103,6 +111,7 @@ async function bootstrapDatabase() {
 
                 -- Detalhes Motorista
                 vehicle_details JSONB,
+                vehicle_category VARCHAR(20) DEFAULT 'car', -- 'car', 'premium', 'moto'
                 rating NUMERIC(3,2) DEFAULT 5.00,
 
                 -- Status
@@ -441,6 +450,9 @@ async function bootstrapDatabase() {
         log.section('🔧 EXECUTANDO AUTO-HEALING (VERIFICAÇÃO DE COLUNAS)');
 
         const schemaRepairs = [
+            // ✅ VEHICLE_CATEGORY COLUMN
+            { table: 'users', col: 'vehicle_category', type: "VARCHAR(20) DEFAULT 'car'" },
+
             // ✅ KYC COLUMNS - VEHICLE TITLE, INSURANCE, TAX DOCUMENT
             { table: 'users', col: 'vehicle_title', type: 'TEXT' },
             { table: 'users', col: 'vehicle_insurance', type: 'TEXT' },
@@ -566,6 +578,7 @@ async function bootstrapDatabase() {
             "CREATE INDEX IF NOT EXISTS idx_users_online ON users(is_online) WHERE is_online = true",
             "CREATE INDEX IF NOT EXISTS idx_users_session ON users(session_token) WHERE session_token IS NOT NULL",
             "CREATE INDEX IF NOT EXISTS idx_users_verified ON users(is_verified) WHERE is_verified = false",
+            "CREATE INDEX IF NOT EXISTS idx_users_vehicle_category ON users(vehicle_category)",
 
             // Índices Driver Positions
             "CREATE INDEX IF NOT EXISTS idx_driver_positions_status ON driver_positions(status)",
@@ -731,6 +744,17 @@ async function bootstrapDatabase() {
                 description: 'Requisitos KYC para motoristas'
             },
             {
+                key: 'vehicle_categories',
+                value: JSON.stringify({
+                    categories: ['car', 'premium', 'moto'],
+                    premium_multiplier: 1.8,
+                    car_base: 600,
+                    premium_base: 1200,
+                    moto_base: 400
+                }),
+                description: 'Configurações de categorias de veículos'
+            },
+            {
                 key: 'hub_config',
                 value: JSON.stringify({
                     schedules_enabled: true,
@@ -760,7 +784,7 @@ async function bootstrapDatabase() {
         log.success('✅ Configurações iniciais aplicadas');
 
         // =========================================================================================
-        // ETAPA 6: POPULAR COM USUÁRIOS DE TESTE
+        // ETAPA 6: POPULAR COM USUÁRIOS DE TESTE (ATUALIZADOS COM CATEGORIA)
         // =========================================================================================
         log.section('👤 CRIANDO USUÁRIOS DE TESTE');
 
@@ -772,31 +796,51 @@ async function bootstrapDatabase() {
 
         const testUsers = [
             {
-                name: 'Motorista Ao',
-                email: 'driver@aotravel.com',
+                name: 'Motorista Premium',
+                email: 'premium@aotravel.com',
                 phone: '923456789',
                 password: hashedPassword,
                 role: 'driver',
-                rating: 4.9,
+                rating: 5.0,
                 is_verified: true,
                 kyc_level: 2,
+                vehicle_category: 'premium',
                 vehicle_details: JSON.stringify({
-                    model: 'Toyota Corolla',
-                    plate: 'LD-12-34-AB',
+                    model: 'Toyota Land Cruiser',
+                    plate: 'LD-99-99-VIP',
                     color: 'Preto',
-                    type: 'car',
-                    year: 2024
+                    type: 'premium',
+                    year: 2025
                 })
             },
             {
-                name: 'Moto Táxi',
-                email: 'moto@gmail.com',
-                phone: '987654321',
+                name: 'Motorista Standard',
+                email: 'driver@aotravel.com',
+                phone: '923456780',
                 password: hashedPassword,
                 role: 'driver',
                 rating: 4.8,
                 is_verified: true,
                 kyc_level: 2,
+                vehicle_category: 'car',
+                vehicle_details: JSON.stringify({
+                    model: 'Hyundai i10',
+                    plate: 'LD-12-34-AB',
+                    color: 'Branco',
+                    type: 'car',
+                    year: 2018
+                })
+            },
+            {
+                name: 'Moto Táxi VIP',
+                email: 'moto@gmail.com',
+                phone: '987654321',
+                password: hashedPassword,
+                role: 'driver',
+                rating: 4.9,
+                is_verified: true,
+                kyc_level: 2,
+                vehicle_category: 'moto',
                 vehicle_details: JSON.stringify({
                     model: 'Honda CG 160',
                     plate: 'LD-56-78-CD',
@@ -811,9 +855,10 @@ async function bootstrapDatabase() {
                 phone: '912345678',
                 password: hashedPassword,
                 role: 'passenger',
-                rating: 4.7,
+                rating: 5.0,
                 is_verified: true,
-                kyc_level: 1
+                kyc_level: 1,
+                vehicle_category: 'car'
             }
         ];
 
@@ -831,8 +876,8 @@ async function bootstrapDatabase() {
                 const result = await client.query(
                     `UPDATE users SET
                         name = $1, password = $2, role = $3, rating = $4,
-                        is_verified = $5, kyc_level = $6, vehicle_details = $7, updated_at = NOW()
-                     WHERE id = $8 RETURNING id`,
+                        is_verified = $5, kyc_level = $6, vehicle_details = $7, vehicle_category = $8, updated_at = NOW()
+                     WHERE id = $9 RETURNING id`,
                     [
                         user.name,
                         user.password,
@@ -841,17 +886,18 @@ async function bootstrapDatabase() {
                         user.is_verified,
                         user.kyc_level,
                         user.vehicle_details || null,
+                        user.vehicle_category,
                         existing.rows[0].id
                     ]
                 );
                 userId = result.rows[0].id;
-                log.info(`👤 Usuário atualizado: ${user.name}`);
+                log.info(`👤 Usuário atualizado: ${user.name} (categoria: ${user.vehicle_category})`);
             } else {
                 // ✅ Usuário não existe, fazer INSERT
                 const result = await client.query(
                     `INSERT INTO users
-                     (name, email, phone, password, role, rating, is_verified, kyc_level, vehicle_details, created_at, updated_at)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+                     (name, email, phone, password, role, rating, is_verified, kyc_level, vehicle_details, vehicle_category, created_at, updated_at)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
                      RETURNING id`,
                     [
                         user.name,
@@ -862,11 +908,12 @@ async function bootstrapDatabase() {
                         user.rating,
                         user.is_verified,
                         user.kyc_level,
-                        user.vehicle_details || null
+                        user.vehicle_details || null,
+                        user.vehicle_category
                     ]
                 );
                 userId = result.rows[0].id;
-                log.success(`✅ Novo usuário criado: ${user.name}`);
+                log.success(`✅ Novo usuário criado: ${user.name} (categoria: ${user.vehicle_category})`);
             }
 
             // ✅ Verificar se userId existe antes de prosseguir
@@ -921,10 +968,11 @@ async function bootstrapDatabase() {
 
         // Buscar IDs dos usuários de teste
         const users = await client.query(`
-            SELECT id, name, email, role FROM users
-            WHERE email IN ('driver@aotravel.com', 'moto@gmail.com', 'passageiro@gmail.com')
+            SELECT id, name, email, role, vehicle_category FROM users
+            WHERE email IN ('premium@aotravel.com', 'driver@aotravel.com', 'moto@gmail.com', 'passageiro@gmail.com')
         `);
 
+        const premiumDriver = users.rows.find(u => u.email === 'premium@aotravel.com');
         const driverAo = users.rows.find(u => u.email === 'driver@aotravel.com');
         const moto = users.rows.find(u => u.email === 'moto@gmail.com');
         const passageiro = users.rows.find(u => u.email === 'passageiro@gmail.com');
@@ -1036,6 +1084,9 @@ async function bootstrapDatabase() {
                 (SELECT COUNT(*) FROM users WHERE role = 'driver') as total_drivers,
                 (SELECT COUNT(*) FROM users WHERE role = 'passenger') as total_passengers,
                 (SELECT COUNT(*) FROM users WHERE is_verified = false) as pending_kyc,
+                (SELECT COUNT(*) FROM users WHERE vehicle_category = 'premium') as premium_drivers,
+                (SELECT COUNT(*) FROM users WHERE vehicle_category = 'car') as car_drivers,
+                (SELECT COUNT(*) FROM users WHERE vehicle_category = 'moto') as moto_drivers,
                 (SELECT COUNT(*) FROM hub_schedules) as total_schedules,
                 (SELECT COUNT(*) FROM hub_groups) as total_groups,
                 (SELECT COUNT(*) FROM hub_deliveries) as total_deliveries,
@@ -1049,6 +1100,9 @@ async function bootstrapDatabase() {
         log.info(`   - Motoristas: ${stats.rows[0].total_drivers}`);
         log.info(`   - Passageiros: ${stats.rows[0].total_passengers}`);
         log.info(`   - Pendentes KYC: ${stats.rows[0].pending_kyc}`);
+        log.info(`   - Motoristas Premium: ${stats.rows[0].premium_drivers}`);
+        log.info(`   - Motoristas Standard: ${stats.rows[0].car_drivers}`);
+        log.info(`   - Motos: ${stats.rows[0].moto_drivers}`);
         log.info(`   - Agendamentos: ${stats.rows[0].total_schedules}`);
         log.info(`   - Grupos: ${stats.rows[0].total_groups}`);
         log.info(`   - Entregas: ${stats.rows[0].total_deliveries}`);
