@@ -15,11 +15,12 @@
  * - KYC Completo: Documentos, Vehicle Details, Bank Accounts
  *
  * ✅ CORREÇÕES APLICADAS:
- * 1. Adicionada coluna `vehicle_category` (premium, car, moto) nativa na tabela users
- * 2. Usuários de teste atualizados com categorias específicas
- * 3. Motorista Premium criado com categoria 'premium'
- * 4. Motorista Standard com categoria 'car'
- * 5. Moto Táxi com categoria 'moto'
+ * 1. CORRIGIDA a constraint CHECK da tabela vehicle_details para aceitar 'premium'
+ * 2. Adicionada coluna `vehicle_category` (premium, car, moto) nativa na tabela users
+ * 3. Usuários de teste atualizados com categorias específicas
+ * 4. Motorista Premium criado com categoria 'premium'
+ * 5. Motorista Standard com categoria 'car'
+ * 6. Moto Táxi com categoria 'moto'
  *
  * 🔑 USUÁRIOS DE TESTE (senha: 123456 para todos):
  * - Motorista Premium (premium@aotravel.com / 123456)
@@ -284,7 +285,7 @@ async function bootstrapDatabase() {
             );
         `, [], 'CREATE TABLE app_settings');
 
-        // 9. TABELA VEHICLE_DETAILS
+        // 9. TABELA VEHICLE_DETAILS - CORRIGIDA: agora aceita 'premium'
         await safeQuery(client, `
             CREATE TABLE IF NOT EXISTS vehicle_details (
                 id SERIAL PRIMARY KEY,
@@ -292,7 +293,7 @@ async function bootstrapDatabase() {
                 model VARCHAR(100),
                 plate VARCHAR(20),
                 color VARCHAR(50),
-                type VARCHAR(50) DEFAULT 'car' CHECK (type IN ('car', 'moto', 'delivery', 'truck')),
+                type VARCHAR(50) DEFAULT 'car' CHECK (type IN ('car', 'moto', 'delivery', 'truck', 'premium')),
                 year INTEGER,
                 documents_verified BOOLEAN DEFAULT false,
                 insurance_expiry DATE,
@@ -944,6 +945,9 @@ async function bootstrapDatabase() {
                 if (user.vehicle_details) {
                     try {
                         const vd = JSON.parse(user.vehicle_details);
+                        // Garantir que o tipo está no formato correto
+                        let vehicleType = vd.type;
+                        
                         await client.query(`
                             INSERT INTO vehicle_details (driver_id, model, plate, color, type, year)
                             VALUES ($1, $2, $3, $4, $5, $6)
@@ -953,7 +957,9 @@ async function bootstrapDatabase() {
                                 color = EXCLUDED.color,
                                 type = EXCLUDED.type,
                                 year = EXCLUDED.year
-                        `, [userId, vd.model, vd.plate, vd.color, vd.type, vd.year]);
+                        `, [userId, vd.model, vd.plate, vd.color, vehicleType, vd.year || 2024]);
+                        
+                        log.success(`✅ Vehicle details inseridos para usuário ${userId} (tipo: ${vehicleType})`);
                     } catch (e) {
                         log.warn(`⚠️ Erro ao processar vehicle_details para usuário ${userId}: ${e.message}`);
                     }
