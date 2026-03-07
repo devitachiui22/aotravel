@@ -67,7 +67,10 @@ router.post('/documents', upload.fields([
     { name: 'bi_front', maxCount: 1 },
     { name: 'bi_back', maxCount: 1 },
     { name: 'driving_license_front', maxCount: 1 },
-    { name: 'driving_license_back', maxCount: 1 }
+    { name: 'driving_license_back', maxCount: 1 },
+    { name: 'vehicle_title', maxCount: 1 },
+    { name: 'vehicle_insurance', maxCount: 1 },
+    { name: 'tax_document', maxCount: 1 }
 ]), profileController.uploadDocuments);
 
 module.exports = router;
