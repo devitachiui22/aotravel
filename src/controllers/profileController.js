@@ -6,16 +6,13 @@
  * ARQUIVO: src/controllers/profileController.js
  * DESCRIÇÃO: Controlador Mestre de Perfil de Usuário com suporte KYC completo.
  *
- * ✅ CORREÇÕES APLICADAS:
- * - O método `updateProfile` agora recebe e processa todos os documentos do veículo:
- *   driving_license_front, driving_license_back, vehicle_title, vehicle_insurance, tax_document.
- * - Enviar qualquer documento muda `is_verified` para FALSE, obrigando o admin a revisar.
- * - Upload de documentos via Base64 ou Multipart
- * - Gestão completa de configurações e preferências
- * - Segurança reforçada com bcrypt
- *
- * VERSÃO: 11.1.0-KYC-FULL
- * DATA: 2026.02.25
+ * ✅ CORREÇÕES APLICADAS (v44.0):
+ * 1. SUPORTE A PDF: Os documentos agora suportam `application/pdf` via upload Multipart.
+ * 2. AUTODETECÇÃO DE CATEGORIA: Quando atualiza `vehicle_details`, o sistema extrai e grava
+ *    `vehicle_category` nativamente no DB ('car', 'premium', 'moto').
+ * 3. RESET DE KYC RIGOROSO: Qualquer envio de documento ou mudança de viatura força o
+ *    `is_verified` a false, requerendo validação do Administrador.
+ * 4. CLEAN ARCHITECTURE: Tratamento de erros e transações garantidas.
  *
  * STATUS: 🔥 PRODUCTION READY - KYC COMPLETO - ZERO ERROS
  * =================================================================================================
@@ -191,7 +188,7 @@ exports.updateProfile = async (req, res) => {
         const updates = [];
         const values = [];
         let paramCount = 1;
-        let requiresReverification = false; // Flag para resetar KYC
+        let requiresReverification = false;
 
         // Atualização de Nome
         if (name && name.trim().length > 2) {
@@ -244,6 +241,21 @@ exports.updateProfile = async (req, res) => {
             values.push(JSON.stringify(newDetails));
             paramCount++;
             requiresReverification = true; // Mudou de carro, precisa reverificar
+
+            // ✅ LÓGICA VIP E CLASSIFICAÇÃO AUTOMÁTICA DE CATEGORIA (MOTORISTAS)
+            // Extrai a Categoria do Json para a Coluna Indexada do Banco
+            let vCat = 'car';
+            const rawType = (vehicle_details.type || '').toLowerCase();
+
+            if (rawType.includes('moto') || rawType.includes('motorcycle')) {
+                vCat = 'moto';
+            } else if (rawType.includes('premium') || rawType.includes('comfort') || rawType.includes('lux')) {
+                vCat = 'premium';
+            }
+
+            updates.push(`vehicle_category = $${paramCount}`);
+            values.push(vCat);
+            paramCount++;
         }
 
         // ==========================================
@@ -417,7 +429,7 @@ exports.uploadPhoto = async (req, res) => {
 };
 
 /**
- * UPLOAD DOCUMENTS (KYC ENGINE) - VERSÃO MULTIPART
+ * UPLOAD DOCUMENTS (KYC ENGINE) - VERSÃO MULTIPART (SUPORTA PDFs)
  * Rota: POST /api/profile/documents
  * Descrição: Endpoint complexo para upload de documentos via Multipart.
  *            - Atualiza tabela `users` (colunas de atalho).
@@ -448,7 +460,7 @@ exports.uploadDocuments = async (req, res) => {
         const processDoc = async (fieldName, dbColumn, docType, side) => {
             if (req.files[fieldName] && req.files[fieldName][0]) {
                 const file = req.files[fieldName][0];
-                const fileUrl = `/uploads/${file.filename}`;
+                const fileUrl = `/uploads/${file.filename}`; // Este caminho pode apontar para um .PDF agora!
 
                 // A. Adiciona à lista de updates da tabela Users
                 updates.push(`${dbColumn} = $${paramCount}`);
@@ -531,7 +543,7 @@ exports.uploadDocuments = async (req, res) => {
 
         await client.query('COMMIT');
 
-        logSystem('DOC_UPLOAD', `Usuário ${userId} enviou novos documentos para análise.`);
+        logSystem('DOC_UPLOAD', `Usuário ${userId} enviou novos documentos (Multipart/PDF) para análise.`);
 
         res.json({
             success: true,
