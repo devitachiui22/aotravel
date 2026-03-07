@@ -15,6 +15,7 @@
  * /api/wallet  -> Transações Financeiras
  * /api/admin   -> Painel Administrativo
  * /api/chat    -> Mensagens e Comunicação
+ * /api/hub     -> Hub de Serviços (Agendamentos, Grupos, Entregas)
  *
  * VERSÃO: 11.0.0-GOLD-ARMORED
  * DATA: 2026.02.11
