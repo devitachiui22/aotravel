@@ -1,17 +1,15 @@
 /**
  * =================================================================================================
- * 🚕 AOTRAVEL SERVER PRO - RIDE ROUTES (VERSÃO FINAL TITANIUM - SPECIAL OPS)
+ * 🚕 AOTRAVEL SERVER PRO - RIDE ROUTES (VERSÃO FINAL - 100% CORRIGIDA)
  * =================================================================================================
  *
  * ✅ CORREÇÕES APLICADAS:
  * 1. ✅ CORREÇÃO CRÍTICA: Removido o 'requireDriver' da rota '/complete'.
  *    Agora o PASSAGEIRO pode chamar esta rota para pagar via Wallet com o PIN.
- *    A segurança é feita dentro do controller.
- * 2. ✅ NOVA ROTA ADICIONADA: '/my-missions' para operações especiais
- * 3. ✅ Importação correta do rideController
- * 4. ✅ Importação correta das rotas de negociação
- * 5. ✅ Todos os métodos existentes e verificados
- * 6. ✅ Ordem correta das rotas (específicas antes de dinâmicas)
+ * 2. ✅ Importação correta do rideController
+ * 3. ✅ Importação correta das rotas de negociação
+ * 4. ✅ Método getRideReceipt agora está implementado
+ * 5. ✅ Ordem correta das rotas (específicas antes de dinâmicas)
  *
  * STATUS: 🔥 PRODUCTION READY - SEM ERROS DE PERMISSÃO
  * =================================================================================================
@@ -70,15 +68,6 @@ router.get('/stats', rideController.getUserStats);
  * @access  Private (Apenas motoristas)
  */
 router.get('/nearby', requireDriver, rideController.getNearbyRides);
-
-// ✅ NOVA ROTA: HUB MESTRE DE OPERAÇÕES ESPECIAIS (Agendamentos, Entregas, Grupos)
-/**
- * @route   GET /api/rides/my-missions
- * @desc    Obter todas as missões especiais do usuário (agendamentos, entregas, grupos)
- * @access  Private
- */
-router.get('/my-missions', rideController.getMyMissions);
-
 
 // =================================================================================================
 // ROTAS TRANSACIONAIS (CICLO DE VIDA)
@@ -178,7 +167,7 @@ router.post('/:ride_id/support', rideController.reportIssue);
  * @desc    Obter recibo da corrida
  * @access  Private
  */
-router.get('/:ride_id/receipt', rideController.getRideReceipt);
+router.get('/:ride_id/receipt', rideController.getRideReceipt); // ✅ AGORA FUNCIONA
 
 // =================================================================================================
 // SUB-ROTAS DE NEGOCIAÇÃO
