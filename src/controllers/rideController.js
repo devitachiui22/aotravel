@@ -1,10 +1,11 @@
 /**
  * =================================================================================================
- * 🚕 AOTRAVEL SERVER PRO - RIDE CONTROLLER (MATCHING & LIFECYCLE v12.0)
+ * 🚕 AOTRAVEL SERVER PRO - RIDE CONTROLLER (MATCHING & LIFECYCLE v13.0)
  * =================================================================================================
  * STATUS: 🔥 PRODUCTION READY - CLEAN ARCHITECTURE APLICADA
  * ✅ FIX RACE CONDITION E CATEGORIAS (Premium, Standard, Moto)
  * ✅ CORREÇÃO CRÍTICA: getActiveRide agora filtra apenas status ativos e com limite de 12h
+ * ✅ OMNI-MODULE COMPLETE RIDE: Suporte para finalizar corridas, entregas, agendamentos e grupos
  * =================================================================================================
  */
 
@@ -600,128 +601,199 @@ exports.startRide = async (req, res) => {
 };
 
 // =================================================================================================
-// 6. FINALIZAR CORRIDA (COM INTEGRAÇÃO AO WALLET SERVICE - CLEAN ARCHITECTURE)
+// 6. FINALIZAR MISSÃO (OMNI-MODULE PAYMENT ENGINE)
 // =================================================================================================
 exports.completeRide = async (req, res) => {
-    const { ride_id, payment_method, final_price, distance_traveled, pin } = req.body;
-    const userId = req.user.id; // Pode ser motorista ou passageiro
+    const { ride_id, payment_method, final_price, distance_traveled, pin, hub_type } = req.body;
+    const userId = req.user.id;
     const method = payment_method || 'cash';
 
-    console.log(`\n✅ [COMPLETE_RIDE] FINALIZAÇÃO | Ride: ${ride_id} | Method: ${method} | User: ${userId}`);
+    console.log(`\n✅ [COMPLETE_MISSION] Ride: ${ride_id} | Method: ${method} | Hub: ${hub_type || 'Ride'}`);
 
     const client = await pool.connect();
 
     try {
-        await client.query('BEGIN'); // Inicia transação Global (Corrida + Pagamento)
+        await client.query('BEGIN');
 
-        const rideCheck = await client.query("SELECT * FROM rides WHERE id = $1 FOR UPDATE", [ride_id]);
+        // Resolução Polimórfica de Tabelas
+        let table = 'rides';
+        let pCol = 'passenger_id';
+        let dCol = 'driver_id';
+        let statusField = 'status';
+
+        if (hub_type === 'delivery') {
+            table = 'hub_deliveries';
+            pCol = 'sender_id';
+            dCol = 'driver_id';
+        } else if (hub_type === 'schedule') {
+            table = 'hub_schedules';
+            pCol = 'passenger_id';
+            dCol = 'driver_id';
+        } else if (hub_type === 'group') {
+            table = 'hub_groups';
+            pCol = 'creator_id';
+            dCol = 'driver_id';
+        }
+
+        const rideCheck = await client.query(`SELECT * FROM ${table} WHERE id = $1 FOR UPDATE`, [ride_id]);
         if (rideCheck.rows.length === 0) {
             await client.query('ROLLBACK');
-            return res.status(404).json({ error: "Corrida não encontrada." });
+            throw new Error("Missão não encontrada.");
         }
 
         const ride = rideCheck.rows[0];
+        const passengerId = ride[pCol];
+        const driverId = ride[dCol];
 
-        if (ride.driver_id !== userId && ride.passenger_id !== userId) {
+        if (driverId != userId && passengerId != userId) {
             await client.query('ROLLBACK');
-            return res.status(403).json({ error: "Acesso negado." });
+            throw new Error("Acesso negado.");
         }
 
-        if (ride.status !== 'ongoing' && ride.status !== 'accepted') {
+        // Verificar status válido
+        const validStatuses = ['ongoing', 'accepted', 'in_transit', 'picked_up'];
+        if (!validStatuses.includes(ride.status)) {
             await client.query('ROLLBACK');
-            return res.status(400).json({ error: "A corrida já foi finalizada ou cancelada." });
+            throw new Error("A missão já foi finalizada ou cancelada.");
         }
 
-        const finalAmount = parseFloat(final_price || ride.final_price || ride.initial_price);
+        // Extrator dinâmico de preço
+        let finalAmount = 0;
+        if (final_price) {
+            finalAmount = parseFloat(final_price);
+        } else if (ride.final_price) {
+            finalAmount = parseFloat(ride.final_price);
+        } else if (ride.price) {
+            finalAmount = parseFloat(ride.price);
+        } else if (ride.total_fare) {
+            finalAmount = parseFloat(ride.total_fare);
+        } else if (ride.proposed_price) {
+            finalAmount = parseFloat(ride.proposed_price);
+        } else if (ride.initial_price) {
+            finalAmount = parseFloat(ride.initial_price);
+        } else {
+            finalAmount = 0;
+        }
 
-        // =========================================================================================
-        // DELEGAÇÃO DE RESPONSABILIDADE FINANCEIRA (CLEAN ARCHITECTURE)
-        // =========================================================================================
+        // Processamento de Pagamento Clean Architecture
         if (method === 'wallet') {
-            if (userId !== ride.passenger_id) {
+            if (userId !== passengerId) {
                 await client.query('ROLLBACK');
-                return res.status(403).json({ error: "Apenas o passageiro pode autorizar o débito." });
+                return res.status(403).json({ error: "Apenas o passageiro/remetente pode autorizar o débito." });
             }
 
-            // O controller de corridas não sabe como tirar dinheiro, ele pede ao WalletService
-            // Passamos o 'client' para o WalletService usar a mesma transação SQL.
             await walletService.processRidePayment(
-                ride.passenger_id,
-                ride.driver_id,
+                passengerId,
+                driverId,
                 finalAmount,
                 ride_id,
                 pin,
                 client
             );
-
         } else {
             // Pagamento em CASH (Dinheiro)
-            if (userId !== ride.driver_id) {
+            if (userId !== driverId) {
                 await client.query('ROLLBACK');
                 return res.status(403).json({ error: "O motorista deve confirmar o recebimento em dinheiro." });
             }
 
-            // Apenas regista no histórico financeiro do motorista
             await walletService.processCashRideLog(
-                ride.driver_id,
+                driverId,
                 finalAmount,
                 ride_id,
                 client
             );
         }
 
-        // =========================================================================================
-        // ATUALIZAÇÃO DO STATUS DA CORRIDA
-        // =========================================================================================
-        await client.query(`
-            UPDATE rides SET
-                status = 'completed',
-                final_price = $1,
-                payment_method = $2,
-                payment_status = 'paid',
-                completed_at = NOW(),
-                distance_km = COALESCE($3, distance_km),
-                updated_at = NOW()
-            WHERE id = $4
-        `, [finalAmount, method, distance_traveled, ride_id]);
+        // Atualização de Status baseada no tipo de hub
+        let statusVal = 'completed';
+        let socketEvent = 'ride_completed';
 
-        // Se tudo correu bem (Dinheiro e Corrida), guardamos permanentemente
+        if (hub_type === 'delivery') {
+            statusVal = 'delivered';
+            socketEvent = 'delivery_completed';
+        } else if (hub_type === 'schedule') {
+            statusVal = 'completed';
+            socketEvent = 'schedule_completed';
+        } else if (hub_type === 'group') {
+            statusVal = 'completed';
+            socketEvent = 'group_completed';
+        }
+
+        // Atualizar a missão
+        let updateFields = `status = '${statusVal}', updated_at = NOW()`;
+
+        if (table === 'rides') {
+            updateFields += `, final_price = ${finalAmount}, payment_method = '${method}', payment_status = 'paid', completed_at = NOW()`;
+            if (distance_traveled) updateFields += `, distance_km = ${distance_traveled}`;
+        } else if (table === 'hub_deliveries') {
+            updateFields += `, completed_at = NOW()`;
+        } else if (table === 'hub_schedules') {
+            updateFields += `, completed_at = NOW()`;
+        } else if (table === 'hub_groups') {
+            updateFields += `, completed_at = NOW()`;
+        }
+
+        await client.query(`UPDATE ${table} SET ${updateFields} WHERE id = $1`, [ride_id]);
+
         await client.query('COMMIT');
 
-        const fullRide = await getFullRideDetails(ride_id);
-
-        // =========================================================================================
-        // NOTIFICAÇÕES (SOCKET.IO)
-        // =========================================================================================
+        // Notificações Sockets (Disparo Simultâneo)
         if (req.io) {
-            req.io.to(`ride_${ride_id}`).emit('ride_completed', fullRide);
-            req.io.to(`user_${ride.passenger_id}`).emit('ride_completed', fullRide);
-            req.io.to(`user_${ride.driver_id}`).emit('ride_completed', fullRide);
+            const payload = {
+                id: ride_id,
+                status: statusVal,
+                hub_type: hub_type || 'ride',
+                final_price: finalAmount,
+                payment_method: method
+            };
+
+            req.io.to(`ride_${ride_id}`).emit(socketEvent, payload);
+            req.io.to(`user_${passengerId}`).emit(socketEvent, payload);
+            req.io.to(`user_${driverId}`).emit(socketEvent, payload);
 
             if (method === 'wallet') {
-                req.io.to(`user_${ride.passenger_id}`).emit('wallet_update', { type: 'payment', amount: finalAmount });
-                req.io.to(`user_${ride.driver_id}`).emit('wallet_update', { type: 'earnings', amount: finalAmount });
+                req.io.to(`user_${passengerId}`).emit('wallet_update', { type: 'payment', amount: finalAmount });
+                req.io.to(`user_${driverId}`).emit('wallet_update', { type: 'earnings', amount: finalAmount });
+            }
+
+            // Atualização específica da UI do Hub
+            if (hub_type === 'delivery') {
+                req.io.to(`user_${passengerId}`).emit('hub_delivery_update', { id: ride_id, status: 'delivered' });
+                req.io.to(`user_${driverId}`).emit('hub_delivery_update', { id: ride_id, status: 'delivered' });
+            }
+            if (hub_type === 'schedule') {
+                req.io.to(`user_${passengerId}`).emit('hub_schedule_update', { id: ride_id, status: 'completed' });
+            }
+            if (hub_type === 'group') {
+                req.io.to(`user_${driverId}`).emit('hub_group_update', { id: ride_id, status: 'completed' });
             }
         }
 
-        res.json({ success: true, ride: fullRide });
+        res.json({
+            success: true,
+            message: "Missão concluída com sucesso.",
+            data: {
+                id: ride_id,
+                status: statusVal,
+                hub_type: hub_type || 'ride',
+                final_price: finalAmount,
+                payment_method: method
+            }
+        });
 
     } catch (e) {
-        // Se QUALQUER coisa falhar (PIN errado, sem saldo, etc), desfaz tudo!
         await client.query('ROLLBACK');
         console.error('❌ ERRO NO COMPLETE_RIDE:', e.message);
 
-        // Se o erro veio do walletService com código (ex: INSUFFICIENT_FUNDS), repassa
         if (e.code === 'INSUFFICIENT_FUNDS') {
             return res.status(402).json({ error: e.message, code: e.code });
         }
-
-        // Se foi erro de PIN (403)
         if (e.message && e.message.includes('PIN')) {
             return res.status(403).json({ error: e.message });
         }
 
-        res.status(500).json({ error: "Erro crítico ao finalizar a corrida." });
+        res.status(500).json({ error: "Erro crítico ao finalizar a missão." });
     } finally {
         client.release();
     }
@@ -1346,8 +1418,8 @@ exports.getRideReceipt = async (req, res) => {
             origin: fullRide.origin_name,
             destination: fullRide.dest_name,
             distance: fullRide.distance_km,
-            price: fullRide.final_price,
-            payment_method: fullRide.payment_method,
+            price: fullRide.final_price || fullRide.initial_price,
+            payment_method: fullRide.payment_method || 'cash',
             ride_type: fullRide.ride_type
         };
 
