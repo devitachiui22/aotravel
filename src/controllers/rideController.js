@@ -4,6 +4,7 @@
  * =================================================================================================
  * STATUS: 🔥 PRODUCTION READY - CLEAN ARCHITECTURE APLICADA
  * ✅ FIX RACE CONDITION E CATEGORIAS (Premium, Standard, Moto)
+ * ✅ CORREÇÃO CRÍTICA: getActiveRide agora filtra apenas status ativos e com limite de 12h
  * =================================================================================================
  */
 
@@ -1123,7 +1124,7 @@ exports.rateRide = async (req, res) => {
 };
 
 // =================================================================================================
-// 15. OBTER CORRIDA ATIVA DO USUÁRIO
+// 15. OBTER CORRIDA ATIVA DO USUÁRIO (BLINDADO CONTRA CORRIDAS FANTASMAS)
 // =================================================================================================
 exports.getActiveRide = async (req, res) => {
     const userId = req.user.id;
@@ -1131,13 +1132,17 @@ exports.getActiveRide = async (req, res) => {
     console.log(`🔍 [GET_ACTIVE_RIDE] Buscando corrida ativa para usuário ${userId}`);
 
     try {
+        // ✅ CORREÇÃO CRÍTICA:
+        // 1. Apenas corridas 'accepted', 'arrived' ou 'ongoing'.
+        // 2. Limite temporal: Atualizado nas últimas 12 horas. Corridas antigas "presas" são ignoradas.
         const result = await pool.query(`
             SELECT * FROM rides
-            WHERE (passenger_id = $1 OR driver_id = $2)
-              AND status IN ('searching', 'accepted', 'arrived', 'ongoing')
-            ORDER BY created_at DESC
+            WHERE (passenger_id = $1 OR driver_id = $1)
+              AND status IN ('accepted', 'arrived', 'ongoing')
+              AND updated_at > NOW() - INTERVAL '12 hours'
+            ORDER BY updated_at DESC
             LIMIT 1
-        `, [userId, userId]);
+        `, [userId]);
 
         if (result.rows.length === 0) {
             return res.json({
