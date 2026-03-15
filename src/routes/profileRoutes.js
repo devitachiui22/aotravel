@@ -13,6 +13,7 @@
  * - Segurança: POST /change-password
  * - Mídia: POST /photo
  * - Compliance: POST /documents (KYC)
+ * - Upload Multipart: POST /documents/upload (NOVO - CORREÇÃO CRÍTICA)
  *
  * VERSÃO: 11.0.0-GOLD-ARMORED
  * DATA: 2026.02.11
@@ -37,33 +38,69 @@ router.use(authenticateToken);
 // ROTAS DE DADOS BÁSICOS
 // =================================================================================================
 
-// GET /api/profile - Obter dados do perfil, estatísticas e status financeiro
+/**
+ * @route   GET /api/profile
+ * @desc    Obter dados do perfil, estatísticas e status financeiro
+ * @access  Private
+ */
 router.get('/', profileController.getProfile);
 
-// PUT /api/profile - Atualizar Nome, Telefone e Dados do Veículo
+/**
+ * @route   PUT /api/profile
+ * @desc    Atualizar Nome, Telefone e Dados do Veículo
+ * @access  Private
+ */
 router.put('/', profileController.updateProfile);
 
 // =================================================================================================
 // ROTAS DE CONFIGURAÇÃO E SEGURANÇA
 // =================================================================================================
 
-// PUT /api/profile/settings - Atualizar preferências do App (JSON)
+/**
+ * @route   PUT /api/profile/settings
+ * @desc    Atualizar preferências do App (JSON)
+ * @access  Private
+ */
 router.put('/settings', profileController.updateSettings);
 
-// POST /api/profile/change-password - Alterar senha (requer senha atual)
+/**
+ * @route   POST /api/profile/change-password
+ * @desc    Alterar senha (requer senha atual)
+ * @access  Private
+ */
 router.post('/change-password', profileController.changePassword);
 
 // =================================================================================================
 // ROTAS DE UPLOAD (MÍDIA E DOCUMENTOS)
 // =================================================================================================
 
-// POST /api/profile/photo - Upload de foto de perfil (Avatar)
-// Middleware: upload.single('photo') processa o arquivo antes do controller
+/**
+ * @route   POST /api/profile/photo
+ * @desc    Upload de foto de perfil via Base64 (Avatar)
+ * @access  Private
+ */
 router.post('/photo', profileController.uploadPhoto);
 
-// POST /api/profile/documents - Upload de documentos para Verificação (KYC)
-// Middleware: upload.fields processa múltiplos arquivos com chaves específicas
-router.post('/documents', upload.fields([
+/**
+ * @route   POST /api/profile/documents
+ * @desc    Upload de documentos para Verificação (KYC) via Base64
+ * @access  Private
+ */
+router.post('/documents', profileController.uploadDocuments);
+
+// =================================================================================================
+// 🚀 NOVA ROTA CRÍTICA: UPLOAD DE DOCUMENTOS VIA MULTIPART/FORM-DATA
+// =================================================================================================
+/**
+ * @route   POST /api/profile/documents/upload
+ * @desc    Upload de documentos para Verificação (KYC) via MULTIPART
+ *          CORREÇÃO DEFINITIVA PARA O ERRO DE UPLOAD NO APP BUILT
+ * @access  Private
+ */
+router.post(
+  '/documents/upload',
+  upload.fields([
+    { name: 'profile_photo', maxCount: 1 },
     { name: 'bi_front', maxCount: 1 },
     { name: 'bi_back', maxCount: 1 },
     { name: 'driving_license_front', maxCount: 1 },
@@ -71,6 +108,8 @@ router.post('/documents', upload.fields([
     { name: 'vehicle_title', maxCount: 1 },
     { name: 'vehicle_insurance', maxCount: 1 },
     { name: 'tax_document', maxCount: 1 }
-]), profileController.uploadDocuments);
+  ]),
+  profileController.uploadDocumentsMultipart
+);
 
 module.exports = router;
