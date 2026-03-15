@@ -579,7 +579,11 @@ exports.uploadDocumentsMultipart = async (req, res) => {
     const userId = req.user.id;
     const files = req.files;
 
+    console.log(`\n📸 [UPLOAD_MULTIPART] Recebendo upload para usuário ${userId}`);
+    console.log(`📦 Arquivos recebidos: ${Object.keys(files || {}).length}`);
+
     if (!files || Object.keys(files).length === 0) {
+        console.log("❌ Nenhum arquivo recebido!");
         return res.status(400).json({
             success: false,
             error: "Nenhum arquivo enviado."
@@ -610,13 +614,19 @@ exports.uploadDocumentsMultipart = async (req, res) => {
 
         for (const [fieldName, fileArray] of Object.entries(files)) {
             const dbColumn = fieldToDbColumn[fieldName];
-            if (!dbColumn) continue;
+            if (!dbColumn) {
+                console.log(`⚠️ Campo ignorado: ${fieldName}`);
+                continue;
+            }
 
             const file = fileArray[0];
+            console.log(`📄 Processando ${fieldName}: ${file.filename} (${file.mimetype})`);
 
-            // 🔥 Lê o arquivo e converte para Base64
+            // Lê o arquivo e converte para Base64
             const fileBuffer = fs.readFileSync(file.path);
             const base64String = fileBuffer.toString('base64');
+
+            console.log(`   ✅ Tamanho: ${fileBuffer.length} bytes`);
 
             // Salva a string Base64 diretamente no banco
             updates.push(`${dbColumn} = $${paramCount}`);
@@ -651,7 +661,7 @@ exports.uploadDocumentsMultipart = async (req, res) => {
                 `, [userId, docType, base64String]);
             }
 
-            // 🔥 Opcional: Apaga o arquivo do disco para economizar espaço
+            // Apaga o arquivo do disco para economizar espaço
             fs.unlink(file.path, (err) => {
                 if (err) console.error("Erro ao deletar arquivo temporário:", err);
             });
@@ -676,6 +686,7 @@ exports.uploadDocumentsMultipart = async (req, res) => {
             values.push(userId);
             const query = `UPDATE users SET ${updates.join(', ')} WHERE id = $${paramCount}`;
             await client.query(query, values);
+            console.log(`✅ Banco atualizado com ${updates.length} campos`);
         }
 
         await client.query('COMMIT');
@@ -685,7 +696,7 @@ exports.uploadDocumentsMultipart = async (req, res) => {
         delete updatedUser.password;
         delete updatedUser.wallet_pin_hash;
 
-        logSystem('UPLOAD_MULTIPART', `Usuário ${userId} enviou documentos via Multipart.`);
+        console.log(`✅ Upload concluído com sucesso para usuário ${userId}`);
 
         res.json({
             success: true,
@@ -695,6 +706,7 @@ exports.uploadDocumentsMultipart = async (req, res) => {
 
     } catch (error) {
         await client.query('ROLLBACK');
+        console.error('❌ ERRO NO UPLOAD MULTIPART:', error);
         logError('UPLOAD_DOCUMENTS_MULTIPART', error);
         res.status(500).json({
             success: false,
