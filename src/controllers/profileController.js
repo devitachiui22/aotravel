@@ -6,14 +6,17 @@
  * ARQUIVO: src/controllers/profileController.js
  * DESCRIÇÃO: Controlador Mestre de Perfil de Usuário com suporte KYC completo.
  *
- * ✅ CORREÇÕES APLICADAS (v44.0):
+ * ✅ CORREÇÕES APLICADAS (v45.0):
  * 1. SUPORTE A PDF: Os documentos agora suportam `application/pdf` via upload Multipart.
  * 2. AUTODETECÇÃO DE CATEGORIA: Quando atualiza `vehicle_details`, o sistema extrai e grava
  *    `vehicle_category` nativamente no DB ('car', 'premium', 'moto').
  * 3. RESET DE KYC RIGOROSO: Qualquer envio de documento ou mudança de viatura força o
  *    `is_verified` a false, requerendo validação do Administrador.
  * 4. CLEAN ARCHITECTURE: Tratamento de erros e transações garantidas.
- * 5. 🚀 NOVO MÉTODO MULTIPART: uploadDocumentsMultipart - CORREÇÃO DEFINITIVA DO UPLOAD
+ * 5. 🚀 MÉTODO MULTIPART OTIMIZADO: uploadDocumentsMultipart - CORREÇÃO DEFINITIVA DO UPLOAD
+ *    - Adiciona prefixo MIME type (data:image/jpeg;base64,)
+ *    - Limpeza automática de arquivos temporários com fs.unlinkSync
+ *    - Reset de verificação KYC garantido
  *
  * STATUS: 🔥 PRODUCTION READY - KYC COMPLETO - ZERO ERROS
  * =================================================================================================
@@ -561,19 +564,19 @@ exports.uploadDocuments = async (req, res) => {
 };
 
 // =================================================================================================
-// 🚀 NOVO MÉTODO CRÍTICO: UPLOAD DE DOCUMENTOS VIA MULTIPART (CORREÇÃO DEFINITIVA)
+// 🚀 MÉTODO OTIMIZADO: UPLOAD DE DOCUMENTOS VIA MULTIPART (CORREÇÃO DEFINITIVA)
 // =================================================================================================
 /**
- * UPLOAD DOCUMENTS VIA MULTIPART (CORREÇÃO DEFINITIVA PARA O APP BUILT)
+ * UPLOAD DOCUMENTS VIA MULTIPART (VERSÃO OTIMIZADA)
  * Rota: POST /api/profile/documents/upload
  * Descrição: Processa upload de múltiplos documentos via Multipart, convertendo para Base64
- *            e salvando diretamente no banco de dados.
+ *            com prefixo MIME type e salvando diretamente no banco de dados.
  *
- * ✅ VANTAGENS:
- * 1. Funciona perfeitamente em modo release (APK/IPA)
- * 2. Suporta arquivos grandes (até 100MB)
- * 3. Processamento eficiente sem sobrecarga de memória
- * 4. Integração total com o sistema KYC existente
+ * ✅ MELHORIAS:
+ * 1. Adiciona prefixo MIME type (data:image/jpeg;base64,) para compatibilidade
+ * 2. Limpeza síncrona de arquivos temporários com fs.unlinkSync
+ * 3. Reset garantido de verificação KYC
+ * 4. Logs detalhados para debugging
  */
 exports.uploadDocumentsMultipart = async (req, res) => {
     const userId = req.user.id;
@@ -607,11 +610,7 @@ exports.uploadDocumentsMultipart = async (req, res) => {
             'tax_document': 'tax_document'
         };
 
-        const updates = [];
-        const values = [];
-        let paramCount = 1;
-        let requiresReverification = false;
-
+        // Processa cada arquivo enviado
         for (const [fieldName, fileArray] of Object.entries(files)) {
             const dbColumn = fieldToDbColumn[fieldName];
             if (!dbColumn) {
@@ -624,21 +623,21 @@ exports.uploadDocumentsMultipart = async (req, res) => {
 
             // Lê o arquivo e converte para Base64
             const fileBuffer = fs.readFileSync(file.path);
-            const base64String = fileBuffer.toString('base64');
+            const base64Data = fileBuffer.toString('base64');
 
-            console.log(`   ✅ Tamanho: ${fileBuffer.length} bytes`);
+            // Adiciona prefixo com MIME type para compatibilidade
+            const mimeType = file.mimetype;
+            const finalBase64 = `data:${mimeType};base64,${base64Data}`;
 
-            // Salva a string Base64 diretamente no banco
-            updates.push(`${dbColumn} = $${paramCount}`);
-            values.push(base64String);
-            paramCount++;
+            console.log(`   ✅ Tamanho: ${fileBuffer.length} bytes | MIME: ${mimeType}`);
 
-            // Se não for foto de perfil, marca para re-verificação
-            if (fieldName !== 'profile_photo') {
-                requiresReverification = true;
-            }
+            // 1. Atualiza a coluna direta na tabela USERS
+            await client.query(
+                `UPDATE users SET ${dbColumn} = $1, updated_at = NOW() WHERE id = $2`,
+                [finalBase64, userId]
+            );
 
-            // Registra na tabela de documentos para auditoria (se não for foto)
+            // 2. Registra na tabela USER_DOCUMENTS (Fila do Admin)
             if (fieldName !== 'profile_photo') {
                 let docType = fieldName;
                 if (fieldName.startsWith('bi_')) docType = 'bi';
@@ -647,52 +646,41 @@ exports.uploadDocumentsMultipart = async (req, res) => {
                 else if (fieldName === 'vehicle_insurance') docType = 'vehicle_insurance';
                 else if (fieldName === 'tax_document') docType = 'tax_document';
 
-                const side = fieldName.endsWith('_back') ? 'back' : 'front';
+                const side = fieldName.endsWith('_back') ? 'back_image' : 'front_image';
 
                 await client.query(`
-                    INSERT INTO user_documents (user_id, document_type, ${side}_image, status, created_at, updated_at)
-                    VALUES ($1, $2, $3, 'pending', NOW(), NOW())
+                    INSERT INTO user_documents (user_id, document_type, ${side}, status, updated_at)
+                    VALUES ($1, $2, $3, 'pending', NOW())
                     ON CONFLICT (user_id, document_type)
                     DO UPDATE SET
-                        ${side}_image = $3,
+                        ${side} = $3,
                         status = 'pending',
-                        rejection_reason = NULL,
                         updated_at = NOW()
-                `, [userId, docType, base64String]);
+                `, [userId, docType, finalBase64]);
             }
 
-            // Apaga o arquivo do disco para economizar espaço
-            fs.unlink(file.path, (err) => {
-                if (err) console.error("Erro ao deletar arquivo temporário:", err);
-            });
+            // Limpa o arquivo temporário do disco (síncrono para garantir)
+            try {
+                fs.unlinkSync(file.path);
+                console.log(`   ✅ Arquivo temporário removido: ${file.path}`);
+            } catch (unlinkErr) {
+                console.error(`   ⚠️ Erro ao remover arquivo temporário: ${unlinkErr.message}`);
+            }
         }
 
-        // Se enviou documentos, volta para "Em Análise"
-        if (requiresReverification) {
-            updates.push(`is_verified = $${paramCount}`);
-            values.push(false);
-            paramCount++;
-
-            updates.push(`kyc_level = $${paramCount}`);
-            values.push(1);
-            paramCount++;
-        }
-
-        // Adiciona timestamp de atualização
-        updates.push(`updated_at = NOW()`);
-
-        // Executa a atualização se houver campos para atualizar
-        if (updates.length > 0) {
-            values.push(userId);
-            const query = `UPDATE users SET ${updates.join(', ')} WHERE id = $${paramCount}`;
-            await client.query(query, values);
-            console.log(`✅ Banco atualizado com ${updates.length} campos`);
-        }
+        // Reseta verificação para re-análise (independente de quais documentos foram enviados)
+        await client.query(
+            "UPDATE users SET is_verified = false, kyc_level = 1 WHERE id = $1",
+            [userId]
+        );
 
         await client.query('COMMIT');
+        console.log(`✅ Transação COMMIT realizada para usuário ${userId}`);
 
         // Busca os dados atualizados do usuário
         const updatedUser = await getUserFullDetails(userId);
+
+        // Remove dados sensíveis
         delete updatedUser.password;
         delete updatedUser.wallet_pin_hash;
 
@@ -708,6 +696,7 @@ exports.uploadDocumentsMultipart = async (req, res) => {
         await client.query('ROLLBACK');
         console.error('❌ ERRO NO UPLOAD MULTIPART:', error);
         logError('UPLOAD_DOCUMENTS_MULTIPART', error);
+
         res.status(500).json({
             success: false,
             error: "Erro interno ao salvar documentos.",
@@ -893,5 +882,5 @@ exports.updateSettings = async (req, res) => {
 };
 
 // =================================================================================================
-// FIM DO ARQUIVO - PROFILE CONTROLLER (KYC COMPLETO + MULTIPART)
+// FIM DO ARQUIVO - PROFILE CONTROLLER (KYC COMPLETO + MULTIPART OTIMIZADO)
 // =================================================================================================
