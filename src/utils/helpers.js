@@ -265,30 +265,15 @@ async function getUserFullDetails(userId) {
     const query = `
         SELECT
             id, name, email, phone, photo, role,
-            balance, bonus_points,
-            wallet_account_number,
-            wallet_status,
-            daily_limit,
-            account_tier,
-            (wallet_pin_hash IS NOT NULL) as has_pin,
-            vehicle_details,
-            vehicle_title,
-            vehicle_insurance,
-            tax_document,
-            driving_license_front,
-            driving_license_back,
-            rating,
-            is_online,
+            balance, bonus_points, wallet_account_number, wallet_status,
+            daily_limit, account_tier, is_online, is_verified, is_blocked,
+            kyc_level, vehicle_category, vehicle_details,
+            -- DOCUMENTOS KYC (Colunas Explicitamente Mapeadas)
             bi_front, bi_back,
-            is_verified,
-            is_blocked,
-            fcm_token,
-            settings,
-            privacy_settings,
-            notification_preferences,
-            created_at,
-            last_login,
-            updated_at
+            driving_license_front, driving_license_back,
+            vehicle_title, vehicle_insurance, tax_document,
+            rating, fcm_token, settings, privacy_settings, notification_preferences,
+            last_login, created_at, updated_at
         FROM users
         WHERE id = $1
     `;
