@@ -8,13 +8,18 @@
  *            Este arquivo concentra toda a lógica de superusuário, incluindo:
  *            - Dashboard Analítico em Tempo Real (KPIs, Crescimento).
  *            - Gestão Completa de Usuários (CRUD, Bloqueios, Redefinição de Senha).
- *            - Auditoria de Documentos KYC (Compliance).
+ *            - Auditoria de Documentos KYC (Compliance) - CORREÇÃO AUTO-VERIFICATION.
  *            - Gestão Financeira Administrativa (Ajustes de Saldo, Estornos).
  *            - Configurações Dinâmicas do Sistema (Hot-Reload).
  *            - Geração de Relatórios Complexos.
  *
  * VERSÃO: 11.0.0-GOLD-ARMORED
  * DATA: 2026.02.11
+ *
+ * ✅ CORREÇÃO AUTO-VERIFICATION:
+ * - verifyDocument agora verifica automaticamente se o motorista tem TODOS os docs necessários
+ * - Requisitos: BI, Carta de Condução, Documentos do Veículo
+ * - Atualiza is_verified e kyc_level automaticamente
  *
  * INTEGRAÇÃO:
  * - Database: PostgreSQL (Neon) via pool (src/config/db.js).
@@ -573,7 +578,7 @@ exports.resetUserPassword = async (req, res) => {
 };
 
 // =================================================================================================
-// 3. GESTÃO DE DOCUMENTOS E COMPLIANCE (KYC MODULE)
+// 3. GESTÃO DE DOCUMENTOS E COMPLIANCE (KYC MODULE) - CORREÇÃO AUTO-VERIFICATION
 // =================================================================================================
 
 /**
@@ -593,19 +598,20 @@ exports.getPendingDocuments = async (req, res) => {
         const result = await pool.query(query);
         res.json(result.rows);
     } catch (e) {
+        logError('PENDING_DOCS', e);
         res.status(500).json({ error: "Erro ao buscar documentos pendentes." });
     }
 };
 
 /**
- * VERIFY DOCUMENT
+ * VERIFY DOCUMENT (AUTO-VERIFICATION)
  * Rota: POST /api/admin/documents/:id/verify
  * Descrição: Aprova ou Rejeita um documento específico.
- *            Se todos os docs forem aprovados, o usuário ganha status 'is_verified'.
+ *            Se todos os docs obrigatórios forem aprovados, o usuário ganha status 'is_verified'.
  */
 exports.verifyDocument = async (req, res) => {
     const { id } = req.params;
-    const { status, rejection_reason } = req.body; // 'approved' or 'rejected'
+    const { status, rejection_reason } = req.body;
 
     if (!['approved', 'rejected'].includes(status)) {
         return res.status(400).json({ error: "Status inválido. Use 'approved' ou 'rejected'." });
@@ -616,74 +622,91 @@ exports.verifyDocument = async (req, res) => {
     }
 
     const client = await pool.connect();
-
     try {
         await client.query('BEGIN');
 
-        // 1. Atualizar Documento
-        const docResult = await client.query(
+        // 1. Atualizar o documento na tabela user_documents
+        const docRes = await client.query(
             `UPDATE user_documents SET
                 status = $1,
-                verified_by = $2,
+                rejection_reason = $2,
                 verified_at = NOW(),
-                rejection_reason = $3,
+                verified_by = $3,
                 updated_at = NOW()
              WHERE id = $4
-             RETURNING *`,
-            [status, req.user.id, rejection_reason || null, id]
+             RETURNING user_id, document_type`,
+            [status, rejection_reason || null, req.user.id, id]
         );
 
-        if (docResult.rows.length === 0) {
+        if (docRes.rows.length === 0) {
             await client.query('ROLLBACK');
             return res.status(404).json({ error: "Documento não encontrado." });
         }
 
-        const doc = docResult.rows[0];
+        const { user_id, document_type } = docRes.rows[0];
 
-        // 2. Verificar Status Global do Usuário (Auto-Approve)
-        // Se o documento foi aprovado, verificamos se restam pendências
-        if (status === 'approved') {
-            const userId = doc.user_id;
+        // 2. Buscar todos os documentos do usuário para verificar status geral
+        const allDocs = await client.query(
+            `SELECT document_type, status FROM user_documents WHERE user_id = $1`,
+            [user_id]
+        );
 
-            // Busca quais documentos são obrigatórios para o Role do usuário
-            const userRes = await client.query("SELECT role FROM users WHERE id = $1", [userId]);
-            const role = userRes.rows[0].role;
+        // 3. Buscar o role do usuário
+        const userBasic = await client.query("SELECT role FROM users WHERE id = $1", [user_id]);
+        if (userBasic.rows.length === 0) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ error: "Usuário não encontrado." });
+        }
 
-            const requiredTypes = ['bi'];
-            if (role === 'driver') requiredTypes.push('driving_license');
+        const role = userBasic.rows[0].role;
 
-            // Verifica documentos aprovados
-            const approvedCountRes = await client.query(
-                `SELECT COUNT(DISTINCT document_type)
-                 FROM user_documents
-                 WHERE user_id = $1 AND status = 'approved' AND document_type = ANY($2)`,
-                [userId, requiredTypes]
-            );
+        // 4. Definir documentos obrigatórios baseado no role
+        let required = ['bi']; // Todos precisam de BI
 
-            const approvedCount = parseInt(approvedCountRes.rows[0].count);
+        if (role === 'driver') {
+            // Motorista precisa de BI + Carta + Documentos do Veículo
+            required = [
+                'bi',
+                'driving_license',
+                'vehicle_title',
+                'vehicle_insurance',
+                'tax_document'
+            ];
+        }
 
-            // Se tem todos os necessários aprovados
-            if (approvedCount >= requiredTypes.length) {
-                await client.query(
-                    "UPDATE users SET is_verified = true, kyc_level = 2, updated_at = NOW() WHERE id = $1",
-                    [userId]
-                );
-                logSystem('KYC_AUTO', `Usuário ${userId} promovido para Verificado (KYC Level 2).`);
-            }
-        } else {
-            // Se rejeitado, garante que o usuário não está verificado
+        // 5. Verificar quais documentos obrigatórios estão aprovados
+        const approvedTypes = allDocs.rows
+            .filter(d => d.status === 'approved')
+            .map(d => d.document_type);
+
+        // Verifica se todos os obrigatórios estão aprovados
+        const isFullyApproved = required.every(type => approvedTypes.includes(type));
+
+        // 6. Atualizar status do usuário baseado na verificação completa
+        if (isFullyApproved) {
+            // Se tem todos os documentos aprovados, verifica o usuário
             await client.query(
-                "UPDATE users SET is_verified = false, kyc_level = 1 WHERE id = $1",
-                [doc.user_id]
+                "UPDATE users SET is_verified = true, kyc_level = 2, updated_at = NOW() WHERE id = $1",
+                [user_id]
+            );
+            logSystem('KYC_AUTO', `Usuário ${user_id} automaticamente verificado (todos os documentos aprovados).`);
+        } else if (status === 'rejected') {
+            // Se algum documento foi rejeitado, garante que o usuário não está verificado
+            await client.query(
+                "UPDATE users SET is_verified = false, kyc_level = 1, updated_at = NOW() WHERE id = $1",
+                [user_id]
             );
         }
 
         await client.query('COMMIT');
 
-        // Notificar usuário (Futuro: Push Notification)
-        // emitToUser(doc.user_id, 'doc_status_update', { status, type: doc.document_type });
+        logSystem('DOC_VERIFY', `Admin ${req.user.id} ${status} documento ${id} do usuário ${user_id}.`);
 
-        res.json({ success: true, document: doc });
+        res.json({
+            success: true,
+            message: `Documento ${status} com sucesso.`,
+            fully_verified: isFullyApproved
+        });
 
     } catch (e) {
         await client.query('ROLLBACK');
@@ -743,7 +766,9 @@ exports.manualWalletAdjustment = async (req, res) => {
             newBalance = currentBalance - val;
             dbAmount = -val; // Negativo para registro
             // Verifica se o saldo ficaria negativo (permitido em alguns casos, mas bom avisar)
-            // Aqui permitimos, pois é admin override.
+            if (newBalance < 0) {
+                logSystem('ADMIN_WARN', `Admin ${req.user.id} deixou saldo negativo para User ${user_id}: ${newBalance}`);
+            }
         }
 
         // Atualiza User
@@ -829,7 +854,7 @@ exports.generateReport = async (req, res) => {
                         COUNT(*) as total_transactions,
                         SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) as total_inflow,
                         SUM(CASE WHEN amount < 0 THEN amount ELSE 0 END) as total_outflow,
-                        SUM(fee) as total_fees_collected
+                        COALESCE(SUM(fee), 0) as total_fees_collected
                     FROM wallet_transactions
                     WHERE status = 'completed' AND created_at BETWEEN $1 AND $2
                     GROUP BY DATE(created_at)
@@ -909,6 +934,7 @@ exports.getSettings = async (req, res) => {
         const settings = await pool.query("SELECT * FROM app_settings ORDER BY key ASC");
         res.json(settings.rows);
     } catch (e) {
+        logError('GET_SETTINGS', e);
         res.status(500).json({ error: "Erro ao buscar configurações." });
     }
 };
