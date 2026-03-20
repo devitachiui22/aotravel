@@ -15,6 +15,7 @@
  * 3. ✅ Geradores de códigos e referências
  * 4. ✅ Validações de segurança
  * 5. ✅ Helpers de banco de dados com todos os campos KYC
+ * 6. ✅ formatFileUrl - Injeção de URL base para arquivos estáticos
  *
  * STATUS: 🔥 PRODUCTION READY - 100% BLINDADO
  * =================================================================================================
@@ -55,7 +56,26 @@ function logError(tag, error) {
 }
 
 // =================================================================================================
-// 2. UTILITÁRIOS MATEMÁTICOS E GEOGRÁFICOS
+// 2. UTILITÁRIOS DE FORMATAÇÃO DE URL
+// =================================================================================================
+
+/**
+ * Função para injetar a URL base do servidor nos caminhos de arquivos
+ * @param {string} filePath - Caminho do arquivo (relativo ou absoluto)
+ * @param {Object} req - Objeto de requisição Express
+ * @returns {string} URL completa do arquivo
+ */
+function formatFileUrl(filePath, req) {
+    if (!filePath || filePath.startsWith('http') || filePath.startsWith('data:')) return filePath;
+    const protocol = req.protocol;
+    const host = req.get('host');
+    // Garante que o caminho comece com /
+    const cleanPath = filePath.startsWith('/') ? filePath : `/${filePath}`;
+    return `${protocol}://${host}${cleanPath}`;
+}
+
+// =================================================================================================
+// 3. UTILITÁRIOS MATEMÁTICOS E GEOGRÁFICOS
 // =================================================================================================
 
 /**
@@ -88,7 +108,7 @@ function getDistance(lat1, lon1, lat2, lon2) {
 }
 
 // =================================================================================================
-// 3. GERADORES DE CÓDIGOS, REFS E CONTAS
+// 4. GERADORES DE CÓDIGOS, REFS E CONTAS
 // =================================================================================================
 
 /**
@@ -132,7 +152,7 @@ function generateAccountNumber(phone) {
 }
 
 // =================================================================================================
-// 4. VALIDAÇÕES E SEGURANÇA
+// 5. VALIDAÇÕES E SEGURANÇA
 // =================================================================================================
 
 /**
@@ -171,7 +191,7 @@ function maskData(data, visibleEnd = 4) {
 }
 
 // =================================================================================================
-// 5. HELPERS DE BANCO DE DADOS (KYC STRICT)
+// 6. HELPERS DE BANCO DE DADOS (KYC STRICT)
 // =================================================================================================
 
 /**
@@ -257,9 +277,10 @@ async function getFullRideDetails(rideId) {
 /**
  * Busca detalhes completos de um usuário (KYC COMPLETO)
  * @param {number} userId - ID do usuário
+ * @param {Object} req - Objeto de requisição Express (opcional, para formatar URLs)
  * @returns {Object|null} Detalhes do usuário ou null
  */
-async function getUserFullDetails(userId) {
+async function getUserFullDetails(userId, req = null) {
     console.log(`🔍 [HELPER] Buscando detalhes completos do usuário ${userId}...`);
 
     const query = `
@@ -286,8 +307,25 @@ async function getUserFullDetails(userId) {
             return null;
         }
 
+        const user = res.rows[0];
+
+        // Se o objeto 'req' for passado, formatamos as URLs para o Admin/App
+        if (req) {
+            const docFields = [
+                'photo', 'bi_front', 'bi_back',
+                'driving_license_front', 'driving_license_back',
+                'vehicle_title', 'vehicle_insurance', 'tax_document'
+            ];
+
+            docFields.forEach(field => {
+                if (user[field]) {
+                    user[field] = formatFileUrl(user[field], req);
+                }
+            });
+        }
+
         console.log(`✅ [HELPER] Dados do usuário ${userId} obtidos com sucesso`);
-        return res.rows[0];
+        return user;
 
     } catch (e) {
         logError('USER_FETCH', e);
@@ -297,11 +335,12 @@ async function getUserFullDetails(userId) {
 }
 
 // =================================================================================================
-// 6. EXPORTAÇÃO UNIFICADA
+// 7. EXPORTAÇÃO UNIFICADA
 // =================================================================================================
 module.exports = {
     logSystem,
     logError,
+    formatFileUrl,
     getDistance,
     generateCode,
     generateRef,
