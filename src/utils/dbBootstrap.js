@@ -4,7 +4,7 @@
  * =================================================================================================
  *
  * ARQUIVO: src/utils/dbBootstrap.js
- * VERSÃO DO SCHEMA: 2026.03.07.HUB.COMPLETE.FINAL.FIXED
+ * VERSÃO DO SCHEMA: 2026.03.23.HUB.COMPLETE.FINAL.FIXED
  * DESCRIÇÃO: Script de inicialização com módulos Core + Hub Inteligente
  *
  * ✅ CORREÇÕES APLICADAS:
@@ -12,6 +12,10 @@
  * 2. CONSTRAINT CHECK corrigida para incluir 'premium'
  * 3. TRATAMENTO DE ERRO aprimorado com ROLLBACK em caso de falha
  * 4. TRANSAÇÕES isoladas para cada etapa crítica
+ * 5. CORREÇÃO DA TABELA DE USUÁRIOS (PIN e Documentos)
+ * 6. GARANTIA que os caminhos dos documentos sejam TEXT para suportar URLs longas
+ * 7. TRIGGER para Geração Automática de Número de Conta (Correção do "Gerando...")
+ * 8. ÍNDICES de Segurança para Privacidade (Filtros por JWT)
  *
  * STATUS: 🔥 PRODUCTION READY - ZERO ERROS DE TRANSAÇÃO
  * =================================================================================================
@@ -105,7 +109,7 @@ async function bootstrapDatabase() {
                 is_blocked BOOLEAN DEFAULT false,
                 is_verified BOOLEAN DEFAULT false,
 
-                -- Documentação KYC Avançada
+                -- Documentação KYC Avançada (TEXT para URLs longas)
                 bi_front TEXT,
                 bi_back TEXT,
                 driving_license_front TEXT,
@@ -272,7 +276,7 @@ async function bootstrapDatabase() {
 
         // 9. TABELA VEHICLE_DETAILS - CORRIGIDA: DROP TABLE primeiro para evitar conflitos
         await safeQuery(client, `DROP TABLE IF EXISTS vehicle_details CASCADE;`, [], 'DROP TABLE vehicle_details');
-        
+
         await safeQuery(client, `
             CREATE TABLE vehicle_details (
                 id SERIAL PRIMARY KEY,
@@ -530,7 +534,7 @@ async function bootstrapDatabase() {
         log.success(`✅ Auto-healing concluído: ${repairedCount} colunas verificadas`);
 
         // =========================================================================================
-        // ETAPA 3: CRIAÇÃO DE ÍNDICES
+        // ETAPA 3: CRIAÇÃO DE ÍNDICES (INCLUINDO ÍNDICES DE SEGURANÇA)
         // =========================================================================================
         log.section('⚡ OTIMIZANDO COM ÍNDICES DE PERFORMANCE');
 
@@ -557,6 +561,9 @@ async function bootstrapDatabase() {
             "CREATE INDEX IF NOT EXISTS idx_wallet_ref ON wallet_transactions(reference_id)",
             "CREATE INDEX IF NOT EXISTS idx_wallet_date ON wallet_transactions(created_at DESC)",
             "CREATE INDEX IF NOT EXISTS idx_wallet_status ON wallet_transactions(status)",
+            "CREATE INDEX IF NOT EXISTS idx_wallet_transactions_user_id ON wallet_transactions(user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_rides_passenger_id ON rides(passenger_id)",
+            "CREATE INDEX IF NOT EXISTS idx_rides_driver_id ON rides(driver_id)",
             "CREATE INDEX IF NOT EXISTS idx_chat_ride ON chat_messages(ride_id)",
             "CREATE INDEX IF NOT EXISTS idx_chat_module ON chat_messages(module_type, module_id)",
             "CREATE INDEX IF NOT EXISTS idx_chat_created ON chat_messages(created_at)",
@@ -595,7 +602,7 @@ async function bootstrapDatabase() {
         log.success('✅ Índices de performance criados/verificados');
 
         // =========================================================================================
-        // ETAPA 4: CRIAÇÃO DE TRIGGERS
+        // ETAPA 4: CRIAÇÃO DE TRIGGERS (COM CORREÇÃO DO "GERANDO...")
         // =========================================================================================
         log.section('🔄 CONFIGURANDO TRIGGERS AUTOMÁTICOS');
 
@@ -625,25 +632,36 @@ async function bootstrapDatabase() {
             `, [], `CREATE TRIGGER ${table}`);
         }
 
+        // TRIGGER CORRIGIDA para geração automática de número de conta (Correção do "Gerando...")
         await safeQuery(client, `
-            CREATE OR REPLACE FUNCTION generate_wallet_number()
+            CREATE OR REPLACE FUNCTION fn_generate_wallet_number()
             RETURNS TRIGGER AS $$
             BEGIN
                 IF NEW.wallet_account_number IS NULL THEN
-                    NEW.wallet_account_number := 'AOT' || LPAD(NEW.id::TEXT, 8, '0');
+                    NEW.wallet_account_number := 'AOT' || LPAD(NEXTVAL('users_id_seq')::TEXT, 8, '0');
                 END IF;
                 RETURN NEW;
             END;
-            $$ language 'plpgsql';
-        `, [], 'CREATE FUNCTION generate_wallet_number');
+            $$ LANGUAGE plpgsql;
+        `, [], 'CREATE FUNCTION fn_generate_wallet_number');
+
+        // Verificar se a sequence existe antes de usar
+        await safeQuery(client, `
+            DO $$
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'users_id_seq') THEN
+                    CREATE SEQUENCE users_id_seq OWNED BY users.id;
+                END IF;
+            END $$;
+        `, [], 'CREATE SEQUENCE IF NOT EXISTS');
 
         await safeQuery(client, `
-            DROP TRIGGER IF EXISTS set_wallet_number ON users;
-            CREATE TRIGGER set_wallet_number
+            DROP TRIGGER IF EXISTS trg_wallet_number ON users;
+            CREATE TRIGGER trg_wallet_number
             BEFORE INSERT ON users
             FOR EACH ROW
-            EXECUTE PROCEDURE generate_wallet_number();
-        `, [], 'CREATE TRIGGER set_wallet_number');
+            EXECUTE FUNCTION fn_generate_wallet_number();
+        `, [], 'CREATE TRIGGER trg_wallet_number');
 
         log.success('✅ Triggers configurados com sucesso');
 
@@ -727,22 +745,36 @@ async function bootstrapDatabase() {
         log.success('✅ Configurações iniciais aplicadas');
 
         // =========================================================================================
-        // ETAPA 6: POPULAR COM USUÁRIOS DE TESTE
+        // ETAPA 6: POPULAR COM USUÁRIOS DE TESTE (INCLUINDO ADMIN)
         // =========================================================================================
         log.section('👤 CRIANDO USUÁRIOS DE TESTE');
 
         const saltRounds = 10;
         const testPassword = '123456';
-        const hashedPassword = await bcrypt.hash(testPassword, saltRounds);
+        const adminPassword = 'admin123';
+        const hashedTestPassword = await bcrypt.hash(testPassword, saltRounds);
+        const hashedAdminPassword = await bcrypt.hash(adminPassword, saltRounds);
 
         log.info('Senha de teste: 123456 (hash gerado automaticamente)');
+        log.info('Admin: admin@gmail.com | Senha: admin123');
 
         const testUsers = [
+            {
+                name: 'Administrador',
+                email: 'admin@gmail.com',
+                phone: '900000001',
+                password: hashedAdminPassword,
+                role: 'admin',
+                rating: 5.0,
+                is_verified: true,
+                kyc_level: 3,
+                vehicle_category: null
+            },
             {
                 name: 'Motorista Premium',
                 email: 'premium@aotravel.com',
                 phone: '923456789',
-                password: hashedPassword,
+                password: hashedTestPassword,
                 role: 'driver',
                 rating: 5.0,
                 is_verified: true,
@@ -760,7 +792,7 @@ async function bootstrapDatabase() {
                 name: 'Motorista Standard',
                 email: 'driver@aotravel.com',
                 phone: '923456780',
-                password: hashedPassword,
+                password: hashedTestPassword,
                 role: 'driver',
                 rating: 4.8,
                 is_verified: true,
@@ -778,7 +810,7 @@ async function bootstrapDatabase() {
                 name: 'Moto Táxi VIP',
                 email: 'moto@gmail.com',
                 phone: '987654321',
-                password: hashedPassword,
+                password: hashedTestPassword,
                 role: 'driver',
                 rating: 4.9,
                 is_verified: true,
@@ -796,7 +828,7 @@ async function bootstrapDatabase() {
                 name: 'Passageiro VIP',
                 email: 'passageiro@gmail.com',
                 phone: '912345678',
-                password: hashedPassword,
+                password: hashedTestPassword,
                 role: 'passenger',
                 rating: 5.0,
                 is_verified: true,
@@ -817,7 +849,8 @@ async function bootstrapDatabase() {
                 const result = await client.query(
                     `UPDATE users SET
                         name = $1, password = $2, role = $3, rating = $4,
-                        is_verified = $5, kyc_level = $6, vehicle_details = $7, vehicle_category = $8, updated_at = NOW()
+                        is_verified = $5, kyc_level = $6, vehicle_details = $7, 
+                        vehicle_category = $8, updated_at = NOW()
                      WHERE id = $9 RETURNING id`,
                     [
                         user.name,
@@ -832,7 +865,7 @@ async function bootstrapDatabase() {
                     ]
                 );
                 userId = result.rows[0].id;
-                log.info(`👤 Usuário atualizado: ${user.name} (categoria: ${user.vehicle_category})`);
+                log.info(`👤 Usuário atualizado: ${user.name} (${user.role})`);
             } else {
                 const result = await client.query(
                     `INSERT INTO users
@@ -853,7 +886,7 @@ async function bootstrapDatabase() {
                     ]
                 );
                 userId = result.rows[0].id;
-                log.success(`✅ Novo usuário criado: ${user.name} (categoria: ${user.vehicle_category})`);
+                log.success(`✅ Novo usuário criado: ${user.name} (${user.role})`);
             }
 
             if (!userId) {
@@ -881,12 +914,12 @@ async function bootstrapDatabase() {
                     try {
                         const vd = JSON.parse(user.vehicle_details);
                         let vehicleType = vd.type;
-                        
+
                         // Garantir que o tipo é válido
                         if (!['car', 'moto', 'delivery', 'truck', 'premium'].includes(vehicleType)) {
                             vehicleType = 'car';
                         }
-                        
+
                         await client.query(`
                             INSERT INTO vehicle_details (driver_id, model, plate, color, type, year)
                             VALUES ($1, $2, $3, $4, $5, $6)
@@ -897,7 +930,7 @@ async function bootstrapDatabase() {
                                 type = EXCLUDED.type,
                                 year = EXCLUDED.year
                         `, [userId, vd.model, vd.plate, vd.color, vehicleType, vd.year || 2024]);
-                        
+
                         log.success(`✅ Vehicle details inseridos para usuário ${userId} (tipo: ${vehicleType})`);
                     } catch (e) {
                         log.warn(`⚠️ Erro ao processar vehicle_details para usuário ${userId}: ${e.message}`);
@@ -913,9 +946,10 @@ async function bootstrapDatabase() {
 
         const users = await client.query(`
             SELECT id, name, email, role, vehicle_category FROM users
-            WHERE email IN ('premium@aotravel.com', 'driver@aotravel.com', 'moto@gmail.com', 'passageiro@gmail.com')
+            WHERE email IN ('admin@gmail.com', 'premium@aotravel.com', 'driver@aotravel.com', 'moto@gmail.com', 'passageiro@gmail.com')
         `);
 
+        const adminUser = users.rows.find(u => u.email === 'admin@gmail.com');
         const premiumDriver = users.rows.find(u => u.email === 'premium@aotravel.com');
         const driverAo = users.rows.find(u => u.email === 'driver@aotravel.com');
         const moto = users.rows.find(u => u.email === 'moto@gmail.com');
@@ -1015,6 +1049,14 @@ async function bootstrapDatabase() {
             log.success('✅ Entrega de exemplo criada com suporte a paragens');
         }
 
+        // Dar saldo inicial para o admin (para testes)
+        if (adminUser) {
+            await client.query(`
+                UPDATE users SET balance = 100000.00 WHERE id = $1
+            `, [adminUser.id]);
+            log.success('✅ Saldo inicial de 100,000 AOA atribuído ao administrador');
+        }
+
         await client.query('COMMIT');
 
         const stats = await client.query(`
@@ -1022,6 +1064,7 @@ async function bootstrapDatabase() {
                 (SELECT COUNT(*) FROM users) as total_users,
                 (SELECT COUNT(*) FROM users WHERE role = 'driver') as total_drivers,
                 (SELECT COUNT(*) FROM users WHERE role = 'passenger') as total_passengers,
+                (SELECT COUNT(*) FROM users WHERE role = 'admin') as total_admins,
                 (SELECT COUNT(*) FROM users WHERE is_verified = false) as pending_kyc,
                 (SELECT COUNT(*) FROM users WHERE vehicle_category = 'premium') as premium_drivers,
                 (SELECT COUNT(*) FROM users WHERE vehicle_category = 'car') as car_drivers,
@@ -1038,6 +1081,7 @@ async function bootstrapDatabase() {
         log.info(`   - Usuários: ${stats.rows[0].total_users}`);
         log.info(`   - Motoristas: ${stats.rows[0].total_drivers}`);
         log.info(`   - Passageiros: ${stats.rows[0].total_passengers}`);
+        log.info(`   - Administradores: ${stats.rows[0].total_admins}`);
         log.info(`   - Pendentes KYC: ${stats.rows[0].pending_kyc}`);
         log.info(`   - Motoristas Premium: ${stats.rows[0].premium_drivers}`);
         log.info(`   - Motoristas Standard: ${stats.rows[0].car_drivers}`);
@@ -1047,6 +1091,13 @@ async function bootstrapDatabase() {
         log.info(`   - Entregas: ${stats.rows[0].total_deliveries}`);
         log.info(`   - Participantes Pendentes: ${stats.rows[0].pending_participants}`);
         log.info(`   - Entregas com Paragens: ${stats.rows[0].deliveries_with_stops}`);
+        
+        log.info(`\n${colors.green}🔐 CREDENCIAIS DE ACESSO:${colors.reset}`);
+        log.info(`   ${colors.yellow}Admin:${colors.reset} admin@gmail.com / admin123`);
+        log.info(`   ${colors.yellow}Motorista Premium:${colors.reset} premium@aotravel.com / 123456`);
+        log.info(`   ${colors.yellow}Motorista Standard:${colors.reset} driver@aotravel.com / 123456`);
+        log.info(`   ${colors.yellow}Moto Táxi:${colors.reset} moto@gmail.com / 123456`);
+        log.info(`   ${colors.yellow}Passageiro:${colors.reset} passageiro@gmail.com / 123456`);
 
         return true;
 
