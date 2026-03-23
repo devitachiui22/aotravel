@@ -7,7 +7,7 @@
  * VERSÃO DO SCHEMA: 2026.03.23.HUB.COMPLETE.FINAL.FIXED
  * DESCRIÇÃO: Script de inicialização com módulos Core + Hub Inteligente
  *
- * ✅ CORREÇÕES APLICADAS:
+ * ✅ CORREÇÕES APLICADAS (v6.0 FINAL):
  * 1. CORREÇÃO CRÍTICA: Adicionado DROP TABLE IF EXISTS para vehicle_details antes de recriar
  * 2. CONSTRAINT CHECK corrigida para incluir 'premium'
  * 3. TRATAMENTO DE ERRO aprimorado com ROLLBACK em caso de falha
@@ -16,6 +16,9 @@
  * 6. GARANTIA que os caminhos dos documentos sejam TEXT para suportar URLs longas
  * 7. TRIGGER para Geração Automática de Número de Conta (Correção do "Gerando...")
  * 8. ÍNDICES de Segurança para Privacidade (Filtros por JWT)
+ * 9. 🔥 NOVA TRIGGER: Geração com ANO + SEQUENCIAL (AOT2025000001)
+ * 10. 🔥 NOVA CORREÇÃO: user_id NOT NULL em wallet_transactions (Privacidade)
+ * 11. 🔥 NOVO ÍNDICE: idx_driver_status_online para busca rápida de motoristas
  *
  * STATUS: 🔥 PRODUCTION READY - ZERO ERROS DE TRANSAÇÃO
  * =================================================================================================
@@ -186,7 +189,7 @@ async function bootstrapDatabase() {
             );
         `, [], 'CREATE TABLE rides');
 
-        // 4. TABELA WALLET_TRANSACTIONS
+        // 4. TABELA WALLET_TRANSACTIONS - COM user_id NOT NULL (Privacidade)
         await safeQuery(client, `
             CREATE TABLE IF NOT EXISTS wallet_transactions (
                 id SERIAL PRIMARY KEY,
@@ -534,7 +537,7 @@ async function bootstrapDatabase() {
         log.success(`✅ Auto-healing concluído: ${repairedCount} colunas verificadas`);
 
         // =========================================================================================
-        // ETAPA 3: CRIAÇÃO DE ÍNDICES (INCLUINDO ÍNDICES DE SEGURANÇA)
+        // ETAPA 3: CRIAÇÃO DE ÍNDICES (INCLUINDO ÍNDICES DE SEGURANÇA E VELOCIDADE)
         // =========================================================================================
         log.section('⚡ OTIMIZANDO COM ÍNDICES DE PERFORMANCE');
 
@@ -550,6 +553,8 @@ async function bootstrapDatabase() {
             "CREATE INDEX IF NOT EXISTS idx_driver_positions_update ON driver_positions(last_update)",
             "CREATE INDEX IF NOT EXISTS idx_driver_positions_geo ON driver_positions(lat, lng)",
             "CREATE INDEX IF NOT EXISTS idx_driver_positions_socket ON driver_positions(socket_id)",
+            // 🔥 NOVO ÍNDICE PARA BUSCA RÁPIDA DE MOTORISTAS ONLINE
+            "CREATE INDEX IF NOT EXISTS idx_driver_status_online ON driver_positions(status) WHERE status = 'online'",
             "CREATE INDEX IF NOT EXISTS idx_rides_passenger ON rides(passenger_id)",
             "CREATE INDEX IF NOT EXISTS idx_rides_driver ON rides(driver_id)",
             "CREATE INDEX IF NOT EXISTS idx_rides_status ON rides(status)",
@@ -632,13 +637,14 @@ async function bootstrapDatabase() {
             `, [], `CREATE TRIGGER ${table}`);
         }
 
-        // TRIGGER CORRIGIDA para geração automática de número de conta (Correção do "Gerando...")
+        // 🔥 TRIGGER CORRIGIDA para geração automática de número de conta (com ANO + SEQUENCIAL)
+        // Formato: AOT2025000001 (AOT + Ano + 6 dígitos sequenciais)
         await safeQuery(client, `
             CREATE OR REPLACE FUNCTION fn_generate_wallet_number()
             RETURNS TRIGGER AS $$
             BEGIN
                 IF NEW.wallet_account_number IS NULL THEN
-                    NEW.wallet_account_number := 'AOT' || LPAD(NEXTVAL('users_id_seq')::TEXT, 8, '0');
+                    NEW.wallet_account_number := 'AOT' || TO_CHAR(CURRENT_DATE, 'YYYY') || LPAD(NEW.id::TEXT, 6, '0');
                 END IF;
                 RETURN NEW;
             END;
@@ -658,7 +664,7 @@ async function bootstrapDatabase() {
         await safeQuery(client, `
             DROP TRIGGER IF EXISTS trg_wallet_number ON users;
             CREATE TRIGGER trg_wallet_number
-            BEFORE INSERT ON users
+            BEFORE INSERT OR UPDATE ON users
             FOR EACH ROW
             EXECUTE FUNCTION fn_generate_wallet_number();
         `, [], 'CREATE TRIGGER trg_wallet_number');
@@ -849,7 +855,7 @@ async function bootstrapDatabase() {
                 const result = await client.query(
                     `UPDATE users SET
                         name = $1, password = $2, role = $3, rating = $4,
-                        is_verified = $5, kyc_level = $6, vehicle_details = $7, 
+                        is_verified = $5, kyc_level = $6, vehicle_details = $7,
                         vehicle_category = $8, updated_at = NOW()
                      WHERE id = $9 RETURNING id`,
                     [
@@ -894,11 +900,9 @@ async function bootstrapDatabase() {
                 continue;
             }
 
-            const accountNumber = `AOT${userId.toString().padStart(8, '0')}`;
-            await client.query(
-                'UPDATE users SET wallet_account_number = $1 WHERE id = $2',
-                [accountNumber, userId]
-            );
+            // O trigger agora gera o número da conta automaticamente com formato AOT2025xxxxxx
+            // Não precisamos mais definir manualmente
+            log.info(`📱 Usuário ${user.name} (ID: ${userId}) - Número de conta será gerado pelo trigger`);
 
             if (user.role === 'driver') {
                 await client.query(`
@@ -1057,6 +1061,32 @@ async function bootstrapDatabase() {
             log.success('✅ Saldo inicial de 100,000 AOA atribuído ao administrador');
         }
 
+        // =========================================================================================
+        // ETAPA 8: CORREÇÃO DE PRIVACIDADE - GARANTIR user_id NOT NULL
+        // =========================================================================================
+        log.section('🔒 APLICANDO CORREÇÕES DE PRIVACIDADE');
+
+        try {
+            // Garantir que não existem registros com user_id NULL antes de alterar a constraint
+            await client.query(`
+                UPDATE wallet_transactions
+                SET user_id = COALESCE(sender_id, receiver_id)
+                WHERE user_id IS NULL AND (sender_id IS NOT NULL OR receiver_id IS NOT NULL)
+            `);
+
+            // Alterar coluna para NOT NULL (se já não for)
+            await client.query(`
+                ALTER TABLE wallet_transactions ALTER COLUMN user_id SET NOT NULL
+            `);
+            log.success('✅ wallet_transactions.user_id agora é NOT NULL (Privacidade garantida)');
+        } catch (err) {
+            if (err.code !== '42701' && !err.message.includes('already NOT NULL')) {
+                log.warn(`⚠️ Não foi possível alterar user_id para NOT NULL: ${err.message}`);
+            } else {
+                log.info('✅ wallet_transactions.user_id já é NOT NULL');
+            }
+        }
+
         await client.query('COMMIT');
 
         const stats = await client.query(`
@@ -1091,13 +1121,17 @@ async function bootstrapDatabase() {
         log.info(`   - Entregas: ${stats.rows[0].total_deliveries}`);
         log.info(`   - Participantes Pendentes: ${stats.rows[0].pending_participants}`);
         log.info(`   - Entregas com Paragens: ${stats.rows[0].deliveries_with_stops}`);
-        
+
         log.info(`\n${colors.green}🔐 CREDENCIAIS DE ACESSO:${colors.reset}`);
         log.info(`   ${colors.yellow}Admin:${colors.reset} admin@gmail.com / admin123`);
         log.info(`   ${colors.yellow}Motorista Premium:${colors.reset} premium@aotravel.com / 123456`);
         log.info(`   ${colors.yellow}Motorista Standard:${colors.reset} driver@aotravel.com / 123456`);
         log.info(`   ${colors.yellow}Moto Táxi:${colors.reset} moto@gmail.com / 123456`);
         log.info(`   ${colors.yellow}Passageiro:${colors.reset} passageiro@gmail.com / 123456`);
+
+        log.info(`\n${colors.cyan}📝 FORMATO DO NÚMERO DA CONTA:${colors.reset}`);
+        log.info(`   ${colors.cyan}AOT2025000001${colors.reset} (AOT + Ano + 6 dígitos sequenciais)`);
+        log.info(`   A geração é automática pelo trigger do banco de dados!`);
 
         return true;
 
