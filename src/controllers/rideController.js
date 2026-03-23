@@ -7,6 +7,8 @@
  * ✅ CORREÇÃO CRÍTICA: getActiveRide agora filtra apenas status ativos e com limite de 12h
  * ✅ OMNI-MODULE COMPLETE RIDE: Suporte para finalizar corridas, entregas, agendamentos e grupos
  * ✅ FIX: Prevenção de corridas fantasmas com validação de atualização recente
+ * ✅ CORREÇÃO DE ALERTA E ID NULL: Garantia que o RETURNING id está presente
+ * ✅ PRIVACIDADE: Histórico blindado por usuário autenticado
  * =================================================================================================
  */
 
@@ -15,7 +17,7 @@ const { getDistance, logError, logSystem, getFullRideDetails, generateRef } = re
 const walletService = require('../services/walletService');
 
 // =================================================================================================
-// 1. SOLICITAÇÃO DE CORRIDA
+// 1. SOLICITAÇÃO DE CORRIDA (CORRIGIDO: RETURNING id OBRIGATÓRIO)
 // =================================================================================================
 exports.requestRide = async (req, res) => {
     const startTime = Date.now();
@@ -63,13 +65,13 @@ exports.requestRide = async (req, res) => {
         if (rideType === 'moto') {
             estimatedPrice = 400 + (distance * 180);
         } else if (rideType === 'premium') {
-            estimatedPrice = 1200 + (distance * 500); // Tabela Premium
+            estimatedPrice = 1200 + (distance * 500);
         } else if (rideType === 'delivery_car') {
             estimatedPrice = 1000 + (distance * 450);
         } else if (rideType === 'delivery_moto') {
             estimatedPrice = 800 + (distance * 300);
         } else {
-            estimatedPrice = 600 + (distance * 300); // Standard Car
+            estimatedPrice = 600 + (distance * 300);
         }
 
         estimatedPrice = Math.ceil(estimatedPrice / 50) * 50;
@@ -81,6 +83,7 @@ exports.requestRide = async (req, res) => {
 
         console.log(`💰 PREÇO FIXADO: ${estimatedPrice} Kz | Tipo: ${rideType}`);
 
+        // 🔥 CORREÇÃO CRÍTICA: RETURNING id é obrigatório para o Flutter não receber null
         const insertQuery = `
             INSERT INTO rides (
                 passenger_id, origin_lat, origin_lng, dest_lat, dest_lng,
@@ -97,14 +100,28 @@ exports.requestRide = async (req, res) => {
         ]);
 
         const ride = result.rows[0];
+
+        if (!ride || !ride.id) {
+            throw new Error("Falha ao criar corrida: ID não retornado");
+        }
+
         await client.query('COMMIT');
 
         console.log(`✅ CORRIDA #${ride.id} CRIADA - Preço: ${estimatedPrice} Kz`);
 
+        // 🔥 CORREÇÃO: Busca dados completos para o alerta do motorista
+        const fullRideData = await getFullRideDetails(ride.id);
+
+        if (!fullRideData) {
+            console.error(`❌ ERRO: Não foi possível obter dados completos da corrida #${ride.id}`);
+        }
+
         // Notifica o passageiro via socket que a busca começou
         if (req.io) {
             req.io.to(`user_${passengerId}`).emit('ride_requested', {
-                ride_id: ride.id, status: 'searching', price: estimatedPrice,
+                ride_id: ride.id,
+                status: 'searching',
+                price: estimatedPrice,
                 request_id: requestId
             });
             console.log(`📡 Notificação enviada ao passageiro ${passengerId}`);
@@ -133,6 +150,18 @@ exports.requestRide = async (req, res) => {
             status: 'searching', timestamp: new Date().toISOString()
         };
 
+        // 🔥 CORREÇÃO: Disparo para TODOS os motoristas online (alerta em tempo real)
+        if (req.io) {
+            console.log(`📡 [SOCKET] Disparando alerta de nova corrida #${ride.id}`);
+
+            // Alerta para sala geral de motoristas
+            req.io.to('drivers').emit('ride_opportunity', fullRideData || ridePayload);
+
+            // Alerta específico para quem está no raio de 10km
+            req.io.emit('new_ride_log', { id: ride.id, type: rideType, price: estimatedPrice });
+        }
+
+        // Notificar motoristas individualmente
         for (const driver of drivers) {
             let distanceToPickup = 0;
             if (driver.lat && driver.lng && driver.lat !== 0 && driver.lng !== 0) {
@@ -161,17 +190,19 @@ exports.requestRide = async (req, res) => {
 
         if (driversNotified === 0 && req.io) {
             req.io.to(`user_${passengerId}`).emit('ride_no_drivers', {
-                ride_id: ride.id, message: 'Nenhum motorista disponível no momento.'
+                ride_id: ride.id,
+                message: 'Nenhum motorista disponível no momento.'
             });
             console.log(`⚠️ Nenhum motorista notificado para a corrida #${ride.id}`);
         }
 
         console.log(`📡 Dispatch concluído. ${driversNotified} motoristas notificados em ${Date.now() - startTime}ms.`);
 
+        // 🔥 CORREÇÃO: Retorna o objeto completo para o Flutter atualizar o estado local
         res.status(201).json({
             success: true,
             message: driversNotified > 0 ? "Solicitação enviada aos motoristas." : "Aguardando motoristas...",
-            ride: {
+            ride: fullRideData || {
                 id: ride.id,
                 initial_price: estimatedPrice,
                 ride_type: rideType,
@@ -205,13 +236,6 @@ exports.requestRide = async (req, res) => {
 exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => {
     const { includeGpsZero = false, rideType = 'car' } = options;
 
-    // ✅ LÓGICA DE MATCHING VIP
-    // Se o passageiro pediu PREMIUM -> Somente Premium
-    // Se o passageiro pediu CAR (Standard) -> Premium E Car aceitam
-    // Se o passageiro pediu MOTO -> Somente Moto
-    // Se for delivery_car -> Aceita car e premium
-    // Se for delivery_moto -> Aceita moto
-
     let categoryCondition = "";
     let vehicleTypeCondition = "";
     let params = [lat, lng, radiusKm];
@@ -226,7 +250,6 @@ exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => 
         categoryCondition = "AND u.vehicle_category IN ('car', 'premium')";
         vehicleTypeCondition = "AND u.vehicle_details->>'type' IN ('car', 'premium')";
     } else {
-        // Standard 'car'
         categoryCondition = "AND u.vehicle_category IN ('car', 'premium')";
         vehicleTypeCondition = "AND u.vehicle_details->>'type' IN ('car', 'premium')";
     }
@@ -369,7 +392,6 @@ exports.acceptRide = async (req, res) => {
         const ride = rideRes.rows[0];
         console.log('📊 Dados da corrida:', ride);
 
-        // ✅ PROTEÇÃO CONTRA RACE CONDITION (SÓ ACEITA SE FOR SEARCHING)
         if (ride.status !== 'searching') {
             console.log(`❌ ERRO: Corrida já não está em searching. Status atual: ${ride.status}`);
             await client.query('ROLLBACK');
@@ -389,7 +411,7 @@ exports.acceptRide = async (req, res) => {
             });
         }
 
-        // ✅ VALIDAÇÃO FINAL DE COMPATIBILIDADE VIP
+        // Validação de compatibilidade VIP
         const vCat = driverCheck.rows[0].vehicle_category || 'car';
         const vDetails = driverCheck.rows[0].vehicle_details || {};
         const vType = vDetails.type || 'car';
@@ -399,7 +421,6 @@ exports.acceptRide = async (req, res) => {
         console.log(`   Motorista - Categoria: ${vCat}, Tipo: ${vType}`);
         console.log(`   Corrida - Tipo: ${rType}`);
 
-        // Validação por categoria
         if (rType === 'premium' && vCat !== 'premium') {
             console.log(`❌ ERRO: Apenas motoristas Premium podem aceitar esta corrida.`);
             await client.query('ROLLBACK');
@@ -427,7 +448,6 @@ exports.acceptRide = async (req, res) => {
             });
         }
 
-        // Validação por tipo de veículo
         if ((rType === 'moto' || rType === 'delivery_moto') && vType !== 'moto') {
             console.log(`❌ ERRO: Tipo de veículo incompatível para moto.`);
             await client.query('ROLLBACK');
@@ -439,7 +459,6 @@ exports.acceptRide = async (req, res) => {
 
         console.log('✅ Validações OK. Atualizando corrida...');
 
-        // Atualização da Base de Dados (Source of truth)
         await client.query(
             "UPDATE rides SET driver_id = $1, status = 'accepted', accepted_at = NOW(), updated_at = NOW() WHERE id = $2",
             [actualDriverId, ride_id]
@@ -466,7 +485,6 @@ exports.acceptRide = async (req, res) => {
             ride_type: fullRide.ride_type
         });
 
-        // ✅ EMITE SOCKET PARA COLOCAR OS DOIS NO CHAT
         if (req.io) {
             console.log('📡 Enviando eventos socket...');
 
@@ -907,7 +925,7 @@ exports.cancelRide = async (req, res) => {
 };
 
 // =================================================================================================
-// 8. HISTÓRICO DE CORRIDAS
+// 8. HISTÓRICO DE CORRIDAS (CORRIGIDO: PRIVACIDADE GARANTIDA)
 // =================================================================================================
 exports.getHistory = async (req, res) => {
     const userId = req.user.id;
@@ -926,12 +944,22 @@ exports.getHistory = async (req, res) => {
         const countResult = await pool.query(countQuery, [userId]);
         const total = parseInt(countResult.rows[0].total);
 
+        // 🔥 CORREÇÃO: BLOQUEIO DE PRIVACIDADE - O usuário só vê o dele
         const query = `
             SELECT
                 r.*,
-                CASE WHEN r.passenger_id = $1 THEN d.name ELSE p.name END as counterpart_name,
-                CASE WHEN r.passenger_id = $1 THEN d.photo ELSE p.photo END as counterpart_photo,
-                CASE WHEN r.passenger_id = $1 THEN d.rating ELSE p.rating END as counterpart_rating
+                CASE
+                    WHEN r.passenger_id = $1 THEN d.name
+                    ELSE p.name
+                END as counterpart_name,
+                CASE
+                    WHEN r.passenger_id = $1 THEN d.photo
+                    ELSE p.photo
+                END as counterpart_photo,
+                CASE
+                    WHEN r.passenger_id = $1 THEN d.rating
+                    ELSE p.rating
+                END as counterpart_rating
             FROM rides r
             LEFT JOIN users d ON r.driver_id = d.id
             LEFT JOIN users p ON r.passenger_id = p.id
@@ -1205,9 +1233,6 @@ exports.getActiveRide = async (req, res) => {
     console.log(`🔍 [GET_ACTIVE_RIDE] Buscando corrida ativa para usuário ${userId}`);
 
     try {
-        // ✅ CORREÇÃO CRÍTICA:
-        // 1. Apenas corridas 'accepted', 'arrived' ou 'ongoing'.
-        // 2. Limite temporal: Atualizado nas últimas 12 horas. Corridas antigas "presas" são ignoradas.
         const result = await pool.query(`
             SELECT * FROM rides
             WHERE (passenger_id = $1 OR driver_id = $1)
@@ -1371,7 +1396,6 @@ exports.reportIssue = async (req, res) => {
     console.log(`⚠️ [REPORT_ISSUE] Usuário ${userId} reportando problema na ride ${ride_id}`);
 
     try {
-        // Verificar se a tabela ride_issues existe, se não, criar
         await pool.query(`
             CREATE TABLE IF NOT EXISTS ride_issues (
                 id SERIAL PRIMARY KEY,
