@@ -6,6 +6,7 @@
  * ✅ FIX RACE CONDITION E CATEGORIAS (Premium, Standard, Moto)
  * ✅ CORREÇÃO CRÍTICA: getActiveRide agora filtra apenas status ativos e com limite de 12h
  * ✅ OMNI-MODULE COMPLETE RIDE: Suporte para finalizar corridas, entregas, agendamentos e grupos
+ * ✅ FIX: Prevenção de corridas fantasmas com validação de atualização recente
  * =================================================================================================
  */
 
@@ -1370,6 +1371,19 @@ exports.reportIssue = async (req, res) => {
     console.log(`⚠️ [REPORT_ISSUE] Usuário ${userId} reportando problema na ride ${ride_id}`);
 
     try {
+        // Verificar se a tabela ride_issues existe, se não, criar
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS ride_issues (
+                id SERIAL PRIMARY KEY,
+                ride_id INTEGER REFERENCES rides(id) ON DELETE CASCADE,
+                user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                issue_type VARCHAR(50),
+                description TEXT,
+                status VARCHAR(20) DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
         await pool.query(`
             INSERT INTO ride_issues (ride_id, user_id, issue_type, description, created_at)
             VALUES ($1, $2, $3, $4, NOW())
@@ -1457,7 +1471,7 @@ exports.updateRide = async (req, res) => {
         let paramCounter = 1;
 
         Object.entries(updates).forEach(([key, value]) => {
-            if (value !== undefined) {
+            if (value !== undefined && key !== 'id') {
                 fields.push(`${key} = $${paramCounter}`);
                 values.push(value);
                 paramCounter++;
@@ -1509,6 +1523,46 @@ exports.deleteRide = async (req, res) => {
     } catch (e) {
         console.error('❌ ERRO AO DELETAR CORRIDA:', e);
         res.status(500).json({ error: "Erro ao deletar corrida." });
+    }
+};
+
+// =================================================================================================
+// 22. CANCELAR CORRIDA POR ADMIN
+// =================================================================================================
+exports.adminCancelRide = async (req, res) => {
+    const { id, reason } = req.body;
+
+    console.log(`🚫 [ADMIN_CANCEL_RIDE] Admin cancelando ride ${id}`);
+
+    if (req.user.role !== 'admin') {
+        return res.status(403).json({ error: "Acesso negado." });
+    }
+
+    try {
+        const result = await pool.query(`
+            UPDATE rides SET
+                status = 'cancelled',
+                cancelled_at = NOW(),
+                cancelled_by = 'admin',
+                cancellation_reason = $1,
+                updated_at = NOW()
+            WHERE id = $2
+            RETURNING *
+        `, [reason || 'Cancelado pelo administrador', id]);
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: "Corrida não encontrada." });
+        }
+
+        res.json({
+            success: true,
+            message: "Corrida cancelada pelo administrador.",
+            ride: result.rows[0]
+        });
+
+    } catch (e) {
+        console.error('❌ ERRO AO CANCELAR CORRIDA POR ADMIN:', e);
+        res.status(500).json({ error: "Erro ao cancelar corrida." });
     }
 };
 
