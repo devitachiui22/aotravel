@@ -1,12 +1,12 @@
 /**
  * =================================================================================================
- * 🏦 AOTRAVEL SERVER PRO - WALLET API CONTROLLER (TITANIUM ACID EDITION v8.0)
+ * 🏦 AOTRAVEL SERVER PRO - WALLET API CONTROLLER (TITANIUM ACID EDITION v8.1)
  * =================================================================================================
  *
  * ARQUIVO: src/controllers/walletController.js
  * DESCRIÇÃO: Controlador REST para operações financeiras com garantias ACID completas.
  *
- * ✅ CORREÇÕES APLICADAS (OMNI-IDENTIFIER v8.0):
+ * ✅ CORREÇÕES APLICADAS (OMNI-IDENTIFIER v8.1):
  * 1. O `internalTransfer` agora resolve: Conta AOT (com/sem espaço), IDs puros (QR Code), Emails e Telefones.
  * 2. Sanidade de Strings: `.replace(/\s/g, '').toUpperCase()` garante que 'AOT 000 001' seja lido corretamente.
  * 3. Detecção inteligente de ID numérico para QR Codes (ex: "7" vindo de escaneamento).
@@ -15,6 +15,8 @@
  * 6. Mensagens de erro mais descritivas com o identificador usado.
  * 7. FIX GERANDO...: Fallback runtime para número de conta se o trigger falhar.
  * 8. FIX PIN: Suporte a old_pin para alteração de PIN existente.
+ * 9. FIX TRANSACTIONS: Correção na query de transações para mostrar todas as transações do usuário.
+ * 10. FIX PIN COMPARE: Garantia que PIN é tratado como string no bcrypt.compare.
  *
  * STATUS: PRODUCTION READY - FULL VERSION - OMNI-IDENTIFIER ENABLED
  * =================================================================================================
@@ -41,7 +43,7 @@ async function verifyPinInternal(userId, pinInput, client) {
 
     if (!storedHash) throw new Error("PIN de transação não configurado. Defina um PIN em Configurações.");
 
-    const match = await bcrypt.compare(pinInput, storedHash);
+    const match = await bcrypt.compare(pinInput.toString(), storedHash);
     if (!match) throw new Error("PIN incorreto.");
 
     return true;
@@ -92,12 +94,13 @@ exports.getWalletData = async (req, res) => {
         if (userRes.rows.length === 0) return res.status(404).json({ error: "Carteira não encontrada." });
         const userData = userRes.rows[0];
 
+        // 🔥 CORREÇÃO: Mostrar todas as transações do usuário
         const txRes = await pool.query(
             `SELECT t.*, s.name as sender_name, r.name as receiver_name
              FROM wallet_transactions t
              LEFT JOIN users s ON t.sender_id = s.id
              LEFT JOIN users r ON t.receiver_id = r.id
-             WHERE t.user_id = $1 OR t.sender_id = $1 OR t.receiver_id = $1
+             WHERE t.user_id = $1
              ORDER BY t.created_at DESC LIMIT 20`,
             [userId]
         );
@@ -467,7 +470,7 @@ exports.setPin = async (req, res) => {
     const { pin, old_pin } = req.body;
     const userId = req.user.id;
 
-    if (!pin || pin.length !== 4 || isNaN(pin)) {
+    if (!pin || pin.toString().length !== 4 || isNaN(pin)) {
         return res.status(400).json({ error: "PIN deve conter 4 dígitos numéricos." });
     }
 
@@ -482,11 +485,11 @@ exports.setPin = async (req, res) => {
 
         if (currentHash) {
             if (!old_pin) throw new Error("Informe o PIN atual para alterá-lo.");
-            const match = await bcrypt.compare(old_pin, currentHash);
+            const match = await bcrypt.compare(old_pin.toString(), currentHash);
             if (!match) throw new Error("O PIN atual está incorreto.");
         }
 
-        const newHash = await bcrypt.hash(pin, 10);
+        const newHash = await bcrypt.hash(pin.toString(), 10);
         await client.query(
             "UPDATE users SET wallet_pin_hash = $1, updated_at = NOW() WHERE id = $2",
             [newHash, userId]
@@ -529,7 +532,7 @@ exports.addAccount = async (req, res) => {
     const holderName = req.body.holder_name || req.body.holderName;
 
     if (!provider || !accountNumber || !holderName) {
-        return res.status(400).json({ error: "Dados incompletos." });
+        return res.status(400).json({ error: "Dados incompletos. Forneça: bank_name, iban, holder_name." });
     }
 
     const client = await pool.connect();
@@ -577,8 +580,8 @@ exports.deleteAccount = async (req, res) => {
 
 exports.addCard = async (req, res) => {
     const { number, expiry, type, alias } = req.body;
-    if (!number || number.length < 13) {
-        return res.status(400).json({ error: "Cartão inválido." });
+    if (!number || number.toString().length < 13) {
+        return res.status(400).json({ error: "Cartão inválido. Número deve ter pelo menos 13 dígitos." });
     }
 
     const client = await pool.connect();
@@ -592,9 +595,9 @@ exports.addCard = async (req, res) => {
             throw new Error("Limite de cartões atingido (10).");
         }
 
-        const lastFour = number.slice(-4);
+        const lastFour = number.toString().slice(-4);
         const token = crypto.createHash('sha256')
-            .update(number + req.user.id + Date.now())
+            .update(number.toString() + req.user.id + Date.now())
             .digest('hex');
 
         await client.query(
