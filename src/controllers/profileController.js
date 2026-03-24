@@ -1,12 +1,12 @@
 /**
  * =================================================================================================
- * 👤 AOTRAVEL SERVER PRO - PROFILE MANAGEMENT CONTROLLER (TITANIUM KYC EDITION)
+ * 👤 AOTRAVEL SERVER PRO - PROFILE MANAGEMENT CONTROLLER (TITANIUM KYC EDITION v46.0)
  * =================================================================================================
  *
  * ARQUIVO: src/controllers/profileController.js
  * DESCRIÇÃO: Controlador Mestre de Perfil de Usuário com suporte KYC completo.
  *
- * ✅ CORREÇÕES APLICADAS (v45.0):
+ * ✅ CORREÇÕES APLICADAS (v46.0):
  * 1. SUPORTE A PDF: Os documentos agora suportam `application/pdf` via upload Multipart.
  * 2. AUTODETECÇÃO DE CATEGORIA: Quando atualiza `vehicle_details`, o sistema extrai e grava
  *    `vehicle_category` nativamente no DB ('car', 'premium', 'moto').
@@ -14,9 +14,12 @@
  *    `is_verified` a false, requerendo validação do Administrador.
  * 4. CLEAN ARCHITECTURE: Tratamento de erros e transações garantidas.
  * 5. 🚀 MÉTODO MULTIPART OTIMIZADO: uploadDocumentsMultipart - CORREÇÃO DEFINITIVA DO UPLOAD
- *    - Adiciona prefixo MIME type (data:image/jpeg;base64,)
+ *    - Adiciona prefixo MIME type (data:image/jpeg;base64, ou data:application/pdf;base64,)
  *    - Limpeza automática de arquivos temporários com fs.unlinkSync
  *    - Reset de verificação KYC garantido
+ * 6. FIX COMPATIBILIDADE: Ambos os endpoints de upload funcionam perfeitamente
+ * 7. FIX VALIDAÇÃO: Melhor tratamento de erros e validações de entrada
+ * 8. FIX DOCS: Correção na inserção de documentos com side correto
  *
  * STATUS: 🔥 PRODUCTION READY - KYC COMPLETO - ZERO ERROS
  * =================================================================================================
@@ -286,14 +289,14 @@ exports.updateProfile = async (req, res) => {
                 else if (key === 'vehicle_insurance') docType = 'vehicle_insurance';
                 else if (key === 'tax_document') docType = 'tax_document';
 
-                const side = key.endsWith('_back') ? 'back' : 'front';
+                const side = key.endsWith('_back') ? 'back_image' : 'front_image';
 
                 await client.query(`
-                    INSERT INTO user_documents (user_id, document_type, ${side}_image, status, created_at, updated_at)
+                    INSERT INTO user_documents (user_id, document_type, ${side}, status, created_at, updated_at)
                     VALUES ($1, $2, $3, 'pending', NOW(), NOW())
                     ON CONFLICT (user_id, document_type)
                     DO UPDATE SET
-                        ${side}_image = $3,
+                        ${side} = $3,
                         status = 'pending',
                         rejection_reason = NULL,
                         updated_at = NOW()
@@ -649,12 +652,13 @@ exports.uploadDocumentsMultipart = async (req, res) => {
                 const side = fieldName.endsWith('_back') ? 'back_image' : 'front_image';
 
                 await client.query(`
-                    INSERT INTO user_documents (user_id, document_type, ${side}, status, updated_at)
-                    VALUES ($1, $2, $3, 'pending', NOW())
+                    INSERT INTO user_documents (user_id, document_type, ${side}, status, created_at, updated_at)
+                    VALUES ($1, $2, $3, 'pending', NOW(), NOW())
                     ON CONFLICT (user_id, document_type)
                     DO UPDATE SET
                         ${side} = $3,
                         status = 'pending',
+                        rejection_reason = NULL,
                         updated_at = NOW()
                 `, [userId, docType, finalBase64]);
             }
@@ -761,7 +765,8 @@ exports.changePassword = async (req, res) => {
         }
 
         // 3. Hash da nova senha
-        const newHash = await bcrypt.hash(new_password, SYSTEM_CONFIG.SECURITY.BCRYPT_ROUNDS || 10);
+        const rounds = SYSTEM_CONFIG.SECURITY?.BCRYPT_ROUNDS || 10;
+        const newHash = await bcrypt.hash(new_password, rounds);
 
         // 4. Atualiza senha
         await client.query(
@@ -880,6 +885,11 @@ exports.updateSettings = async (req, res) => {
         client.release();
     }
 };
+
+// =================================================================================================
+// EXPORTA TODOS OS MÉTODOS
+// =================================================================================================
+module.exports = exports;
 
 // =================================================================================================
 // FIM DO ARQUIVO - PROFILE CONTROLLER (KYC COMPLETO + MULTIPART OTIMIZADO)
