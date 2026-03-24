@@ -4,13 +4,16 @@
  * =================================================================================================
  *
  * ✅ CORREÇÕES APLICADAS:
- * 1. ✅ Query SQL corrigida - coluna `last_login` existe
- * 2. ✅ Tratamento de erros completo
- * 3. ✅ Suporte a bcrypt e migração de senhas
- * 4. ✅ Criação de sessão automática
- * 5. ✅ Logs detalhados
- * 6. ✅ Inclusão de `vehicle_details` no signup
- * 7. ✅ Verificação KYC no login e sessão
+ * 1. formatFileUrl importado para garantir URLs absolutas no login e sessão.
+ * 2. getUserFullDetails(id, req) usado no checkSession substituindo query crua,
+ *    garantindo injeção de host na URL perfeitamente.
+ * 3. Query SQL corrigida - todas as colunas existentes no banco.
+ * 4. Tratamento de erros completo com logs detalhados.
+ * 5. Suporte a bcrypt e migração de senhas.
+ * 6. Criação de sessão automática.
+ * 7. Inclusão de vehicle_details no signup.
+ * 8. Verificação KYC completa no login e sessão.
+ * 9. Formatação de URLs de imagens e documentos no login e sessão.
  *
  * STATUS: 🔥 PRODUCTION READY - KYC COMPLETO - ZERO ERROS
  * =================================================================================================
@@ -19,6 +22,7 @@
 const pool = require('../config/db');
 const bcrypt = require('bcrypt');
 const crypto = require('crypto');
+const { logSystem, logError, formatFileUrl, getUserFullDetails } = require('../utils/helpers');
 
 const colors = {
     reset: '\x1b[0m',
@@ -44,7 +48,7 @@ function log(type, message, data = null) {
 }
 
 // =================================================================================================
-// 1. LOGIN - COMPLETAMENTE CORRIGIDO
+// 1. LOGIN - COMPLETAMENTE CORRIGIDO COM FORMATÇÃO DE URLS
 // =================================================================================================
 
 exports.login = async (req, res) => {
@@ -63,7 +67,7 @@ exports.login = async (req, res) => {
 
         const cleanEmail = email.toLowerCase().trim();
 
-        // ✅ QUERY CORRIGIDA - com todas as colunas necessárias (incluindo vehicle_details)
+        // ✅ QUERY CORRIGIDA - com todas as colunas necessárias
         const userResult = await pool.query(
             `SELECT
                 id,
@@ -137,7 +141,6 @@ exports.login = async (req, res) => {
         }
 
         if (!passwordValid) {
-            const crypto = require('crypto');
             const hash = crypto.createHash('sha256').update(password).digest('hex');
             if (user.password === hash) {
                 passwordValid = true;
@@ -185,6 +188,7 @@ exports.login = async (req, res) => {
             [user.id]
         );
 
+        // Remover senha antes de retornar
         delete user.password;
 
         const transactions = await pool.query(
@@ -228,12 +232,13 @@ exports.login = async (req, res) => {
             }
         }
 
+        // ✅ APLICANDO FORMATAÇÃO GLOBAL ABSOLUTA NAS URLS (Com o objeto 'req')
         const response = {
             id: user.id,
             name: user.name,
             email: user.email,
             role: user.role,
-            photo: user.photo || '',
+            photo: formatFileUrl(user.photo, req) || '',
             phone: user.phone || '',
             is_verified: user.is_verified || false,
             rating: parseFloat(user.rating) || 5.0,
@@ -245,15 +250,15 @@ exports.login = async (req, res) => {
             kyc_level: user.kyc_level || 1,
             has_pin: user.has_pin || false,
 
-            // ✅ DADOS KYC
+            // ✅ DADOS KYC COM URLS FORMATADAS
             vehicle_details: vehicleDetails,
-            bi_front: user.bi_front,
-            bi_back: user.bi_back,
-            driving_license_front: user.driving_license_front,
-            driving_license_back: user.driving_license_back,
-            vehicle_title: user.vehicle_title,
-            vehicle_insurance: user.vehicle_insurance,
-            tax_document: user.tax_document,
+            bi_front: formatFileUrl(user.bi_front, req),
+            bi_back: formatFileUrl(user.bi_back, req),
+            driving_license_front: formatFileUrl(user.driving_license_front, req),
+            driving_license_back: formatFileUrl(user.driving_license_back, req),
+            vehicle_title: formatFileUrl(user.vehicle_title, req),
+            vehicle_insurance: formatFileUrl(user.vehicle_insurance, req),
+            tax_document: formatFileUrl(user.tax_document, req),
 
             created_at: user.created_at,
             last_login: user.last_login,
@@ -276,7 +281,7 @@ exports.login = async (req, res) => {
         res.status(500).json({
             success: false,
             error: "Erro interno no servidor de autenticação",
-            details: error.message
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
 };
@@ -470,7 +475,7 @@ exports.logout = async (req, res) => {
 };
 
 // =================================================================================================
-// 4. CHECK SESSION
+// 4. CHECK SESSION - USANDO getUserFullDetails COM FORMATÇÃO DE URLS
 // =================================================================================================
 
 exports.checkSession = async (req, res) => {
@@ -479,41 +484,20 @@ exports.checkSession = async (req, res) => {
 
         log('info', `Verificando sessão: ${userId}`);
 
-        const userResult = await pool.query(
-            `SELECT
-                id, name, email, role, photo, phone, is_verified,
-                balance, wallet_account_number, wallet_status,
-                rating, bonus_points, account_tier, kyc_level,
-                vehicle_details,
-                bi_front, bi_back,
-                driving_license_front, driving_license_back,
-                vehicle_title, vehicle_insurance, tax_document,
-                (wallet_pin_hash IS NOT NULL) as has_pin,
-                created_at, last_login, last_seen
-            FROM users
-            WHERE id = $1`,
-            [userId]
-        );
+        // ✅ CORREÇÃO TÁTICA E LIMPA: O Helper já extrai, parseia o JSON de vehicle_details
+        // e APENAS agora, injetando o `req`, ele formata TODAS as URLs perfeitamente
+        const user = await getUserFullDetails(userId, req);
 
-        if (userResult.rows.length === 0) {
+        if (!user) {
             log('warning', `Usuário não encontrado: ${userId}`);
             return res.status(404).json({ error: "Usuário não encontrado" });
         }
 
-        const user = userResult.rows[0];
+        // Proteção extra - remover dados sensíveis
+        delete user.password;
+        delete user.wallet_pin_hash;
 
-        // ✅ PARSE DOS DOCUMENTOS KYC
-        let vehicleDetails = null;
-        if (user.vehicle_details) {
-            try {
-                vehicleDetails = typeof user.vehicle_details === 'string'
-                    ? JSON.parse(user.vehicle_details)
-                    : user.vehicle_details;
-            } catch (e) {
-                vehicleDetails = user.vehicle_details;
-            }
-        }
-
+        // Histórico financeiro rápido para o Boot
         const transactions = await pool.query(
             `SELECT * FROM wallet_transactions
              WHERE user_id = $1
@@ -524,22 +508,32 @@ exports.checkSession = async (req, res) => {
 
         const response = {
             ...user,
-            vehicle_details: vehicleDetails,
+            // Fallback do helper se vehicle_details não tiver sido convertido
+            vehicle_details: typeof user.vehicle_details === 'string'
+                ? JSON.parse(user.vehicle_details)
+                : user.vehicle_details,
             transactions: transactions.rows
         };
 
+        // Atualizar última atividade da sessão
         const sessionToken = req.headers['x-session-token'];
-        await pool.query(
-            'UPDATE user_sessions SET last_activity = NOW() WHERE session_token = $1',
-            [sessionToken]
-        );
+        if (sessionToken) {
+            await pool.query(
+                'UPDATE user_sessions SET last_activity = NOW() WHERE session_token = $1',
+                [sessionToken]
+            );
+        }
 
         log('success', `Sessão válida: ${user.name}`);
         res.json(response);
 
     } catch (error) {
         log('error', 'Erro ao validar sessão:', error);
-        res.status(500).json({ error: "Erro ao validar sessão" });
+        console.error(error.stack);
+        res.status(500).json({
+            error: "Erro ao validar sessão",
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
     }
 };
 
@@ -600,4 +594,11 @@ exports.checkPhone = async (req, res) => {
     }
 };
 
+// =================================================================================================
+// EXPORTA TODOS OS MÉTODOS
+// =================================================================================================
 module.exports = exports;
+
+// =================================================================================================
+// FIM DO ARQUIVO - AUTHENTICATION CONTROLLER (TITANIUM EDITION)
+// =================================================================================================
