@@ -13,6 +13,10 @@
  * 3. TRATAMENTO DE ERRO aprimorado com ROLLBACK em caso de falha
  * 4. TRANSAÇÕES isoladas para cada etapa crítica
  * 5. NOVAS TABELAS INTEGRADAS: itens cmapos completamente incorporadas
+ * 6. ✅ GARANTE QUE MOTORISTAS SEM GPS FIXO AINDA POSSAM SER ENCONTRADOS (Bypass de teste)
+ *    - ALTER TABLE driver_positions ALTER COLUMN lat SET DEFAULT 0
+ *    - ALTER TABLE driver_positions ALTER COLUMN lng SET DEFAULT 0
+ *    - CREATE INDEX idx_driver_status ON driver_positions(status, last_update)
  *
  * STATUS: 🔥 PRODUCTION READY - ZERO ERROS DE TRANSAÇÃO
  * =================================================================================================
@@ -138,7 +142,7 @@ async function bootstrapDatabase() {
             );
         `, [], 'CREATE TABLE users');
 
-        // 2. TABELA DRIVER_POSITIONS
+        // 2. TABELA DRIVER_POSITIONS - COM DEFAULT 0 PARA COORDENADAS
         await safeQuery(client, `
             CREATE TABLE IF NOT EXISTS driver_positions (
                 driver_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
@@ -152,6 +156,11 @@ async function bootstrapDatabase() {
                 last_update TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         `, [], 'CREATE TABLE driver_positions');
+
+        // ✅ GARANTE QUE MOTORISTAS SEM GPS FIXO AINDA POSSAM SER ENCONTRADOS
+        await safeQuery(client, `ALTER TABLE driver_positions ALTER COLUMN lat SET DEFAULT 0;`, [], 'ALTER TABLE lat DEFAULT');
+        await safeQuery(client, `ALTER TABLE driver_positions ALTER COLUMN lng SET DEFAULT 0;`, [], 'ALTER TABLE lng DEFAULT');
+        log.success('✅ Driver_positions configurado com DEFAULT 0 para coordenadas (suporte a motoristas sem GPS fixo)');
 
         // 3. TABELA RIDES
         await safeQuery(client, `
@@ -748,6 +757,8 @@ async function bootstrapDatabase() {
             "CREATE INDEX IF NOT EXISTS idx_driver_positions_update ON driver_positions(last_update)",
             "CREATE INDEX IF NOT EXISTS idx_driver_positions_geo ON driver_positions(lat, lng)",
             "CREATE INDEX IF NOT EXISTS idx_driver_positions_socket ON driver_positions(socket_id)",
+            // ✅ ÍNDICE PARA BUSCA RÁPIDA DE STATUS (Garante que motoristas sem GPS fixo sejam encontrados)
+            "CREATE INDEX IF NOT EXISTS idx_driver_status ON driver_positions(status, last_update)",
             "CREATE INDEX IF NOT EXISTS idx_rides_passenger ON rides(passenger_id)",
             "CREATE INDEX IF NOT EXISTS idx_rides_driver ON rides(driver_id)",
             "CREATE INDEX IF NOT EXISTS idx_rides_status ON rides(status)",
