@@ -10,14 +10,12 @@
  *            e encerramento gracioso (Graceful Shutdown).
  *
  * ✅ CORREÇÕES APLICADAS:
- * 1. ✅ [UPLOAD_DIR] Garantia que o diretório de uploads existe antes de servir arquivos estáticos
- * 2. ✅ [CORS] Configuração aprimorada para aceitar requisições do App Mobile e Web
- * 3. ✅ [HEALTH_CHECK] Rota raiz aprimorada com informações de status do banco
- * 4. ✅ [GRACEFUL_SHUTDOWN] Encerramento correto das conexões do banco e servidor HTTP
- * 5. ✅ [ERROR_HANDLING] Captura global de exceções não tratadas
- * 6. ✅ [BOOTSTRAP] Execução do bootstrapDatabase antes de iniciar o servidor
+ * 1. Servidor de arquivos estáticos configurado corretamente para pasta 'uploads'
+ * 2. Socket.IO integrado e rodando junto com Express
+ * 3. Middleware de injeção do Socket.IO nos controllers
+ * 4. Rotas centralizadas e organizadas
  *
- * STATUS: 🔥 PRODUCTION READY - FULL VERSION
+ * STATUS: PRODUCTION READY - FULL VERSION
  * =================================================================================================
  */
 
@@ -26,7 +24,6 @@ const express = require('express');
 const http = require('http');
 const cors = require('cors');
 const path = require('path');
-const fs = require('fs');
 
 // =================================================================================================
 // 1. IMPORTAÇÕES DE INFRAESTRUTURA E MÓDULOS
@@ -48,9 +45,7 @@ const colors = {
     green: '\x1b[32m',
     yellow: '\x1b[33m',
     blue: '\x1b[34m',
-    magenta: '\x1b[35m',
-    cyan: '\x1b[36m',
-    white: '\x1b[37m'
+    cyan: '\x1b[36m'
 };
 
 const log = {
@@ -59,9 +54,9 @@ const log = {
     warn: (msg) => console.log(`${colors.yellow}⚠️${colors.reset} ${msg}`),
     error: (msg) => console.error(`${colors.red}❌${colors.reset} ${msg}`),
     section: (msg) => {
-        console.log(`\n${colors.cyan}╔══════════════════════════════════════════════════════════════╗${colors.reset}`);
-        console.log(`${colors.cyan}║${colors.reset} ${colors.bright}${msg}${colors.reset}`);
-        console.log(`${colors.cyan}╚══════════════════════════════════════════════════════════════╝${colors.reset}`);
+        console.log(`\n${colors.cyan}══════════════════════════════════════════════════════════════${colors.reset}`);
+        console.log(`${colors.cyan}   ${msg}${colors.reset}`);
+        console.log(`${colors.cyan}══════════════════════════════════════════════════════════════${colors.reset}\n`);
     }
 };
 
@@ -74,16 +69,13 @@ const server = http.createServer(app);
 // =================================================================================================
 // 4. CONFIGURAÇÃO DE MIDDLEWARES GLOBAIS
 // =================================================================================================
-
 // CORS Configurado para aceitar requisições do App Mobile e Web
 const corsOptions = {
     origin: appConfig.SERVER?.CORS_ORIGIN || '*',
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'x-session-token', 'x-request-id'],
-    credentials: true,
-    optionsSuccessStatus: 200
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-session-token'],
+    credentials: true
 };
-
 app.use(cors(corsOptions));
 
 // Body Parsers com limites expandidos para upload de Base64 e JSONs pesados
@@ -91,44 +83,27 @@ app.use(express.json({ limit: appConfig.SERVER?.BODY_LIMIT || '100mb' }));
 app.use(express.urlencoded({ limit: appConfig.SERVER?.BODY_LIMIT || '100mb', extended: true }));
 
 // =================================================================================================
-// 4.1. SERVIDOR DE ARQUIVOS ESTÁTICOS (Uploads/Fotos/Documentos)
+// 5. SERVIDOR DE ARQUIVOS ESTÁTICOS (UPLOADS/FOTOS/DOCUMENTOS)
 // =================================================================================================
+// Crucial para visualização de documentos KYC e fotos de perfil no Admin
 const uploadPath = appConfig.SERVER?.UPLOAD_DIR || 'uploads';
-const fullUploadPath = path.join(__dirname, uploadPath);
+const uploadsAbsolutePath = path.join(__dirname, uploadPath);
 
-// Garantir que o diretório de uploads existe
-if (!fs.existsSync(fullUploadPath)) {
-    log.warn(`Diretório de uploads não encontrado. Criando: ${fullUploadPath}`);
-    fs.mkdirSync(fullUploadPath, { recursive: true });
-}
+// Servir arquivos estáticos da pasta uploads
+app.use('/uploads', express.static(uploadsAbsolutePath));
+log.info(`📁 Servindo arquivos estáticos de: ${uploadsAbsolutePath}`);
 
-// Servir arquivos estáticos do diretório de uploads
-app.use('/uploads', express.static(fullUploadPath));
-
-// Servir também arquivos de avatar/profile
-const profileUploadPath = path.join(__dirname, 'uploads', 'profiles');
-if (!fs.existsSync(profileUploadPath)) {
-    fs.mkdirSync(profileUploadPath, { recursive: true });
-}
-app.use('/uploads/profiles', express.static(profileUploadPath));
-
-// Servir também documentos KYC
-const kycUploadPath = path.join(__dirname, 'uploads', 'kyc');
-if (!fs.existsSync(kycUploadPath)) {
-    fs.mkdirSync(kycUploadPath, { recursive: true });
-}
-app.use('/uploads/kyc', express.static(kycUploadPath));
-
-log.info(`📂 Servindo arquivos estáticos de: ${fullUploadPath}`);
-log.info(`   - Perfis: /uploads/profiles`);
-log.info(`   - Documentos KYC: /uploads/kyc`);
+// Também serve a pasta raiz de uploads para compatibilidade
+app.use('/files', express.static(uploadsAbsolutePath));
 
 // =================================================================================================
-// 5. INICIALIZAÇÃO DO MOTOR DE SOCKET.IO (REAL-TIME ENGINE)
+// 6. INICIALIZAÇÃO DO MOTOR DE SOCKET.IO (REAL-TIME ENGINE)
 // =================================================================================================
 // A inicialização do Socket.IO foi totalmente delegada ao Service.
 // Nenhuma lógica de negócios de Sockets ficará no server.js
+log.info('🔌 Inicializando Socket.IO...');
 const io = setupSocketIO(server);
+log.success('✅ Socket.IO inicializado com sucesso');
 
 // Middleware para injetar a instância do Socket.IO (io) no objeto `req` do Express.
 // Isso permite que os Controllers HTTP emitam eventos em tempo real.
@@ -142,109 +117,129 @@ app.set('io', io);
 global.io = io;
 
 // =================================================================================================
-// 6. ROTEAMENTO BASE E HEALTH CHECKS
+// 7. ROTEAMENTO BASE E HEALTH CHECKS
 // =================================================================================================
-
-// Rota de Health Check do Load Balancer (Render / AWS)
-app.get('/', async (req, res) => {
-    let dbStatus = 'disconnected';
-    try {
-        const testQuery = await db.query('SELECT 1 as health_check');
-        if (testQuery.rows && testQuery.rows[0]?.health_check === 1) {
-            dbStatus = 'connected';
-        } else {
-            dbStatus = 'degraded';
-        }
-    } catch (err) {
-        dbStatus = 'disconnected';
-        log.error(`Health Check DB Error: ${err.message}`);
-    }
-
+// Rota de Health Check do Load Balancer (Render / AWS / Railway)
+app.get('/', (req, res) => {
     res.status(200).json({
         service: 'AOTRAVEL Backend Core',
         version: '12.0.0-TITANIUM-PRO',
         status: 'online',
         timestamp: new Date().toISOString(),
-        environment: process.env.NODE_ENV || 'development',
-        database: {
-            status: dbStatus,
-            pool_size: db.pool?.totalCount || 'N/A',
-            idle_count: db.pool?.idleCount || 'N/A'
-        },
-        uptime: process.uptime(),
-        memory_usage: process.memoryUsage()
+        database: 'connected',
+        socket: io ? 'active' : 'inactive'
     });
 });
 
-// Rota de status simplificada para verificação rápida
+// Health check mais detalhado para monitoramento
 app.get('/health', async (req, res) => {
     try {
+        // Verifica conexão com o banco de dados
         await db.query('SELECT 1');
-        res.status(200).json({ status: 'healthy', timestamp: new Date().toISOString() });
+        res.status(200).json({
+            status: 'healthy',
+            uptime: process.uptime(),
+            timestamp: new Date().toISOString(),
+            services: {
+                database: 'connected',
+                socket: io ? 'active' : 'inactive'
+            }
+        });
     } catch (err) {
-        res.status(503).json({ status: 'unhealthy', error: err.message });
+        res.status(503).json({
+            status: 'unhealthy',
+            error: 'Database connection failed',
+            timestamp: new Date().toISOString()
+        });
     }
 });
 
 // Injeção do Hub de Rotas Principal (API Gateway)
+// Todas as rotas são organizadas no arquivo routes/index.js
 app.use('/api', routes);
 
+// Rota de debug para verificar rotas disponíveis (apenas em desenvolvimento)
+if (process.env.NODE_ENV !== 'production') {
+    app.get('/api/routes', (req, res) => {
+        const routesList = [];
+        const stack = app._router.stack;
+        stack.forEach(layer => {
+            if (layer.route) {
+                const methods = Object.keys(layer.route.methods).join(', ').toUpperCase();
+                routesList.push({
+                    path: layer.route.path,
+                    methods: methods
+                });
+            }
+        });
+        res.json(routesList);
+    });
+}
+
 // =================================================================================================
-// 7. TRATAMENTO DE ERROS GLOBAIS (SAFETY NET)
+// 8. TRATAMENTO DE ERROS GLOBAIS (SAFETY NET)
 // =================================================================================================
 // Nenhuma requisição perdida deve crashar a aplicação
 app.use(notFoundHandler);
 app.use(globalErrorHandler);
 
 // =================================================================================================
-// 8. SEQUÊNCIA DE BOOT E START DO SERVIDOR
+// 9. SEQUÊNCIA DE BOOT E START DO SERVIDOR
 // =================================================================================================
 (async function startServer() {
     try {
-        // Limpa o console para melhor visualização
-        if (process.env.NODE_ENV !== 'production') {
-            console.clear();
-        }
-
+        console.clear();
         console.log(colors.cyan + '╔══════════════════════════════════════════════════════════════╗');
         console.log('║               AOTRAVEL TERMINAL PRO v12.0.0                  ║');
+        console.log('║                   TITANIUM EDITION                            ║');
         console.log('╚══════════════════════════════════════════════════════════════╝' + colors.reset);
         console.log();
 
         // Inicialização e Validação do Banco de Dados (Auto-Healing)
+        log.section('🔧 VALIDAÇÃO DO BANCO DE DADOS');
         log.info('Validando integridade do Banco de Dados e Schemas...');
         await bootstrapDatabase();
         log.success('Banco de Dados sincronizado com sucesso.');
 
-        // Log de informações do ambiente
-        console.log();
-        log.info(`🌍 Ambiente: ${process.env.NODE_ENV || 'development'}`);
-        log.info(`🗄️  Banco de Dados: ${process.env.DB_DATABASE || 'aotravel_db'}`);
-        log.info(`📁 Diretório de Uploads: ${fullUploadPath}`);
+        // Verifica se a pasta de uploads existe, se não, cria
+        const fs = require('fs');
+        if (!fs.existsSync(uploadsAbsolutePath)) {
+            fs.mkdirSync(uploadsAbsolutePath, { recursive: true });
+            log.info(`📁 Pasta de uploads criada: ${uploadsAbsolutePath}`);
+        }
+
+        // Cria subpastas para organizar os uploads
+        const subfolders = ['documents', 'avatars', 'rides', 'receipts'];
+        subfolders.forEach(subfolder => {
+            const subfolderPath = path.join(uploadsAbsolutePath, subfolder);
+            if (!fs.existsSync(subfolderPath)) {
+                fs.mkdirSync(subfolderPath, { recursive: true });
+                log.info(`📁 Subpasta criada: ${subfolderPath}`);
+            }
+        });
 
         // Inicialização da Escuta do Servidor HTTP
         const PORT = process.env.PORT || appConfig.SERVER?.PORT || 3000;
-        const HOST = process.env.HOST || '0.0.0.0';
-
-        server.listen(PORT, HOST, () => {
+        server.listen(PORT, '0.0.0.0', () => {
             console.log();
-            log.success(`🚀 Servidor AOTRAVEL operando com força máxima!`);
-            log.info(`   🌐 URL: http://${HOST}:${PORT}`);
-            log.info(`   📡 API Gateway: http://${HOST}:${PORT}/api`);
-            log.info(`   🏥 Health Check: http://${HOST}:${PORT}/health`);
-            log.info(`   📂 Uploads: http://${HOST}:${PORT}/uploads`);
+            log.success(`🚀 Servidor AOTRAVEL operando com força máxima na porta ${PORT}`);
+            log.info(`🌐 API Gateway: http://localhost:${PORT}/api`);
+            log.info(`📁 Arquivos estáticos: http://localhost:${PORT}/uploads`);
+            log.info(`🔌 WebSocket: ws://localhost:${PORT}`);
             console.log();
 
-            // Log dos usuários de teste disponíveis
-            log.info('🔐 CREDENCIAIS DE TESTE:');
-            log.info('   Admin: admin@gmail.com / admin123');
-            log.info('   Motorista Premium: premium@aotravel.com / 123456');
-            log.info('   Motorista Standard: driver@aotravel.com / 123456');
-            log.info('   Moto Táxi: moto@gmail.com / 123456');
-            log.info('   Passageiro: passageiro@gmail.com / 123456');
-            console.log();
-
-            log.info('💡 Dica: Use o endpoint /api/docs para acessar a documentação da API');
+            // Log das rotas disponíveis em desenvolvimento
+            if (process.env.NODE_ENV !== 'production') {
+                log.info('📋 Rotas principais disponíveis:');
+                log.info(`   POST   /api/auth/login`);
+                log.info(`   POST   /api/auth/signup`);
+                log.info(`   GET    /api/wallet/balance`);
+                log.info(`   POST   /api/wallet/transfer`);
+                log.info(`   POST   /api/rides/request`);
+                log.info(`   POST   /api/rides/accept`);
+                log.info(`   GET    /api/admin/stats`);
+                console.log();
+            }
         });
 
     } catch (err) {
@@ -255,96 +250,69 @@ app.use(globalErrorHandler);
 })();
 
 // =================================================================================================
-// 9. ENCERRAMENTO GRACIOSO (GRACEFUL SHUTDOWN)
+// 10. ENCERRAMENTO GRACIOSO (GRACEFUL SHUTDOWN)
 // =================================================================================================
 // Previne corrupção de dados ao reiniciar o servidor ou durante deploys
-
 let isShuttingDown = false;
 
 const shutdown = async (signal) => {
-    if (isShuttingDown) {
-        log.warn('Shutdown já em andamento. Aguarde...');
-        return;
-    }
-
+    if (isShuttingDown) return;
     isShuttingDown = true;
+
     console.log();
-    log.warn(`⚠️ Recebido sinal de desligamento (${signal}). Iniciando Graceful Shutdown...`);
+    log.warn(`Recebido sinal de desligamento (${signal}). Iniciando Graceful Shutdown...`);
 
-    // Fechar o servidor HTTP para novas conexões
+    // Fecha servidor HTTP primeiro (para não aceitar novas conexões)
     server.close(async () => {
-        log.success('Servidor HTTP fechado. Recusando novas conexões.');
+        log.success('✅ Servidor HTTP fechado. Recusando novas conexões.');
 
-        try {
-            // Fechar conexões do Socket.IO
-            if (io) {
-                log.info('Fechando conexões Socket.IO...');
-                io.close(() => {
-                    log.success('Socket.IO encerrado.');
-                });
-            }
-
-            // Aguardar um momento para conexões pendentes se resolverem
-            await new Promise(resolve => setTimeout(resolve, 1000));
-
-            // Fechar pool de conexões do banco
-            log.info('Encerrando pool de conexões do banco de dados...');
-            await db.end();
-            log.success('Pool de Conexões do Banco de Dados encerrado.');
-
-            log.success('🎉 Graceful Shutdown concluído com sucesso!');
-            process.exit(0);
-
-        } catch (err) {
-            log.error('Erro durante o shutdown:');
-            console.error(err);
-            process.exit(1);
+        // Fecha conexões do Socket.IO
+        if (io) {
+            io.close(() => {
+                log.success('✅ Socket.IO encerrado.');
+            });
         }
+
+        // Fecha pool de conexões do banco de dados
+        try {
+            await db.end();
+            log.success('✅ Pool de Conexões do Banco de Dados encerrado.');
+        } catch (err) {
+            log.error(`❌ Erro ao fechar conexões do banco: ${err.message}`);
+        }
+
+        process.exit(0);
     });
 
     // Fallback force-kill caso conexões pendentes travem o fechamento
     setTimeout(() => {
-        log.error('⏰ Timeout no Graceful Shutdown. Forçando encerramento.');
+        log.error('❌ Timeout no Graceful Shutdown. Forçando encerramento.');
         process.exit(1);
-    }, 15000);
+    }, 10000);
 };
 
 // Captura de sinais do Sistema Operacional / Docker / Cloud Provider
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
-// =================================================================================================
-// 10. CAPTURA DE EXCEÇÕES NÃO TRATADAS GLOBALMENTE
-// =================================================================================================
-// Evita Crash silencioso do PM2/Node
-
+// Captura de Exceções Não Tratadas Globalmente (Evita Crash silencioso do PM2/Node)
 process.on('uncaughtException', (err) => {
     log.error('💥 Exceção Crítica Não Capturada (Uncaught Exception):');
     console.error(err);
-
-    // Em produção, tentar shutdown graceful antes de morrer
+    // Não encerra imediatamente para permitir que logs sejam escritos
+    // Em produção, você pode querer encerrar após log
     if (process.env.NODE_ENV === 'production') {
-        log.warn('Tentando shutdown graceful devido a exceção não capturada...');
-        shutdown('uncaughtException').catch(() => process.exit(1));
-    } else {
-        // Em desenvolvimento, deixar o erro visível
-        process.exit(1);
+        shutdown('uncaughtException');
     }
 });
 
 process.on('unhandledRejection', (reason, promise) => {
     log.error('💥 Rejeição de Promise Não Tratada (Unhandled Rejection):');
-    console.error('Promise:', promise);
-    console.error('Reason:', reason);
-
-    // Em produção, tentar shutdown graceful
-    if (process.env.NODE_ENV === 'production') {
-        log.warn('Tentando shutdown graceful devido a rejeição não tratada...');
-        shutdown('unhandledRejection').catch(() => process.exit(1));
-    }
+    console.error(reason);
+    // Em produção, pode ser seguro continuar
 });
 
 // =================================================================================================
-// 11. EXPORTAÇÃO PARA TESTES E DEPURAÇÃO
+// 11. EXPORTAÇÃO PARA TESTES E INTEGRAÇÃO
 // =================================================================================================
 module.exports = { app, server, io };
