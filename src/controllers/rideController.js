@@ -62,13 +62,13 @@ exports.requestRide = async (req, res) => {
         if (rideType === 'moto') {
             estimatedPrice = 400 + (distance * 180);
         } else if (rideType === 'premium') {
-            estimatedPrice = 1200 + (distance * 500); // Tabela Premium
+            estimatedPrice = 1200 + (distance * 500);
         } else if (rideType === 'delivery_car') {
             estimatedPrice = 1000 + (distance * 450);
         } else if (rideType === 'delivery_moto') {
             estimatedPrice = 800 + (distance * 300);
         } else {
-            estimatedPrice = 600 + (distance * 300); // Standard Car
+            estimatedPrice = 600 + (distance * 300);
         }
 
         estimatedPrice = Math.ceil(estimatedPrice / 50) * 50;
@@ -186,7 +186,6 @@ exports.requestRide = async (req, res) => {
     } catch (e) {
         await client.query('ROLLBACK');
         console.error('❌ ERRO FATAL NO REQUEST_RIDE:', e);
-        console.error('❌ STACK:', e.stack);
         logError('RIDE_REQUEST_FATAL', e);
         res.status(500).json({
             error: "Erro crítico ao processar solicitação.",
@@ -204,13 +203,6 @@ exports.requestRide = async (req, res) => {
 exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => {
     const { includeGpsZero = false, rideType = 'car' } = options;
 
-    // ✅ LÓGICA DE MATCHING VIP
-    // Se o passageiro pediu PREMIUM -> Somente Premium
-    // Se o passageiro pediu CAR (Standard) -> Premium E Car aceitam
-    // Se o passageiro pediu MOTO -> Somente Moto
-    // Se for delivery_car -> Aceita car e premium
-    // Se for delivery_moto -> Aceita moto
-
     let categoryCondition = "";
     let vehicleTypeCondition = "";
     let params = [lat, lng, radiusKm];
@@ -225,7 +217,6 @@ exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => 
         categoryCondition = "AND u.vehicle_category IN ('car', 'premium')";
         vehicleTypeCondition = "AND u.vehicle_details->>'type' IN ('car', 'premium')";
     } else {
-        // Standard 'car'
         categoryCondition = "AND u.vehicle_category IN ('car', 'premium')";
         vehicleTypeCondition = "AND u.vehicle_details->>'type' IN ('car', 'premium')";
     }
@@ -296,7 +287,6 @@ exports.acceptRide = async (req, res) => {
     console.log('🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴\n');
 
     if (!ride_id) {
-        console.log('❌ ERRO: ride_id não fornecido');
         return res.status(400).json({
             success: false,
             error: "ID da corrida é obrigatório."
@@ -304,7 +294,6 @@ exports.acceptRide = async (req, res) => {
     }
 
     if (!req.user || req.user.role !== 'driver') {
-        console.log(`❌ ERRO: Usuário não é motorista. Role: ${req.user?.role}`);
         return res.status(403).json({
             success: false,
             error: "Apenas motoristas podem aceitar corridas."
@@ -312,7 +301,6 @@ exports.acceptRide = async (req, res) => {
     }
 
     if (!actualDriverId) {
-        console.log('❌ ERRO: driver_id não fornecido');
         return res.status(400).json({
             success: false,
             error: "ID do motorista é obrigatório."
@@ -324,14 +312,12 @@ exports.acceptRide = async (req, res) => {
     try {
         await client.query('BEGIN');
 
-        console.log('🔍 Verificando se o motorista existe e está verificado (KYC)...');
         const driverCheck = await client.query(
             "SELECT id, name, is_verified, vehicle_category, vehicle_details, email, phone FROM users WHERE id = $1",
             [actualDriverId]
         );
 
         if (driverCheck.rows.length === 0) {
-            console.log(`❌ ERRO: Motorista ID ${actualDriverId} não encontrado`);
             await client.query('ROLLBACK');
             return res.status(404).json({
                 success: false,
@@ -340,7 +326,6 @@ exports.acceptRide = async (req, res) => {
         }
 
         if (!driverCheck.rows[0].is_verified) {
-            console.log(`❌ ERRO: Motorista ID ${actualDriverId} não está verificado (KYC pendente)`);
             await client.query('ROLLBACK');
             return res.status(403).json({
                 success: false,
@@ -350,14 +335,12 @@ exports.acceptRide = async (req, res) => {
 
         console.log(`✅ Motorista encontrado e verificado: ${driverCheck.rows[0].name} (ID: ${actualDriverId})`);
 
-        console.log(`🔍 Buscando corrida #${ride_id} com FOR UPDATE...`);
         const rideRes = await client.query(
             "SELECT id, status, passenger_id, initial_price, ride_type, origin_name, dest_name, distance_km FROM rides WHERE id = $1 FOR UPDATE",
             [ride_id]
         );
 
         if (rideRes.rows.length === 0) {
-            console.log(`❌ ERRO: Corrida #${ride_id} não encontrada`);
             await client.query('ROLLBACK');
             return res.status(404).json({
                 success: false,
@@ -366,11 +349,8 @@ exports.acceptRide = async (req, res) => {
         }
 
         const ride = rideRes.rows[0];
-        console.log('📊 Dados da corrida:', ride);
 
-        // ✅ PROTEÇÃO CONTRA RACE CONDITION (SÓ ACEITA SE FOR SEARCHING)
         if (ride.status !== 'searching') {
-            console.log(`❌ ERRO: Corrida já não está em searching. Status atual: ${ride.status}`);
             await client.query('ROLLBACK');
             return res.status(409).json({
                 success: false,
@@ -380,7 +360,6 @@ exports.acceptRide = async (req, res) => {
         }
 
         if (ride.passenger_id == actualDriverId) {
-            console.log(`❌ ERRO: Motorista tentando aceitar própria corrida`);
             await client.query('ROLLBACK');
             return res.status(400).json({
                 success: false,
@@ -388,19 +367,12 @@ exports.acceptRide = async (req, res) => {
             });
         }
 
-        // ✅ VALIDAÇÃO FINAL DE COMPATIBILIDADE VIP
         const vCat = driverCheck.rows[0].vehicle_category || 'car';
         const vDetails = driverCheck.rows[0].vehicle_details || {};
         const vType = vDetails.type || 'car';
         const rType = ride.ride_type || 'car';
 
-        console.log(`🔍 Verificando compatibilidade:`);
-        console.log(`   Motorista - Categoria: ${vCat}, Tipo: ${vType}`);
-        console.log(`   Corrida - Tipo: ${rType}`);
-
-        // Validação por categoria
         if (rType === 'premium' && vCat !== 'premium') {
-            console.log(`❌ ERRO: Apenas motoristas Premium podem aceitar esta corrida.`);
             await client.query('ROLLBACK');
             return res.status(403).json({
                 success: false,
@@ -409,7 +381,6 @@ exports.acceptRide = async (req, res) => {
         }
 
         if (rType === 'moto' && vCat !== 'moto') {
-            console.log(`❌ ERRO: Apenas motos podem aceitar esta corrida.`);
             await client.query('ROLLBACK');
             return res.status(403).json({
                 success: false,
@@ -418,7 +389,6 @@ exports.acceptRide = async (req, res) => {
         }
 
         if (rType === 'delivery_moto' && vCat !== 'moto') {
-            console.log(`❌ ERRO: Apenas motos podem aceitar entregas.`);
             await client.query('ROLLBACK');
             return res.status(403).json({
                 success: false,
@@ -426,9 +396,7 @@ exports.acceptRide = async (req, res) => {
             });
         }
 
-        // Validação por tipo de veículo
         if ((rType === 'moto' || rType === 'delivery_moto') && vType !== 'moto') {
-            console.log(`❌ ERRO: Tipo de veículo incompatível para moto.`);
             await client.query('ROLLBACK');
             return res.status(403).json({
                 success: false,
@@ -438,18 +406,14 @@ exports.acceptRide = async (req, res) => {
 
         console.log('✅ Validações OK. Atualizando corrida...');
 
-        // Atualização da Base de Dados (Source of truth)
         await client.query(
             "UPDATE rides SET driver_id = $1, status = 'accepted', accepted_at = NOW(), updated_at = NOW() WHERE id = $2",
             [actualDriverId, ride_id]
         );
 
-        console.log('✅ Corrida atualizada. Buscando dados completos...');
-
         const fullRide = await getFullRideDetails(ride_id);
 
         if (!fullRide) {
-            console.log('❌ ERRO: Não foi possível obter os dados completos da corrida');
             await client.query('COMMIT');
             return res.status(500).json({
                 success: false,
@@ -457,32 +421,16 @@ exports.acceptRide = async (req, res) => {
             });
         }
 
-        console.log('✅ Dados completos obtidos:', {
-            ride_id: fullRide.id,
-            passenger: fullRide.passenger_data?.name,
-            driver: fullRide.driver_data?.name,
-            price: fullRide.initial_price,
-            ride_type: fullRide.ride_type
-        });
-
-        // ✅ EMITE SOCKET PARA COLOCAR OS DOIS NO CHAT
         if (req.io) {
             console.log('📡 Enviando eventos socket...');
 
             req.io.to(`user_${ride.passenger_id}`).emit('ride_accepted', fullRide);
-            console.log(`   ✅ Evento enviado para passageiro user_${ride.passenger_id}`);
-
             req.io.to(`user_${actualDriverId}`).emit('ride_accepted', fullRide);
-            console.log(`   ✅ Evento enviado para motorista user_${actualDriverId}`);
-
             req.io.to(`ride_${ride_id}`).emit('ride_accepted', fullRide);
-            console.log(`   ✅ Evento enviado para sala ride_${ride_id}`);
-
             req.io.to('drivers').emit('ride_taken', {
                 ride_id: ride_id,
                 taken_by: actualDriverId
             });
-            console.log(`   ✅ Aviso enviado para outros motoristas`);
         }
 
         await client.query('COMMIT');
@@ -499,7 +447,6 @@ exports.acceptRide = async (req, res) => {
     } catch (e) {
         await client.query('ROLLBACK');
         console.error('❌ ERRO FATAL NO ACCEPT_RIDE:', e);
-        console.error('❌ STACK:', e.stack);
         logError('RIDE_ACCEPT_FATAL', e);
         res.status(500).json({
             success: false,
@@ -523,7 +470,6 @@ exports.updateStatus = async (req, res) => {
     console.log(`🔄 [UPDATE_STATUS] Ride: ${ride_id}, Status: ${status}, Driver: ${driverId}`);
 
     if (!allowed.includes(status)) {
-        console.log(`❌ ERRO: Status inválido: ${status}`);
         return res.status(400).json({ error: "Status inválido." });
     }
 
@@ -532,46 +478,35 @@ exports.updateStatus = async (req, res) => {
     try {
         await client.query('BEGIN');
 
-        console.log(`🔍 Verificando permissões para corrida #${ride_id}...`);
         const check = await client.query(
             "SELECT driver_id, passenger_id FROM rides WHERE id = $1 FOR UPDATE",
             [ride_id]
         );
 
         if (check.rows.length === 0) {
-            console.log(`❌ ERRO: Corrida #${ride_id} não encontrada`);
             await client.query('ROLLBACK');
             return res.status(404).json({ error: "Corrida não encontrada." });
         }
 
         if (check.rows[0].driver_id !== driverId) {
-            console.log(`❌ ERRO: Motorista ${driverId} não é o responsável pela corrida`);
             await client.query('ROLLBACK');
             return res.status(403).json({ error: "Acesso negado." });
         }
-
-        console.log(`✅ Permissão OK. Atualizando status para ${status}...`);
 
         let updateQuery = `UPDATE rides SET status = $1`;
         if (status === 'arrived') updateQuery += `, arrived_at = NOW()`;
         if (status === 'ongoing') updateQuery += `, started_at = NOW()`;
         updateQuery += `, updated_at = NOW() WHERE id = $2 RETURNING *`;
 
-        const updateResult = await client.query(updateQuery, [status, ride_id]);
-        console.log(`✅ Status atualizado para ${status}`);
-
+        await client.query(updateQuery, [status, ride_id]);
         await client.query('COMMIT');
 
         const fullRide = await getFullRideDetails(ride_id);
 
         if (req.io) {
             const eventName = status === 'arrived' ? 'driver_arrived' : 'trip_started';
-            console.log(`📡 Emitindo evento ${eventName}...`);
-
             req.io.to(`ride_${ride_id}`).emit(eventName, fullRide);
             req.io.to(`user_${fullRide.passenger_id}`).emit(eventName, fullRide);
-
-            console.log(`   ✅ Evento enviado para passageiro user_${fullRide.passenger_id}`);
         }
 
         res.json({
@@ -587,7 +522,6 @@ exports.updateStatus = async (req, res) => {
         res.status(500).json({ error: "Erro ao atualizar status." });
     } finally {
         client.release();
-        console.log('🔌 Conexão com banco liberada');
     }
 };
 
@@ -615,11 +549,9 @@ exports.completeRide = async (req, res) => {
     try {
         await client.query('BEGIN');
 
-        // Resolução Polimórfica de Tabelas
         let table = 'rides';
         let pCol = 'passenger_id';
         let dCol = 'driver_id';
-        let statusField = 'status';
 
         if (hub_type === 'delivery') {
             table = 'hub_deliveries';
@@ -650,14 +582,12 @@ exports.completeRide = async (req, res) => {
             throw new Error("Acesso negado.");
         }
 
-        // Verificar status válido
         const validStatuses = ['ongoing', 'accepted', 'in_transit', 'picked_up'];
         if (!validStatuses.includes(ride.status)) {
             await client.query('ROLLBACK');
             throw new Error("A missão já foi finalizada ou cancelada.");
         }
 
-        // Extrator dinâmico de preço
         let finalAmount = 0;
         if (final_price) {
             finalAmount = parseFloat(final_price);
@@ -675,7 +605,6 @@ exports.completeRide = async (req, res) => {
             finalAmount = 0;
         }
 
-        // Processamento de Pagamento Clean Architecture
         if (method === 'wallet') {
             if (userId !== passengerId) {
                 await client.query('ROLLBACK');
@@ -691,7 +620,6 @@ exports.completeRide = async (req, res) => {
                 client
             );
         } else {
-            // Pagamento em CASH (Dinheiro)
             if (userId !== driverId) {
                 await client.query('ROLLBACK');
                 return res.status(403).json({ error: "O motorista deve confirmar o recebimento em dinheiro." });
@@ -705,7 +633,6 @@ exports.completeRide = async (req, res) => {
             );
         }
 
-        // Atualização de Status baseada no tipo de hub
         let statusVal = 'completed';
         let socketEvent = 'ride_completed';
 
@@ -720,7 +647,6 @@ exports.completeRide = async (req, res) => {
             socketEvent = 'group_completed';
         }
 
-        // Atualizar a missão
         let updateFields = `status = '${statusVal}', updated_at = NOW()`;
 
         if (table === 'rides') {
@@ -735,10 +661,8 @@ exports.completeRide = async (req, res) => {
         }
 
         await client.query(`UPDATE ${table} SET ${updateFields} WHERE id = $1`, [ride_id]);
-
         await client.query('COMMIT');
 
-        // Notificações Sockets (Disparo Simultâneo)
         if (req.io) {
             const payload = {
                 id: ride_id,
@@ -757,7 +681,6 @@ exports.completeRide = async (req, res) => {
                 req.io.to(`user_${driverId}`).emit('wallet_update', { type: 'earnings', amount: finalAmount });
             }
 
-            // Atualização específica da UI do Hub
             if (hub_type === 'delivery') {
                 req.io.to(`user_${passengerId}`).emit('hub_delivery_update', { id: ride_id, status: 'delivered' });
                 req.io.to(`user_${driverId}`).emit('hub_delivery_update', { id: ride_id, status: 'delivered' });
@@ -811,41 +734,33 @@ exports.cancelRide = async (req, res) => {
     console.log(`   Ride: ${ride_id}`);
     console.log(`   Reason: ${reason}`);
     console.log(`   Role: ${role}`);
-    console.log('----------------------------------------\n');
 
     const client = await pool.connect();
 
     try {
         await client.query('BEGIN');
 
-        console.log(`🔍 Buscando corrida #${ride_id}...`);
         const check = await client.query(
             "SELECT * FROM rides WHERE id = $1 FOR UPDATE",
             [ride_id]
         );
 
         if (check.rows.length === 0) {
-            console.log(`❌ ERRO: Corrida #${ride_id} não encontrada`);
             await client.query('ROLLBACK');
             return res.status(404).json({ error: "Corrida não encontrada." });
         }
 
         const ride = check.rows[0];
-        console.log(`📊 Status atual da corrida: ${ride.status}`);
 
         if (!['searching', 'accepted', 'ongoing'].includes(ride.status)) {
-            console.log(`❌ ERRO: Corrida já finalizada. Status: ${ride.status}`);
             await client.query('ROLLBACK');
             return res.status(400).json({ error: "Corrida já finalizada." });
         }
 
         if (ride.passenger_id !== userId && ride.driver_id !== userId && role !== 'admin') {
-            console.log(`❌ ERRO: Usuário ${userId} não tem permissão para cancelar esta corrida`);
             await client.query('ROLLBACK');
             return res.status(403).json({ error: "Acesso negado." });
         }
-
-        console.log(`✅ Permissão OK. Atualizando status para 'cancelled'...`);
 
         await client.query(`
             UPDATE rides SET
@@ -858,26 +773,20 @@ exports.cancelRide = async (req, res) => {
         `, [role, reason, ride_id]);
 
         await client.query('COMMIT');
-        console.log(`✅ Corrida #${ride_id} cancelada com sucesso`);
 
         const fullRide = await getFullRideDetails(ride_id);
 
         if (req.io) {
-            console.log(`📡 Enviando notificações de cancelamento...`);
-
             const payload = { ...fullRide, reason: reason, cancelled_by: role };
 
             req.io.to(`ride_${ride_id}`).emit('ride_cancelled', payload);
-            console.log(`   ✅ Notificação enviada para ride_${ride_id}`);
 
             if (role === 'driver') {
                 req.io.to(`user_${ride.passenger_id}`).emit('ride_cancelled', payload);
-                console.log(`   ✅ Notificação enviada para passageiro user_${ride.passenger_id}`);
             }
 
             if (role === 'passenger' && ride.driver_id) {
                 req.io.to(`user_${ride.driver_id}`).emit('ride_cancelled', payload);
-                console.log(`   ✅ Notificação enviada para motorista user_${ride.driver_id}`);
             }
 
             if (ride.status === 'searching') {
@@ -885,7 +794,6 @@ exports.cancelRide = async (req, res) => {
                     ride_id: ride_id,
                     reason: reason
                 });
-                console.log(`   ✅ Aviso enviado para todos os motoristas (radar)`);
             }
         }
 
@@ -901,7 +809,6 @@ exports.cancelRide = async (req, res) => {
         res.status(500).json({ error: "Erro ao cancelar corrida." });
     } finally {
         client.release();
-        console.log('🔌 Conexão com banco liberada');
     }
 };
 
@@ -914,15 +821,11 @@ exports.getHistory = async (req, res) => {
     const limit = parseInt(req.query.limit) || 20;
     const offset = (page - 1) * limit;
 
-    console.log(`📜 [GET_HISTORY] Buscando histórico para usuário ${userId}, página ${page}`);
-
     try {
-        const countQuery = `
-            SELECT COUNT(*) as total
-            FROM rides
-            WHERE passenger_id = $1 OR driver_id = $1
-        `;
-        const countResult = await pool.query(countQuery, [userId]);
+        const countResult = await pool.query(
+            "SELECT COUNT(*) as total FROM rides WHERE passenger_id = $1 OR driver_id = $1",
+            [userId]
+        );
         const total = parseInt(countResult.rows[0].total);
 
         const query = `
@@ -940,8 +843,6 @@ exports.getHistory = async (req, res) => {
         `;
 
         const result = await pool.query(query, [userId, limit, offset]);
-
-        console.log(`✅ Encontradas ${result.rows.length} corridas (total: ${total})`);
 
         res.json({
             success: true,
@@ -971,13 +872,10 @@ exports.getRideDetails = async (req, res) => {
     const rideId = req.params.id;
     const userId = req.user.id;
 
-    console.log(`🔍 [GET_RIDE_DETAILS] Buscando detalhes da corrida ${rideId}`);
-
     try {
         const fullRide = await getFullRideDetails(rideId);
 
         if (!fullRide) {
-            console.log(`❌ Corrida ${rideId} não encontrada`);
             return res.status(404).json({
                 success: false,
                 error: "Corrida não encontrada."
@@ -985,14 +883,11 @@ exports.getRideDetails = async (req, res) => {
         }
 
         if (fullRide.passenger_id !== userId && fullRide.driver_id !== userId && req.user.role !== 'admin') {
-            console.log(`❌ Usuário ${userId} não tem permissão para ver corrida ${rideId}`);
             return res.status(403).json({
                 success: false,
                 error: "Acesso negado."
             });
         }
-
-        console.log(`✅ Detalhes da corrida ${rideId} recuperados com sucesso`);
 
         res.json({
             success: true,
@@ -1015,10 +910,8 @@ exports.getRideDetails = async (req, res) => {
 exports.getDriverPerformance = async (req, res) => {
     const driverId = req.user.id;
 
-    console.log(`📊 [GET_DRIVER_PERFORMANCE] Buscando performance do motorista ${driverId}`);
-
     try {
-        const statsQuery = `
+        const statsRes = await pool.query(`
             SELECT
                 COUNT(*) as missions,
                 COALESCE(SUM(final_price), 0) as earnings,
@@ -1027,44 +920,27 @@ exports.getDriverPerformance = async (req, res) => {
             WHERE driver_id = $1
               AND status = 'completed'
               AND created_at >= CURRENT_DATE
-        `;
-        const statsRes = await pool.query(statsQuery, [driverId]);
+        `, [driverId]);
 
-        const recentQuery = `
+        const recentRes = await pool.query(`
             SELECT
-                id,
-                created_at,
-                origin_name,
-                dest_name,
-                final_price,
-                rating,
-                passenger_id
+                id, created_at, origin_name, dest_name, final_price, rating, passenger_id
             FROM rides
             WHERE driver_id = $1 AND status = 'completed'
             ORDER BY created_at DESC
             LIMIT 5
-        `;
-        const recentRes = await pool.query(recentQuery, [driverId]);
+        `, [driverId]);
 
-        const totalQuery = `
-            SELECT COUNT(*) as total
-            FROM rides
-            WHERE driver_id = $1 AND status = 'completed'
-        `;
-        const totalRes = await pool.query(totalQuery, [driverId]);
+        const totalRes = await pool.query(
+            "SELECT COUNT(*) as total FROM rides WHERE driver_id = $1 AND status = 'completed'",
+            [driverId]
+        );
 
-        const ratingQuery = `
+        const ratingRes = await pool.query(`
             SELECT COALESCE(AVG(rating), 0) as overall_rating
             FROM rides
             WHERE driver_id = $1 AND status = 'completed' AND rating IS NOT NULL
-        `;
-        const ratingRes = await pool.query(ratingQuery, [driverId]);
-
-        console.log(`✅ Performance recuperada:`, {
-            todayMissions: parseInt(statsRes.rows[0].missions),
-            todayEarnings: parseFloat(statsRes.rows[0].earnings),
-            totalMissions: parseInt(totalRes.rows[0].total)
-        });
+        `, [driverId]);
 
         res.json({
             success: true,
@@ -1095,8 +971,6 @@ exports.getDriverPerformance = async (req, res) => {
 exports.requestPayment = async (req, res) => {
     const { ride_id, amount } = req.body;
     const driverId = req.user.id;
-
-    console.log(`💰 [REQUEST_PAYMENT] Motorista ${driverId} solicitando pagamento para ride ${ride_id}`);
 
     try {
         const rideCheck = await pool.query(
@@ -1155,8 +1029,6 @@ exports.rateRide = async (req, res) => {
     const { ride_id, rating, feedback } = req.body;
     const userId = req.user.id;
 
-    console.log(`⭐ [RATE_RIDE] Usuário ${userId} avaliando ride ${ride_id} com nota ${rating}`);
-
     try {
         const rideCheck = await pool.query(
             "SELECT * FROM rides WHERE id = $1 AND (passenger_id = $2 OR driver_id = $2)",
@@ -1201,12 +1073,7 @@ exports.rateRide = async (req, res) => {
 exports.getActiveRide = async (req, res) => {
     const userId = req.user.id;
 
-    console.log(`🔍 [GET_ACTIVE_RIDE] Buscando corrida ativa para usuário ${userId}`);
-
     try {
-        // ✅ CORREÇÃO CRÍTICA:
-        // 1. Apenas corridas 'accepted', 'arrived' ou 'ongoing'.
-        // 2. Limite temporal: Atualizado nas últimas 12 horas. Corridas antigas "presas" são ignoradas.
         const result = await pool.query(`
             SELECT * FROM rides
             WHERE (passenger_id = $1 OR driver_id = $1)
@@ -1243,8 +1110,6 @@ exports.getActiveRide = async (req, res) => {
 // =================================================================================================
 exports.getUserStats = async (req, res) => {
     const userId = req.user.id;
-
-    console.log(`📊 [GET_USER_STATS] Buscando estatísticas para usuário ${userId}`);
 
     try {
         const passengerStats = await pool.query(`
@@ -1294,8 +1159,6 @@ exports.getNearbyRides = async (req, res) => {
     const driverId = req.user.id;
     const { lat, lng, radius = 10 } = req.query;
 
-    console.log(`📍 [GET_NEARBY_RIDES] Motorista ${driverId} buscando corridas num raio de ${radius}km`);
-
     try {
         const driverInfo = await pool.query(
             "SELECT vehicle_category, vehicle_details->>'type' as vehicle_type FROM users WHERE id = $1",
@@ -1314,16 +1177,8 @@ exports.getNearbyRides = async (req, res) => {
 
         const query = `
             SELECT
-                id,
-                passenger_id,
-                origin_lat,
-                origin_lng,
-                origin_name,
-                dest_name,
-                initial_price,
-                ride_type,
-                distance_km,
-                created_at
+                id, passenger_id, origin_lat, origin_lng, origin_name,
+                dest_name, initial_price, ride_type, distance_km, created_at
             FROM rides
             WHERE status = 'searching'
               AND ride_type = ANY($1::text[])
@@ -1367,8 +1222,6 @@ exports.reportIssue = async (req, res) => {
     const { issue_type, description } = req.body;
     const userId = req.user.id;
 
-    console.log(`⚠️ [REPORT_ISSUE] Usuário ${userId} reportando problema na ride ${ride_id}`);
-
     try {
         await pool.query(`
             INSERT INTO ride_issues (ride_id, user_id, issue_type, description, created_at)
@@ -1392,8 +1245,6 @@ exports.reportIssue = async (req, res) => {
 exports.getRideReceipt = async (req, res) => {
     const { ride_id } = req.params;
     const userId = req.user.id;
-
-    console.log(`🧾 [GET_RIDE_RECEIPT] Buscando recibo da ride ${ride_id}`);
 
     try {
         const rideCheck = await pool.query(
@@ -1440,8 +1291,6 @@ exports.getRideReceipt = async (req, res) => {
 exports.updateRide = async (req, res) => {
     const { id } = req.params;
     const updates = req.body;
-
-    console.log(`🔄 [UPDATE_RIDE] Admin atualizando ride ${id}`);
 
     if (req.user.role !== 'admin') {
         return res.status(403).json({ error: "Acesso negado." });
@@ -1491,8 +1340,6 @@ exports.updateRide = async (req, res) => {
 // =================================================================================================
 exports.deleteRide = async (req, res) => {
     const { id } = req.params;
-
-    console.log(`🗑️ [DELETE_RIDE] Admin deletando ride ${id}`);
 
     if (req.user.role !== 'admin') {
         return res.status(403).json({ error: "Acesso negado." });
