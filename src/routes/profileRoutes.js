@@ -11,8 +11,8 @@
  * - Dados: GET /, PUT /
  * - Config: PUT /settings
  * - Segurança: POST /change-password
- * - Mídia: POST /photo
- * - Compliance: POST /documents (KYC)
+ * - Mídia: POST /photo, POST /photo/upload
+ * - Compliance: POST /documents (KYC via Base64)
  * - Upload Multipart: POST /documents/upload (CORREÇÃO CRÍTICA)
  *
  * STATUS: PRODUCTION READY - FULL VERSION
