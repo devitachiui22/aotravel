@@ -13,6 +13,7 @@
  *    apenas quando o motorista realmente clicar no botão vermelho.
  * 3. REPASSA A DISTÂNCIA E ETA DO MOTORISTA PARA A SALA: Evento update_trip_gps
  * 4. SINCRONIA PERFEITA DE TELEMETRIA: Emissão dupla para ride_${ride_id} e passenger_ride_${ride_id}
+ * 5. Funções de utilidade pública para emissão de eventos.
  *
  * STATUS: 🔥 PRODUCTION READY - FULL VERSION - 100% BLINDADO
  * =================================================================================================
@@ -123,7 +124,7 @@ function _handleConnection(socket) {
     socket.on('update_location', (data) => _handleUpdateLocation(socket, data));
     socket.on('heartbeat', (data) => _handleHeartbeat(socket, data));
 
-    // ✅ NOVO: Evento para quando o motorista clica em "Ficar Offline"
+    // Evento para quando o motorista clica em "Ficar Offline"
     socket.on('driver_offline', async (data) => {
         const driverId = data.driver_id || data.user_id;
         if (!driverId) return;
@@ -170,7 +171,7 @@ function _handleConnection(socket) {
     socket.on('negotiate_price', (data) => _routeToController('negotiatePrice', data, socket, 'negotiation_ack'));
     socket.on('respond_negotiation', (data) => _routeToController('respondToNegotiation', data, socket, 'negotiation_response_ack'));
 
-    // ✅ RASTREAMENTO TÁTICO (GPS DA CORRIDA) - REPASSA DISTÂNCIA E ETA
+    // RASTREAMENTO TÁTICO (GPS DA CORRIDA) - REPASSA DISTÂNCIA E ETA
     socket.on('update_trip_gps', (data) => {
         const { ride_id, lat, lng, rotation, speed, distance, eta_minutes } = data;
 
@@ -428,7 +429,7 @@ async function _handleJoinDriver(socket, data) {
         timestamp: new Date().toISOString()
     });
 
-    // 🔥 O GRANDE FIX: ENVIAR CORRIDAS PENDENTES QUANDO O MOTORISTA FICA ONLINE
+    // O GRANDE FIX: ENVIAR CORRIDAS PENDENTES QUANDO O MOTORISTA FICA ONLINE
     try {
         console.log(`${colors.cyan}🔍 Buscando corridas pendentes para motorista ${driverId}...${colors.reset}`);
 
