@@ -17,6 +17,8 @@
  *    - ALTER TABLE driver_positions ALTER COLUMN lat SET DEFAULT 0
  *    - ALTER TABLE driver_positions ALTER COLUMN lng SET DEFAULT 0
  *    - CREATE INDEX idx_driver_status ON driver_positions(status, last_update)
+ * 7. ✅ NOVAS TABELAS: wallet_cards e external_bank_accounts (corrigido)
+ * 8. ✅ TRIGGER CORRIGIDA: fn_generate_wallet_number para gerar número de conta automaticamente
  *
  * STATUS: 🔥 PRODUCTION READY - ZERO ERROS DE TRANSAÇÃO
  * =================================================================================================
@@ -321,7 +323,7 @@ async function bootstrapDatabase() {
             );
         `, [], 'CREATE TABLE user_documents');
 
-        // 11. TABELA EXTERNAL_BANK_ACCOUNTS
+        // 11. TABELA EXTERNAL_BANK_ACCOUNTS (JÁ EXISTE, MAS VAMOS GARANTIR QUE ESTÁ CORRETA)
         await safeQuery(client, `
             CREATE TABLE IF NOT EXISTS external_bank_accounts (
                 id SERIAL PRIMARY KEY,
@@ -335,6 +337,24 @@ async function bootstrapDatabase() {
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         `, [], 'CREATE TABLE external_bank_accounts');
+
+        // ✅ NOVA TABELA: WALLET_CARDS (CORRIGE O ERRO DO LOG)
+        await safeQuery(client, `
+            CREATE TABLE IF NOT EXISTS wallet_cards (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                card_alias VARCHAR(50),
+                last_four VARCHAR(4),
+                provider_token TEXT,
+                expiry_date VARCHAR(5),
+                card_network VARCHAR(20),
+                is_default BOOLEAN DEFAULT false,
+                is_active BOOLEAN DEFAULT true,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `, [], 'CREATE TABLE wallet_cards');
+        log.success('✅ Tabela wallet_cards criada com sucesso');
 
         // 12. TABELA ADMIN_REPORTS
         await safeQuery(client, `
@@ -757,8 +777,10 @@ async function bootstrapDatabase() {
             "CREATE INDEX IF NOT EXISTS idx_driver_positions_update ON driver_positions(last_update)",
             "CREATE INDEX IF NOT EXISTS idx_driver_positions_geo ON driver_positions(lat, lng)",
             "CREATE INDEX IF NOT EXISTS idx_driver_positions_socket ON driver_positions(socket_id)",
-            // ✅ ÍNDICE PARA BUSCA RÁPIDA DE STATUS (Garante que motoristas sem GPS fixo sejam encontrados)
             "CREATE INDEX IF NOT EXISTS idx_driver_status ON driver_positions(status, last_update)",
+            "CREATE INDEX IF NOT EXISTS idx_wallet_cards_user ON wallet_cards(user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_wallet_cards_active ON wallet_cards(is_active) WHERE is_active = true",
+            "CREATE INDEX IF NOT EXISTS idx_bank_accounts_user ON external_bank_accounts(user_id)",
             "CREATE INDEX IF NOT EXISTS idx_rides_passenger ON rides(passenger_id)",
             "CREATE INDEX IF NOT EXISTS idx_rides_driver ON rides(driver_id)",
             "CREATE INDEX IF NOT EXISTS idx_rides_status ON rides(status)",
@@ -845,7 +867,7 @@ async function bootstrapDatabase() {
 
         const tablesWithTimestamp = [
             'users', 'rides', 'wallet_transactions', 'vehicle_details',
-            'user_documents', 'external_bank_accounts', 'app_settings',
+            'user_documents', 'external_bank_accounts', 'app_settings', 'wallet_cards',
             'hub_schedules', 'hub_groups', 'hub_deliveries',
             'favorite_places', 'search_history', 'geocode_cache',
             'optimized_routes', 'ride_ratings', 'promotions',
@@ -862,6 +884,29 @@ async function bootstrapDatabase() {
             `, [], `CREATE TRIGGER ${table}`);
         }
 
+        // ✅ TRIGGER CORRIGIDA PARA GERAR NÚMERO DE CONTA AUTOMÁTICO
+        await safeQuery(client, `
+            CREATE OR REPLACE FUNCTION fn_generate_wallet_number()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                IF NEW.wallet_account_number IS NULL OR NEW.wallet_account_number = 'Gerando...' THEN
+                    NEW.wallet_account_number := 'AOT-' || TO_CHAR(NOW(), 'YYYY') || '-' || LPAD(NEW.id::text, 8, '0');
+                END IF;
+                RETURN NEW;
+            END;
+            $$ LANGUAGE plpgsql;
+        `, [], 'CREATE FUNCTION fn_generate_wallet_number');
+
+        await safeQuery(client, `
+            DROP TRIGGER IF EXISTS trg_generate_wallet_number ON users;
+            CREATE TRIGGER trg_generate_wallet_number
+            BEFORE INSERT ON users
+            FOR EACH ROW
+            EXECUTE FUNCTION fn_generate_wallet_number();
+        `, [], 'CREATE TRIGGER trg_generate_wallet_number');
+        log.success('✅ Trigger de geração automática de número de conta configurada');
+
+        // Mantém o trigger antigo para compatibilidade
         await safeQuery(client, `
             CREATE OR REPLACE FUNCTION generate_wallet_number()
             RETURNS TRIGGER AS $$
@@ -1168,9 +1213,11 @@ async function bootstrapDatabase() {
                 continue;
             }
 
+            // O trigger de wallet já vai gerar o número automaticamente, então não precisa atualizar manualmente
+            // Mas garantimos que o número está presente
             const accountNumber = `AOT${userId.toString().padStart(8, '0')}`;
             await client.query(
-                'UPDATE users SET wallet_account_number = $1 WHERE id = $2',
+                'UPDATE users SET wallet_account_number = $1 WHERE id = $2 AND (wallet_account_number IS NULL OR wallet_account_number = \'\')',
                 [accountNumber, userId]
             );
 
@@ -1390,7 +1437,9 @@ async function bootstrapDatabase() {
                 (SELECT COUNT(*) FROM hub_deliveries WHERE stops != '[]') as deliveries_with_stops,
                 (SELECT COUNT(*) FROM favorite_places) as total_favorite_places,
                 (SELECT COUNT(*) FROM promotions) as total_promotions,
-                (SELECT COUNT(*) FROM poi_areas) as total_poi_areas
+                (SELECT COUNT(*) FROM poi_areas) as total_poi_areas,
+                (SELECT COUNT(*) FROM wallet_cards) as total_cards,
+                (SELECT COUNT(*) FROM external_bank_accounts) as total_bank_accounts
         `);
 
         log.section('🎉 BANCO DE DADOS INICIALIZADO COM SUCESSO - HUB INTELIGENTE E MAPAS ATIVOS');
@@ -1410,6 +1459,8 @@ async function bootstrapDatabase() {
         log.info(`   - Locais Favoritos: ${stats.rows[0].total_favorite_places}`);
         log.info(`   - Promoções Ativas: ${stats.rows[0].total_promotions}`);
         log.info(`   - Pontos de Interesse: ${stats.rows[0].total_poi_areas}`);
+        log.info(`   - Cartões Registrados: ${stats.rows[0].total_cards}`);
+        log.info(`   - Contas Bancárias: ${stats.rows[0].total_bank_accounts}`);
 
         return true;
 
