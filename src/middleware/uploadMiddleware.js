@@ -8,15 +8,7 @@
  *            Gerencia armazenamento em disco, validação de tipos (MIME),
  *            limites de tamanho e sanitização de nomes de arquivo.
  *
- * REGRAS DE SEGURANÇA:
- * 1. Sanitização de nome de arquivo (previne Path Traversal).
- * 2. Validação estrita de Mimetype (apenas imagens e PDFs).
- * 3. Criação automática de diretórios recursivos.
- * 4. Limite de tamanho de arquivo sincronizado com appConfig.
- * 5. Armazenamento organizado por tipo de documento (KYC, avatars, etc).
- *
- * VERSÃO: 11.0.0-GOLD-ARMORED
- * DATA: 2026.03.07
+ * ✅ CORREÇÃO: Exporta a instância do multer diretamente para uso com fields(), single(), etc.
  *
  * STATUS: PRODUCTION READY - FULL VERSION
  * =================================================================================================
@@ -60,7 +52,6 @@ try {
     });
 } catch (err) {
     console.error(`[FILESYSTEM] ERRO CRÍTICO: Não foi possível criar diretório de uploads.`, err);
-    // Não damos exit(1) aqui para permitir que o servidor tente rodar, mas uploads falharão.
 }
 
 /**
@@ -92,7 +83,7 @@ const storage = multer.diskStorage({
 
         if (req.uploadType) {
             uploadType = req.uploadType;
-        } else if (file.fieldname === 'avatar' || file.fieldname === 'photo') {
+        } else if (file.fieldname === 'avatar' || file.fieldname === 'photo' || file.fieldname === 'profile_photo') {
             uploadType = 'avatars';
         } else if (file.fieldname === 'ride_proof' || file.fieldname === 'receipt') {
             uploadType = 'receipts';
@@ -109,7 +100,6 @@ const storage = multer.diskStorage({
         const ext = path.extname(file.originalname).toLowerCase();
 
         // 2. Sanitização do nome original (Remove caracteres perigosos e espaços)
-        // Substitui tudo que não for alfanumérico, ponto ou traço por '_'
         const rawName = path.basename(file.originalname, ext);
         const safeName = rawName
             .replace(/[^a-z0-9\-_]/gi, '_')
@@ -136,6 +126,7 @@ const storage = multer.diskStorage({
         else if (file.fieldname === 'vehicle_title') docType = 'title';
         else if (file.fieldname === 'vehicle_insurance') docType = 'insurance';
         else if (file.fieldname === 'tax_document') docType = 'tax';
+        else if (file.fieldname === 'profile_photo') docType = 'profile';
 
         // Formato final: 1700000000000-987654321-userId-docType-safeName.jpg
         let filename = `${timestamp}-${random}`;
@@ -172,13 +163,11 @@ const fileFilter = (req, file, cb) => {
         'image/png',
         'image/webp',
         'image/gif',
-        'application/pdf',
-        'application/msword', // .doc
-        'application/vnd.openxmlformats-officedocument.wordprocessingml.document' // .docx
+        'application/pdf'
     ];
 
     // Permite tipos específicos baseado no campo
-    const isAvatar = file.fieldname === 'avatar' || file.fieldname === 'photo';
+    const isAvatar = file.fieldname === 'avatar' || file.fieldname === 'photo' || file.fieldname === 'profile_photo';
     const isDocument = file.fieldname.includes('bi_') ||
                        file.fieldname.includes('license') ||
                        file.fieldname.includes('vehicle_') ||
@@ -202,7 +191,7 @@ const fileFilter = (req, file, cb) => {
         cb(null, true);
     } else {
         // Cria um erro customizado para o middleware de erro capturar
-        const err = new Error(`Tipo de arquivo não suportado: ${file.mimetype}. Apenas imagens (JPG, PNG, WEBP, GIF) e documentos (PDF, DOC, DOCX) são permitidos.`);
+        const err = new Error(`Tipo de arquivo não suportado: ${file.mimetype}. Apenas imagens (JPG, PNG, WEBP, GIF) e PDF são permitidos.`);
         err.code = 'INVALID_FILE_TYPE';
         cb(err, false);
     }
@@ -224,85 +213,10 @@ const parseSizeLimit = (limitStr) => {
 };
 
 // =================================================================================================
-// 3. MIDDLEWARE DE VALIDAÇÃO ADICIONAL
+// 3. INSTÂNCIA FINAL DO MULTER
 // =================================================================================================
 
-/**
- * Valida se o usuário está autenticado antes do upload
- */
-function requireAuthForUpload(req, res, next) {
-    if (!req.user || !req.user.id) {
-        return res.status(401).json({
-            error: 'Autenticação necessária para upload de arquivos.',
-            code: 'AUTH_REQUIRED'
-        });
-    }
-    next();
-}
-
-/**
- * Middleware para upload de documentos KYC
- */
-function uploadKYCDocuments() {
-    return [
-        requireAuthForUpload,
-        upload.fields([
-            { name: 'bi_front', maxCount: 1 },
-            { name: 'bi_back', maxCount: 1 },
-            { name: 'driving_license_front', maxCount: 1 },
-            { name: 'driving_license_back', maxCount: 1 },
-            { name: 'vehicle_title', maxCount: 1 },
-            { name: 'vehicle_insurance', maxCount: 1 },
-            { name: 'tax_document', maxCount: 1 }
-        ])
-    ];
-}
-
-/**
- * Middleware para upload de avatar
- */
-function uploadAvatar() {
-    return [
-        requireAuthForUpload,
-        upload.single('avatar')
-    ];
-}
-
-/**
- * Middleware para upload de foto de perfil
- */
-function uploadProfilePhoto() {
-    return [
-        requireAuthForUpload,
-        upload.single('photo')
-    ];
-}
-
-/**
- * Middleware para upload de evidências de corrida
- */
-function uploadRideEvidence() {
-    return [
-        requireAuthForUpload,
-        upload.array('evidence', 10) // Máximo 10 arquivos
-    ];
-}
-
-/**
- * Middleware para upload de comprovantes de pagamento
- */
-function uploadPaymentReceipt() {
-    return [
-        requireAuthForUpload,
-        upload.single('receipt')
-    ];
-}
-
-// =================================================================================================
-// 4. INSTÂNCIA FINAL
-// =================================================================================================
-
-// Instância principal do Multer
+// ✅ CORREÇÃO CRÍTICA: Instância do multer pronta para uso com fields(), single(), array()
 const upload = multer({
     storage: storage,
     fileFilter: fileFilter,
@@ -312,29 +226,8 @@ const upload = multer({
     }
 });
 
-// Exporta o middleware principal e os helpers
-module.exports = {
-    // Instância principal
-    upload,
-
-    // Middlewares especializados
-    uploadKYCDocuments,
-    uploadAvatar,
-    uploadProfilePhoto,
-    uploadRideEvidence,
-    uploadPaymentReceipt,
-
-    // Helpers e configurações
-    requireAuthForUpload,
-    getUploadDirectory,
-    UPLOAD_SUBDIRS,
-
-    // Configurações exportadas para uso externo
-    config: {
-        baseDir: UPLOAD_BASE_DIR,
-        subdirs: UPLOAD_SUBDIRS,
-        allowedMimes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/pdf'],
-        maxFileSize: parseSizeLimit(SYSTEM_CONFIG.SERVER?.BODY_LIMIT || '100mb'),
-        maxFiles: 10
-    }
-};
+// =================================================================================================
+// 4. EXPORTAÇÃO - Exporta a instância diretamente
+// =================================================================================================
+// ✅ CORREÇÃO: Exporta a instância do multer para uso direto em routes
+module.exports = upload;
