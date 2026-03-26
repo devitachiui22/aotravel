@@ -1,1365 +1,796 @@
 /**
  * =================================================================================================
- * 🚕 AOTRAVEL SERVER PRO - RIDE CONTROLLER (MATCHING & LIFECYCLE v13.0)
+ * ⚡ AOTRAVEL SERVER PRO - TITANIUM SOCKET ENGINE v13.0.0 (CORE DE TEMPO REAL)
  * =================================================================================================
- * STATUS: 🔥 PRODUCTION READY - CLEAN ARCHITECTURE APLICADA
- * ✅ FIX RACE CONDITION E CATEGORIAS (Premium, Standard, Moto)
- * ✅ CORREÇÃO CRÍTICA: getActiveRide agora filtra apenas status ativos e com limite de 12h
- * ✅ OMNI-MODULE COMPLETE RIDE: Suporte para finalizar corridas, entregas, agendamentos e grupos
+ *
+ * ARQUIVO: src/services/socketService.js
+ * DESCRIÇÃO: Motor centralizado e exclusivo de WebSockets.
+ *
+ * STATUS: 🔥 PRODUCTION READY - FULL VERSION - 100% BLINDADO
  * =================================================================================================
  */
 
+const { Server } = require("socket.io");
 const pool = require('../config/db');
-const { getDistance, logError, logSystem, getFullRideDetails, generateRef } = require('../utils/helpers');
-const walletService = require('../services/walletService');
+const { getFullRideDetails, logSystem, logError, getDistance, generateRef } = require('../utils/helpers');
+const SYSTEM_CONFIG = require('../config/appConfig');
 
-// =================================================================================================
-// 1. SOLICITAÇÃO DE CORRIDA
-// =================================================================================================
-exports.requestRide = async (req, res) => {
-    const startTime = Date.now();
-    const requestId = generateRef('RQ');
-    const body = req.body;
+// Instância global do Socket.IO
+let io;
 
-    const originLat = parseFloat(body.origin_lat || body.originLat);
-    const originLng = parseFloat(body.origin_lng || body.originLng);
-    const destLat = parseFloat(body.dest_lat || body.destLat);
-    const destLng = parseFloat(body.dest_lng || body.destLng);
-    const passengerId = req.user.id;
-    const distance = parseFloat(body.distance_km) || 0;
-
-    // Normalização estrita do tipo
-    let rideType = (body.ride_type || 'car').toLowerCase();
-    if (rideType === 'standard' || rideType === 'ride') rideType = 'car';
-    if (rideType === 'comfort' || rideType === 'lux') rideType = 'premium';
-    if (rideType === 'delivery_car') rideType = 'delivery_car';
-    if (rideType === 'delivery_moto') rideType = 'delivery_moto';
-
-    console.log('\n🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴');
-    console.log('🚕 [REQUEST_RIDE] INICIANDO SOLICITAÇÃO');
-    console.log(`   Request ID: ${requestId}`);
-    console.log(`   Passageiro ID: ${passengerId}`);
-    console.log(`   Origem: (${originLat}, ${originLng})`);
-    console.log(`   Destino: (${destLat}, ${destLng})`);
-    console.log(`   Distância: ${distance}km`);
-    console.log(`   Tipo: ${rideType}`);
-    console.log('🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴\n');
-
-    if (!originLat || !originLng || !destLat || !destLng) {
-        return res.status(400).json({
-            error: "Coordenadas incompletas.",
-            code: "INVALID_COORDINATES"
-        });
-    }
-
-    const client = await pool.connect();
-
-    try {
-        await client.query('BEGIN');
-
-        // ✅ MATEMÁTICA IDÊNTICA AO FRONTEND
-        let estimatedPrice = 0;
-        if (rideType === 'moto') {
-            estimatedPrice = 400 + (distance * 180);
-        } else if (rideType === 'premium') {
-            estimatedPrice = 1200 + (distance * 500);
-        } else if (rideType === 'delivery_car') {
-            estimatedPrice = 1000 + (distance * 450);
-        } else if (rideType === 'delivery_moto') {
-            estimatedPrice = 800 + (distance * 300);
-        } else {
-            estimatedPrice = 600 + (distance * 300);
-        }
-
-        estimatedPrice = Math.ceil(estimatedPrice / 50) * 50;
-        if (rideType === 'car' && estimatedPrice < 600) estimatedPrice = 600;
-        if (rideType === 'moto' && estimatedPrice < 400) estimatedPrice = 400;
-        if (rideType === 'premium' && estimatedPrice < 1200) estimatedPrice = 1200;
-        if (rideType === 'delivery_car' && estimatedPrice < 1000) estimatedPrice = 1000;
-        if (rideType === 'delivery_moto' && estimatedPrice < 800) estimatedPrice = 800;
-
-        console.log(`💰 PREÇO FIXADO: ${estimatedPrice} Kz | Tipo: ${rideType}`);
-
-        const insertQuery = `
-            INSERT INTO rides (
-                passenger_id, origin_lat, origin_lng, dest_lat, dest_lng,
-                origin_name, dest_name, initial_price, final_price,
-                ride_type, distance_km, status, created_at, updated_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9, $10, 'searching', NOW(), NOW())
-            RETURNING id, created_at
-        `;
-
-        const result = await client.query(insertQuery, [
-            passengerId, originLat, originLng, destLat, destLng,
-            body.origin_name || 'Origem', body.dest_name || 'Destino',
-            estimatedPrice, rideType, distance
-        ]);
-
-        const ride = result.rows[0];
-        await client.query('COMMIT');
-
-        console.log(`✅ CORRIDA #${ride.id} CRIADA - Preço: ${estimatedPrice} Kz`);
-
-        // Notifica o passageiro via socket que a busca começou
-        if (req.io) {
-            req.io.to(`user_${passengerId}`).emit('ride_requested', {
-                ride_id: ride.id, status: 'searching', price: estimatedPrice,
-                request_id: requestId
-            });
-            console.log(`📡 Notificação enviada ao passageiro ${passengerId}`);
-        }
-
-        // Buscar motoristas qualificados
-        let drivers = await exports.findAvailableDrivers(originLat, originLng, 10, { rideType });
-        if (drivers.length === 0) {
-            console.log(`⚠️ Nenhum motorista encontrado no raio de 10km, expandindo para 20km...`);
-            drivers = await exports.findAvailableDrivers(originLat, originLng, 20, { includeGpsZero: true, rideType });
-        }
-
-        console.log(`👥 Motoristas verificados e encontrados: ${drivers.length}`);
-
-        let driversNotified = 0;
-        const ridePayload = {
-            ride_id: ride.id,
-            passenger_id: passengerId,
-            passenger_name: req.user.name || 'Passageiro',
-            passenger_photo: req.user.photo,
-            passenger_rating: req.user.rating || 5.0,
-            origin_lat: originLat, origin_lng: originLng, origin_name: body.origin_name,
-            dest_lat: destLat, dest_lng: destLng, dest_name: body.dest_name,
-            initial_price: estimatedPrice, final_price: estimatedPrice,
-            distance_km: distance, ride_type: rideType,
-            status: 'searching', timestamp: new Date().toISOString()
-        };
-
-        for (const driver of drivers) {
-            let distanceToPickup = 0;
-            if (driver.lat && driver.lng && driver.lat !== 0 && driver.lng !== 0) {
-                distanceToPickup = getDistance(originLat, originLng, parseFloat(driver.lat), parseFloat(driver.lng));
-            }
-
-            const driverPayload = {
-                ...ridePayload,
-                distance_to_pickup: parseFloat(distanceToPickup.toFixed(1))
-            };
-
-            try {
-                if (driver.socket_id && req.io) {
-                    req.io.to(driver.socket_id).emit('ride_opportunity', driverPayload);
-                    driversNotified++;
-                    console.log(`   📡 Notificado motorista ${driver.driver_id} via socket_id (distância: ${distanceToPickup.toFixed(1)}km)`);
-                } else if (driver.driver_id && req.io) {
-                    req.io.to(`driver_${driver.driver_id}`).emit('ride_opportunity', driverPayload);
-                    driversNotified++;
-                    console.log(`   📡 Notificado motorista ${driver.driver_id} via driver_room (distância: ${distanceToPickup.toFixed(1)}km)`);
-                }
-            } catch (e) {
-                logError('DISPATCH_EMIT', e);
-            }
-        }
-
-        if (driversNotified === 0 && req.io) {
-            req.io.to(`user_${passengerId}`).emit('ride_no_drivers', {
-                ride_id: ride.id, message: 'Nenhum motorista disponível no momento.'
-            });
-            console.log(`⚠️ Nenhum motorista notificado para a corrida #${ride.id}`);
-        }
-
-        console.log(`📡 Dispatch concluído. ${driversNotified} motoristas notificados em ${Date.now() - startTime}ms.`);
-
-        res.status(201).json({
-            success: true,
-            message: driversNotified > 0 ? "Solicitação enviada aos motoristas." : "Aguardando motoristas...",
-            ride: {
-                id: ride.id,
-                initial_price: estimatedPrice,
-                ride_type: rideType,
-                distance_km: distance,
-                status: 'searching'
-            },
-            dispatch_stats: {
-                drivers_notified: driversNotified,
-                request_id: requestId
-            }
-        });
-
-    } catch (e) {
-        await client.query('ROLLBACK');
-        console.error('❌ ERRO FATAL NO REQUEST_RIDE:', e);
-        logError('RIDE_REQUEST_FATAL', e);
-        res.status(500).json({
-            error: "Erro crítico ao processar solicitação.",
-            request_id: requestId
-        });
-    } finally {
-        client.release();
-        console.log(`🔌 Conexão com banco liberada (Request ID: ${requestId})`);
-    }
+// Cores para Logs de Terminal
+const colors = {
+    reset: '\x1b[0m',
+    green: '\x1b[32m',
+    blue: '\x1b[34m',
+    yellow: '\x1b[33m',
+    magenta: '\x1b[35m',
+    cyan: '\x1b[36m',
+    red: '\x1b[31m'
 };
 
-// =================================================================================================
-// 2. BUSCA DE MOTORISTAS BLINDADA POR CATEGORIA E VEÍCULO
-// =================================================================================================
-exports.findAvailableDrivers = async (lat, lng, radiusKm = 10, options = {}) => {
-    const { includeGpsZero = false, rideType = 'car' } = options;
+/**
+ * =================================================================================================
+ * 1. INICIALIZAÇÃO DO SERVIDOR DE SOCKETS
+ * =================================================================================================
+ */
+function setupSocketIO(httpServer) {
+    if (io) return io; // Singleton Pattern
 
-    let categoryCondition = "";
-    let vehicleTypeCondition = "";
-    let params = [lat, lng, radiusKm];
+    io = new Server(httpServer, {
+        cors: {
+            origin: SYSTEM_CONFIG.SERVER?.CORS_ORIGIN || "*",
+            methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+            credentials: true
+        },
+        pingTimeout: SYSTEM_CONFIG.SOCKET?.PING_TIMEOUT || 20000,
+        pingInterval: SYSTEM_CONFIG.SOCKET?.PING_INTERVAL || 25000,
+        transports: SYSTEM_CONFIG.SOCKET?.TRANSPORTS || ["websocket", "polling"],
+        allowEIO3: true,
+        connectTimeout: 10000,
+        maxHttpBufferSize: 1e6
+    });
 
-    if (rideType === 'moto' || rideType === 'delivery_moto') {
-        categoryCondition = "AND u.vehicle_category = 'moto'";
-        vehicleTypeCondition = "AND u.vehicle_details->>'type' = 'moto'";
-    } else if (rideType === 'premium') {
-        categoryCondition = "AND u.vehicle_category = 'premium'";
-        vehicleTypeCondition = "AND u.vehicle_details->>'type' IN ('premium', 'car')";
-    } else if (rideType === 'delivery_car') {
-        categoryCondition = "AND u.vehicle_category IN ('car', 'premium')";
-        vehicleTypeCondition = "AND u.vehicle_details->>'type' IN ('car', 'premium')";
-    } else {
-        categoryCondition = "AND u.vehicle_category IN ('car', 'premium')";
-        vehicleTypeCondition = "AND u.vehicle_details->>'type' IN ('car', 'premium')";
+    global.io = io;
+
+    io.on('connection', _handleConnection);
+
+    console.log(`${colors.green}✅ Motor de Tempo Real v13.0 iniciado com sucesso.${colors.reset}`);
+    console.log(`${colors.cyan}📡 Socket.IO ouvindo em ${SYSTEM_CONFIG.SERVER?.PORT || 3000}${colors.reset}`);
+
+    // Job de Fundo: Limpa motoristas inativos a cada 2 minutos
+    setInterval(() => {
+        _cleanInactiveDrivers();
+    }, 120000);
+
+    // Job de Fundo: Atualiza heartbeat dos motoristas online
+    setInterval(() => {
+        _updateDriversHeartbeat();
+    }, 30000);
+
+    return io;
+}
+
+/**
+ * =================================================================================================
+ * 2. GERENCIADOR PRINCIPAL DE CONEXÕES
+ * =================================================================================================
+ */
+function _handleConnection(socket) {
+    const socketId = socket.id;
+    const query = socket.handshake.query;
+    const clientIp = socket.handshake.address;
+
+    console.log(`${colors.magenta}🔌 Terminal conectado: ${socketId} | IP: ${clientIp}${colors.reset}`);
+
+    // Auto-Join de Sala baseada na autenticação via query params
+    if (query && query.userId) {
+        const userId = query.userId;
+        const role = query.role || 'passenger';
+        const userName = query.userName || 'Usuário';
+
+        console.log(`${colors.green}👤 Usuário ${userId} (${userName}) conectado como ${role}${colors.reset}`);
+
+        // Sala pessoal para notificações diretas
+        socket.join(`user_${userId}`);
+
+        if (role === 'driver') {
+            socket.join('drivers');
+            socket.join(`driver_${userId}`);
+
+            const lat = parseFloat(query.lat) || -8.8399;
+            const lng = parseFloat(query.lng) || 13.2894;
+
+            _registerDriverOnline(userId, socketId, lat, lng, socket);
+        }
     }
 
-    const query = `
-        SELECT
-            dp.driver_id,
-            dp.lat,
-            dp.lng,
-            dp.socket_id,
-            dp.status,
-            u.name,
-            u.rating,
-            u.vehicle_category,
-            u.vehicle_details
-        FROM driver_positions dp
-        JOIN users u ON dp.driver_id = u.id
-        WHERE dp.status = 'online'
-          AND dp.last_update > NOW() - INTERVAL '3 minutes'
-          AND u.is_blocked = false
-          AND u.is_verified = true
-          AND u.role = 'driver'
-          ${categoryCondition}
-          ${vehicleTypeCondition}
-          AND (
-              (dp.lat != 0 AND dp.lng != 0 AND
-                  (6371 * acos(cos(radians($1)) * cos(radians(dp.lat)) *
-                   cos(radians(dp.lng) - radians($2)) + sin(radians($1)) * sin(radians(dp.lat)))) <= $3
-              )
-              ${includeGpsZero ? "OR (dp.lat = 0 AND dp.lng = 0)" : ""}
-          )
-        LIMIT 20
-    `;
+    // =========================================================================
+    // 3. REGISTRO DE LISTENERS E EVENTOS GLOBAIS
+    // =========================================================================
 
-    try {
-        const result = await pool.query(query, params);
+    // --- IDENTIDADE E PRESENÇA ---
+    socket.on('join_user', (userId) => _handleJoinUser(socket, userId));
+    socket.on('join_driver_room', (data) => _handleJoinDriver(socket, data));
+    socket.on('update_location', (data) => _handleUpdateLocation(socket, data));
+    socket.on('heartbeat', (data) => _handleHeartbeat(socket, data));
 
-        console.log(`🔍 Buscando motoristas para tipo: ${rideType}`);
-        console.log(`✅ Encontrados ${result.rows.length} motoristas qualificados`);
+    // Evento para quando o motorista clica em "Ficar Offline"
+    socket.on('driver_offline', async (data) => {
+        const driverId = data.driver_id || data.user_id;
+        if (!driverId) return;
 
-        result.rows.forEach((driver, index) => {
-            if (driver.lat && driver.lng && driver.lat !== 0 && driver.lng !== 0) {
-                const dist = getDistance(lat, lng, parseFloat(driver.lat), parseFloat(driver.lng));
-                console.log(`   ${index + 1}. Motorista ${driver.driver_id} - Distância: ${dist.toFixed(1)}km - Categoria: ${driver.vehicle_category || 'N/A'}`);
-            } else {
-                console.log(`   ${index + 1}. Motorista ${driver.driver_id} - GPS: 0,0 (incluído por includeGpsZero) - Categoria: ${driver.vehicle_category || 'N/A'}`);
-            }
-        });
+        console.log(`${colors.yellow}🛑 Motorista ${driverId} solicitou modo OFFLINE manualmente.${colors.reset}`);
 
-        return result.rows;
-    } catch (e) {
-        logError('FIND_DRIVERS', e);
-        return [];
-    }
-};
-
-// =================================================================================================
-// 3. ACEITAR CORRIDA (HTTP É A SOURCE OF TRUTH - ANTI RACE CONDITION)
-// =================================================================================================
-exports.acceptRide = async (req, res) => {
-    const { ride_id, driver_id } = req.body;
-    const actualDriverId = driver_id || req.user?.id;
-
-    console.log('\n🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴');
-    console.log('🚗 [ACCEPT_RIDE] INICIANDO PROCESSO DE ACEITAÇÃO');
-    console.log('📦 BODY RECEBIDO:', req.body);
-    console.log('👤 USUÁRIO:', req.user);
-    console.log('🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴\n');
-
-    if (!ride_id) {
-        return res.status(400).json({
-            success: false,
-            error: "ID da corrida é obrigatório."
-        });
-    }
-
-    if (!req.user || req.user.role !== 'driver') {
-        return res.status(403).json({
-            success: false,
-            error: "Apenas motoristas podem aceitar corridas."
-        });
-    }
-
-    if (!actualDriverId) {
-        return res.status(400).json({
-            success: false,
-            error: "ID do motorista é obrigatório."
-        });
-    }
-
-    const client = await pool.connect();
-
-    try {
-        await client.query('BEGIN');
-
-        const driverCheck = await client.query(
-            "SELECT id, name, is_verified, vehicle_category, vehicle_details, email, phone FROM users WHERE id = $1",
-            [actualDriverId]
-        );
-
-        if (driverCheck.rows.length === 0) {
-            await client.query('ROLLBACK');
-            return res.status(404).json({
-                success: false,
-                error: "Motorista não encontrado."
-            });
-        }
-
-        if (!driverCheck.rows[0].is_verified) {
-            await client.query('ROLLBACK');
-            return res.status(403).json({
-                success: false,
-                error: "Sua conta ainda não foi aprovada. Complete seu cadastro e aguarde verificação."
-            });
-        }
-
-        console.log(`✅ Motorista encontrado e verificado: ${driverCheck.rows[0].name} (ID: ${actualDriverId})`);
-
-        const rideRes = await client.query(
-            "SELECT id, status, passenger_id, initial_price, ride_type, origin_name, dest_name, distance_km FROM rides WHERE id = $1 FOR UPDATE",
-            [ride_id]
-        );
-
-        if (rideRes.rows.length === 0) {
-            await client.query('ROLLBACK');
-            return res.status(404).json({
-                success: false,
-                error: "Corrida não encontrada."
-            });
-        }
-
-        const ride = rideRes.rows[0];
-
-        if (ride.status !== 'searching') {
-            await client.query('ROLLBACK');
-            return res.status(409).json({
-                success: false,
-                error: "Esta corrida já foi assumida por outro motorista.",
-                code: "RIDE_TAKEN"
-            });
-        }
-
-        if (ride.passenger_id == actualDriverId) {
-            await client.query('ROLLBACK');
-            return res.status(400).json({
-                success: false,
-                error: "Você não pode aceitar sua própria corrida."
-            });
-        }
-
-        const vCat = driverCheck.rows[0].vehicle_category || 'car';
-        const vDetails = driverCheck.rows[0].vehicle_details || {};
-        const vType = vDetails.type || 'car';
-        const rType = ride.ride_type || 'car';
-
-        if (rType === 'premium' && vCat !== 'premium') {
-            await client.query('ROLLBACK');
-            return res.status(403).json({
-                success: false,
-                error: "Apenas motoristas Premium podem aceitar esta corrida."
-            });
-        }
-
-        if (rType === 'moto' && vCat !== 'moto') {
-            await client.query('ROLLBACK');
-            return res.status(403).json({
-                success: false,
-                error: "Veículo incompatível."
-            });
-        }
-
-        if (rType === 'delivery_moto' && vCat !== 'moto') {
-            await client.query('ROLLBACK');
-            return res.status(403).json({
-                success: false,
-                error: "Veículo incompatível para entrega."
-            });
-        }
-
-        if ((rType === 'moto' || rType === 'delivery_moto') && vType !== 'moto') {
-            await client.query('ROLLBACK');
-            return res.status(403).json({
-                success: false,
-                error: "Veículo incompatível."
-            });
-        }
-
-        console.log('✅ Validações OK. Atualizando corrida...');
-
-        await client.query(
-            "UPDATE rides SET driver_id = $1, status = 'accepted', accepted_at = NOW(), updated_at = NOW() WHERE id = $2",
-            [actualDriverId, ride_id]
-        );
-
-        const fullRide = await getFullRideDetails(ride_id);
-
-        if (!fullRide) {
-            await client.query('COMMIT');
-            return res.status(500).json({
-                success: false,
-                error: "Erro ao recuperar dados da corrida."
-            });
-        }
-
-        if (req.io) {
-            console.log('📡 Enviando eventos socket...');
-
-            req.io.to(`user_${ride.passenger_id}`).emit('ride_accepted', fullRide);
-            req.io.to(`user_${actualDriverId}`).emit('ride_accepted', fullRide);
-            req.io.to(`ride_${ride_id}`).emit('ride_accepted', fullRide);
-            req.io.to('drivers').emit('ride_taken', {
-                ride_id: ride_id,
-                taken_by: actualDriverId
-            });
-        }
-
-        await client.query('COMMIT');
-        console.log('✅ Transação COMMIT realizada com sucesso');
-
-        logSystem('RIDE_ACCEPT', `✅ Motorista ${actualDriverId} assumiu a corrida ${ride_id}`);
-
-        res.json({
-            success: true,
-            message: "Corrida assumida com sucesso!",
-            ride: fullRide
-        });
-
-    } catch (e) {
-        await client.query('ROLLBACK');
-        console.error('❌ ERRO FATAL NO ACCEPT_RIDE:', e);
-        logError('RIDE_ACCEPT_FATAL', e);
-        res.status(500).json({
-            success: false,
-            error: "Erro crítico ao aceitar corrida.",
-            details: process.env.NODE_ENV === 'development' ? e.message : undefined
-        });
-    } finally {
-        client.release();
-        console.log('🔌 Conexão com banco liberada');
-    }
-};
-
-// =================================================================================================
-// 4. ATUALIZAR STATUS DA CORRIDA
-// =================================================================================================
-exports.updateStatus = async (req, res) => {
-    const { ride_id, status } = req.body;
-    const driverId = req.user.id;
-    const allowed = ['arrived', 'ongoing', 'accepted'];
-
-    console.log(`🔄 [UPDATE_STATUS] Ride: ${ride_id}, Status: ${status}, Driver: ${driverId}`);
-
-    if (!allowed.includes(status)) {
-        return res.status(400).json({ error: "Status inválido." });
-    }
-
-    const client = await pool.connect();
-
-    try {
-        await client.query('BEGIN');
-
-        const check = await client.query(
-            "SELECT driver_id, passenger_id FROM rides WHERE id = $1 FOR UPDATE",
-            [ride_id]
-        );
-
-        if (check.rows.length === 0) {
-            await client.query('ROLLBACK');
-            return res.status(404).json({ error: "Corrida não encontrada." });
-        }
-
-        if (check.rows[0].driver_id !== driverId) {
-            await client.query('ROLLBACK');
-            return res.status(403).json({ error: "Acesso negado." });
-        }
-
-        let updateQuery = `UPDATE rides SET status = $1`;
-        if (status === 'arrived') updateQuery += `, arrived_at = NOW()`;
-        if (status === 'ongoing') updateQuery += `, started_at = NOW()`;
-        updateQuery += `, updated_at = NOW() WHERE id = $2 RETURNING *`;
-
-        await client.query(updateQuery, [status, ride_id]);
-        await client.query('COMMIT');
-
-        const fullRide = await getFullRideDetails(ride_id);
-
-        if (req.io) {
-            const eventName = status === 'arrived' ? 'driver_arrived' : 'trip_started';
-            req.io.to(`ride_${ride_id}`).emit(eventName, fullRide);
-            req.io.to(`user_${fullRide.passenger_id}`).emit(eventName, fullRide);
-        }
-
-        res.json({
-            success: true,
-            status: status,
-            ride: fullRide
-        });
-
-    } catch (e) {
-        await client.query('ROLLBACK');
-        console.error('❌ ERRO AO ATUALIZAR STATUS:', e);
-        logError('RIDE_STATUS_UPDATE', e);
-        res.status(500).json({ error: "Erro ao atualizar status." });
-    } finally {
-        client.release();
-    }
-};
-
-// =================================================================================================
-// 5. INICIAR CORRIDA
-// =================================================================================================
-exports.startRide = async (req, res) => {
-    console.log('🚀 [START_RIDE] Iniciando corrida...');
-    req.body.status = 'ongoing';
-    return exports.updateStatus(req, res);
-};
-
-// =================================================================================================
-// 6. FINALIZAR MISSÃO (OMNI-MODULE PAYMENT ENGINE)
-// =================================================================================================
-exports.completeRide = async (req, res) => {
-    const { ride_id, payment_method, final_price, distance_traveled, pin, hub_type } = req.body;
-    const userId = req.user.id;
-    const method = payment_method || 'cash';
-
-    console.log(`\n✅ [COMPLETE_MISSION] Ride: ${ride_id} | Method: ${method} | Hub: ${hub_type || 'Ride'}`);
-
-    const client = await pool.connect();
-
-    try {
-        await client.query('BEGIN');
-
-        let table = 'rides';
-        let pCol = 'passenger_id';
-        let dCol = 'driver_id';
-
-        if (hub_type === 'delivery') {
-            table = 'hub_deliveries';
-            pCol = 'sender_id';
-            dCol = 'driver_id';
-        } else if (hub_type === 'schedule') {
-            table = 'hub_schedules';
-            pCol = 'passenger_id';
-            dCol = 'driver_id';
-        } else if (hub_type === 'group') {
-            table = 'hub_groups';
-            pCol = 'creator_id';
-            dCol = 'driver_id';
-        }
-
-        const rideCheck = await client.query(`SELECT * FROM ${table} WHERE id = $1 FOR UPDATE`, [ride_id]);
-        if (rideCheck.rows.length === 0) {
-            await client.query('ROLLBACK');
-            throw new Error("Missão não encontrada.");
-        }
-
-        const ride = rideCheck.rows[0];
-        const passengerId = ride[pCol];
-        const driverId = ride[dCol];
-
-        if (driverId != userId && passengerId != userId) {
-            await client.query('ROLLBACK');
-            throw new Error("Acesso negado.");
-        }
-
-        const validStatuses = ['ongoing', 'accepted', 'in_transit', 'picked_up'];
-        if (!validStatuses.includes(ride.status)) {
-            await client.query('ROLLBACK');
-            throw new Error("A missão já foi finalizada ou cancelada.");
-        }
-
-        let finalAmount = 0;
-        if (final_price) {
-            finalAmount = parseFloat(final_price);
-        } else if (ride.final_price) {
-            finalAmount = parseFloat(ride.final_price);
-        } else if (ride.price) {
-            finalAmount = parseFloat(ride.price);
-        } else if (ride.total_fare) {
-            finalAmount = parseFloat(ride.total_fare);
-        } else if (ride.proposed_price) {
-            finalAmount = parseFloat(ride.proposed_price);
-        } else if (ride.initial_price) {
-            finalAmount = parseFloat(ride.initial_price);
-        } else {
-            finalAmount = 0;
-        }
-
-        if (method === 'wallet') {
-            if (userId !== passengerId) {
-                await client.query('ROLLBACK');
-                return res.status(403).json({ error: "Apenas o passageiro/remetente pode autorizar o débito." });
-            }
-
-            await walletService.processRidePayment(
-                passengerId,
-                driverId,
-                finalAmount,
-                ride_id,
-                pin,
-                client
+        try {
+            await pool.query(
+                "UPDATE driver_positions SET status = 'offline', socket_id = NULL WHERE driver_id = $1",
+                [driverId]
             );
-        } else {
-            if (userId !== driverId) {
-                await client.query('ROLLBACK');
-                return res.status(403).json({ error: "O motorista deve confirmar o recebimento em dinheiro." });
-            }
-
-            await walletService.processCashRideLog(
-                driverId,
-                finalAmount,
-                ride_id,
-                client
+            await pool.query(
+                "UPDATE users SET is_online = false WHERE id = $1",
+                [driverId]
             );
-        }
 
-        let statusVal = 'completed';
-        let socketEvent = 'ride_completed';
+            socket.leave('drivers');
+            socket.leave(`driver_${driverId}`);
 
-        if (hub_type === 'delivery') {
-            statusVal = 'delivered';
-            socketEvent = 'delivery_completed';
-        } else if (hub_type === 'schedule') {
-            statusVal = 'completed';
-            socketEvent = 'schedule_completed';
-        } else if (hub_type === 'group') {
-            statusVal = 'completed';
-            socketEvent = 'group_completed';
-        }
+            socket.emit('offline_confirmed', {
+                success: true,
+                message: "Você está offline. Para receber novas corridas, volte ao modo online."
+            });
 
-        let updateFields = `status = '${statusVal}', updated_at = NOW()`;
-
-        if (table === 'rides') {
-            updateFields += `, final_price = ${finalAmount}, payment_method = '${method}', payment_status = 'paid', completed_at = NOW()`;
-            if (distance_traveled) updateFields += `, distance_km = ${distance_traveled}`;
-        } else if (table === 'hub_deliveries') {
-            updateFields += `, completed_at = NOW()`;
-        } else if (table === 'hub_schedules') {
-            updateFields += `, completed_at = NOW()`;
-        } else if (table === 'hub_groups') {
-            updateFields += `, completed_at = NOW()`;
-        }
-
-        await client.query(`UPDATE ${table} SET ${updateFields} WHERE id = $1`, [ride_id]);
-        await client.query('COMMIT');
-
-        if (req.io) {
-            const payload = {
-                id: ride_id,
-                status: statusVal,
-                hub_type: hub_type || 'ride',
-                final_price: finalAmount,
-                payment_method: method
-            };
-
-            req.io.to(`ride_${ride_id}`).emit(socketEvent, payload);
-            req.io.to(`user_${passengerId}`).emit(socketEvent, payload);
-            req.io.to(`user_${driverId}`).emit(socketEvent, payload);
-
-            if (method === 'wallet') {
-                req.io.to(`user_${passengerId}`).emit('wallet_update', { type: 'payment', amount: finalAmount });
-                req.io.to(`user_${driverId}`).emit('wallet_update', { type: 'earnings', amount: finalAmount });
-            }
-
-            if (hub_type === 'delivery') {
-                req.io.to(`user_${passengerId}`).emit('hub_delivery_update', { id: ride_id, status: 'delivered' });
-                req.io.to(`user_${driverId}`).emit('hub_delivery_update', { id: ride_id, status: 'delivered' });
-            }
-            if (hub_type === 'schedule') {
-                req.io.to(`user_${passengerId}`).emit('hub_schedule_update', { id: ride_id, status: 'completed' });
-            }
-            if (hub_type === 'group') {
-                req.io.to(`user_${driverId}`).emit('hub_group_update', { id: ride_id, status: 'completed' });
-            }
-        }
-
-        res.json({
-            success: true,
-            message: "Missão concluída com sucesso.",
-            data: {
-                id: ride_id,
-                status: statusVal,
-                hub_type: hub_type || 'ride',
-                final_price: finalAmount,
-                payment_method: method
-            }
-        });
-
-    } catch (e) {
-        await client.query('ROLLBACK');
-        console.error('❌ ERRO NO COMPLETE_RIDE:', e.message);
-
-        if (e.code === 'INSUFFICIENT_FUNDS') {
-            return res.status(402).json({ error: e.message, code: e.code });
-        }
-        if (e.message && e.message.includes('PIN')) {
-            return res.status(403).json({ error: e.message });
-        }
-
-        res.status(500).json({ error: "Erro crítico ao finalizar a missão." });
-    } finally {
-        client.release();
-    }
-};
-
-// =================================================================================================
-// 7. CANCELAR CORRIDA
-// =================================================================================================
-exports.cancelRide = async (req, res) => {
-    const { ride_id, reason } = req.body;
-    const userId = req.user.id;
-    const role = req.user.role;
-
-    console.log('\n🚫 [CANCEL_RIDE] INICIANDO CANCELAMENTO');
-    console.log(`   Ride: ${ride_id}`);
-    console.log(`   Reason: ${reason}`);
-    console.log(`   Role: ${role}`);
-
-    const client = await pool.connect();
-
-    try {
-        await client.query('BEGIN');
-
-        const check = await client.query(
-            "SELECT * FROM rides WHERE id = $1 FOR UPDATE",
-            [ride_id]
-        );
-
-        if (check.rows.length === 0) {
-            await client.query('ROLLBACK');
-            return res.status(404).json({ error: "Corrida não encontrada." });
-        }
-
-        const ride = check.rows[0];
-
-        if (!['searching', 'accepted', 'ongoing'].includes(ride.status)) {
-            await client.query('ROLLBACK');
-            return res.status(400).json({ error: "Corrida já finalizada." });
-        }
-
-        if (ride.passenger_id !== userId && ride.driver_id !== userId && role !== 'admin') {
-            await client.query('ROLLBACK');
-            return res.status(403).json({ error: "Acesso negado." });
-        }
-
-        await client.query(`
-            UPDATE rides SET
-                status = 'cancelled',
-                cancelled_at = NOW(),
-                cancelled_by = $1,
-                cancellation_reason = $2,
-                updated_at = NOW()
-            WHERE id = $3
-        `, [role, reason, ride_id]);
-
-        await client.query('COMMIT');
-
-        const fullRide = await getFullRideDetails(ride_id);
-
-        if (req.io) {
-            const payload = { ...fullRide, reason: reason, cancelled_by: role };
-
-            req.io.to(`ride_${ride_id}`).emit('ride_cancelled', payload);
-
-            if (role === 'driver') {
-                req.io.to(`user_${ride.passenger_id}`).emit('ride_cancelled', payload);
-            }
-
-            if (role === 'passenger' && ride.driver_id) {
-                req.io.to(`user_${ride.driver_id}`).emit('ride_cancelled', payload);
-            }
-
-            if (ride.status === 'searching') {
-                req.io.to('drivers').emit('ride_cancelled_by_passenger', {
-                    ride_id: ride_id,
-                    reason: reason
-                });
-            }
-        }
-
-        res.json({
-            success: true,
-            message: "Corrida cancelada com sucesso."
-        });
-
-    } catch (e) {
-        await client.query('ROLLBACK');
-        console.error('❌ ERRO AO CANCELAR CORRIDA:', e);
-        logError('RIDE_CANCEL', e);
-        res.status(500).json({ error: "Erro ao cancelar corrida." });
-    } finally {
-        client.release();
-    }
-};
-
-// =================================================================================================
-// 8. HISTÓRICO DE CORRIDAS
-// =================================================================================================
-exports.getHistory = async (req, res) => {
-    const userId = req.user.id;
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 20;
-    const offset = (page - 1) * limit;
-
-    try {
-        const countResult = await pool.query(
-            "SELECT COUNT(*) as total FROM rides WHERE passenger_id = $1 OR driver_id = $1",
-            [userId]
-        );
-        const total = parseInt(countResult.rows[0].total);
-
-        const query = `
-            SELECT
-                r.*,
-                CASE WHEN r.passenger_id = $1 THEN d.name ELSE p.name END as counterpart_name,
-                CASE WHEN r.passenger_id = $1 THEN d.photo ELSE p.photo END as counterpart_photo,
-                CASE WHEN r.passenger_id = $1 THEN d.rating ELSE p.rating END as counterpart_rating
-            FROM rides r
-            LEFT JOIN users d ON r.driver_id = d.id
-            LEFT JOIN users p ON r.passenger_id = p.id
-            WHERE r.passenger_id = $1 OR r.driver_id = $1
-            ORDER BY r.created_at DESC
-            LIMIT $2 OFFSET $3
-        `;
-
-        const result = await pool.query(query, [userId, limit, offset]);
-
-        res.json({
-            success: true,
-            rides: result.rows,
-            pagination: {
-                page: page,
-                limit: limit,
-                total: total,
-                pages: Math.ceil(total / limit)
-            }
-        });
-
-    } catch (e) {
-        console.error('❌ ERRO AO BUSCAR HISTÓRICO:', e);
-        logError('RIDE_HISTORY', e);
-        res.status(500).json({
-            success: false,
-            error: "Erro ao buscar histórico."
-        });
-    }
-};
-
-// =================================================================================================
-// 9. DETALHES DA CORRIDA
-// =================================================================================================
-exports.getRideDetails = async (req, res) => {
-    const rideId = req.params.id;
-    const userId = req.user.id;
-
-    try {
-        const fullRide = await getFullRideDetails(rideId);
-
-        if (!fullRide) {
-            return res.status(404).json({
+            console.log(`${colors.green}✅ Motorista ${driverId} marcado como OFFLINE manualmente.${colors.reset}`);
+        } catch (e) {
+            logError('DRIVER_OFFLINE', e);
+            socket.emit('offline_confirmed', {
                 success: false,
-                error: "Corrida não encontrada."
+                error: "Erro ao processar solicitação offline."
             });
         }
+    });
 
-        if (fullRide.passenger_id !== userId && fullRide.driver_id !== userId && req.user.role !== 'admin') {
-            return res.status(403).json({
-                success: false,
-                error: "Acesso negado."
-            });
-        }
+    // --- CICLO DE VIDA DA MISSÃO (CORRIDA) ---
+    socket.on('request_ride', (data) => _routeToController('requestRide', data, socket, 'ride_request_response'));
+    socket.on('accept_ride', (data) => _routeToController('acceptRide', data, socket, 'ride_accepted_confirmation'));
+    socket.on('start_trip', (data) => _routeToController('startRide', data, socket, 'trip_started_ack'));
+    socket.on('update_status', (data) => _routeToController('updateStatus', data, socket, 'status_update_ack'));
+    socket.on('complete_ride', (data) => _routeToController('completeRide', data, socket, 'ride_completed_ack'));
+    socket.on('cancel_ride', (data) => _routeToController('cancelRide', data, socket, 'ride_cancelled_ack'));
 
-        res.json({
-            success: true,
-            ride: fullRide
+    // --- NEGOCIAÇÃO DE PREÇO ---
+    socket.on('negotiate_price', (data) => _routeToController('negotiatePrice', data, socket, 'negotiation_ack'));
+    socket.on('respond_negotiation', (data) => _routeToController('respondToNegotiation', data, socket, 'negotiation_response_ack'));
+
+    // RASTREAMENTO TÁTICO (GPS DA CORRIDA)
+    socket.on('update_trip_gps', (data) => {
+        const { ride_id, lat, lng, rotation, speed, distance, eta_minutes } = data;
+
+        if (!ride_id || !lat || !lng) return;
+
+        console.log(`${colors.cyan}📍 Atualização GPS - Ride ${ride_id}: (${lat}, ${lng}) | Dist: ${distance}km | ETA: ${eta_minutes}min${colors.reset}`);
+
+        socket.to(`ride_${ride_id}`).emit('trip_gps_update', {
+            ride_id: ride_id,
+            lat: lat,
+            lng: lng,
+            rotation: rotation || 0,
+            speed: speed || 0,
+            distance: distance || 0,
+            eta_minutes: eta_minutes || 0,
+            timestamp: new Date().toISOString()
         });
 
-    } catch (e) {
-        console.error('❌ ERRO AO BUSCAR DETALHES:', e);
-        logError('GET_RIDE_DETAILS', e);
-        res.status(500).json({
-            success: false,
-            error: "Erro ao buscar detalhes da corrida."
-        });
-    }
-};
-
-// =================================================================================================
-// 10. PERFORMANCE DO MOTORISTA
-// =================================================================================================
-exports.getDriverPerformance = async (req, res) => {
-    const driverId = req.user.id;
-
-    try {
-        const statsRes = await pool.query(`
-            SELECT
-                COUNT(*) as missions,
-                COALESCE(SUM(final_price), 0) as earnings,
-                COALESCE(AVG(rating), 0) as avg_rating
-            FROM rides
-            WHERE driver_id = $1
-              AND status = 'completed'
-              AND created_at >= CURRENT_DATE
-        `, [driverId]);
-
-        const recentRes = await pool.query(`
-            SELECT
-                id, created_at, origin_name, dest_name, final_price, rating, passenger_id
-            FROM rides
-            WHERE driver_id = $1 AND status = 'completed'
-            ORDER BY created_at DESC
-            LIMIT 5
-        `, [driverId]);
-
-        const totalRes = await pool.query(
-            "SELECT COUNT(*) as total FROM rides WHERE driver_id = $1 AND status = 'completed'",
-            [driverId]
-        );
-
-        const ratingRes = await pool.query(`
-            SELECT COALESCE(AVG(rating), 0) as overall_rating
-            FROM rides
-            WHERE driver_id = $1 AND status = 'completed' AND rating IS NOT NULL
-        `, [driverId]);
-
-        res.json({
-            success: true,
-            todayEarnings: parseFloat(statsRes.rows[0].earnings),
-            missionsCount: parseInt(statsRes.rows[0].missions),
-            averageRating: parseFloat(statsRes.rows[0].avg_rating) || 5.0,
-            overallRating: parseFloat(ratingRes.rows[0].overall_rating) || 5.0,
-            totalMissions: parseInt(totalRes.rows[0].total),
-            recentRides: recentRes.rows.map(ride => ({
-                ...ride,
-                final_price: parseFloat(ride.final_price)
-            }))
+        socket.to(`passenger_ride_${ride_id}`).emit('driver_gps_update', {
+            ride_id: ride_id,
+            lat: lat,
+            lng: lng,
+            rotation: rotation || 0,
+            speed: speed || 0,
+            distance: distance || 0,
+            eta_minutes: eta_minutes || 0,
+            timestamp: new Date().toISOString()
         });
 
-    } catch (e) {
-        console.error('❌ ERRO AO BUSCAR PERFORMANCE:', e);
-        logError('DRIVER_PERFORMANCE', e);
-        res.status(500).json({
-            success: false,
-            error: "Erro ao buscar performance do motorista."
+        socket.to(`passenger_ride_${ride_id}`).emit('location_update', {
+            ride_id: ride_id,
+            lat: lat,
+            lng: lng,
+            rotation: rotation || 0,
+            speed: speed || 0,
+            distance: distance || 0,
+            eta_minutes: eta_minutes || 0
         });
-    }
-};
+    });
 
-// =================================================================================================
-// 11. SOLICITAR PAGAMENTO VIA WALLET
-// =================================================================================================
-exports.requestPayment = async (req, res) => {
-    const { ride_id, amount } = req.body;
-    const driverId = req.user.id;
+    // --- PAGAMENTOS ---
+    socket.on('request_payment', (data) => {
+        const { ride_id, driver_id, amount, method } = data;
 
-    try {
-        const rideCheck = await pool.query(
-            "SELECT passenger_id FROM rides WHERE id = $1 AND driver_id = $2 AND status = 'ongoing'",
-            [ride_id, driverId]
-        );
+        console.log(`${colors.cyan}💰 Pagamento solicitado: Ride ${ride_id}, Amount: ${amount}, Method: ${method}${colors.reset}`);
 
-        if (rideCheck.rows.length === 0) {
-            return res.status(404).json({
-                success: false,
-                error: "Corrida não encontrada ou não autorizada."
-            });
-        }
+        io.to(`ride_${ride_id}`).emit('payment_requested', {
+            ride_id: ride_id,
+            driver_id: driver_id,
+            amount: amount,
+            method: method,
+            timestamp: new Date().toISOString()
+        });
 
-        if (req.io) {
-            req.io.to(`user_${rideCheck.rows[0].passenger_id}`).emit('payment_requested', {
-                ride_id: ride_id,
-                driver_id: driverId,
-                amount: amount,
-                method: 'wallet',
-                timestamp: new Date().toISOString()
-            });
-        }
+        io.to(`passenger_ride_${ride_id}`).emit('wallet_payment_request', {
+            ride_id: ride_id,
+            driver_id: driver_id,
+            amount: amount,
+            method: method,
+            timestamp: new Date().toISOString()
+        });
 
-        res.json({
+        socket.emit('payment_request_ack', {
             success: true,
             message: "Solicitação de pagamento enviada ao passageiro."
         });
+    });
 
-    } catch (e) {
-        console.error('❌ ERRO AO SOLICITAR PAGAMENTO:', e);
-        res.status(500).json({ error: "Erro ao solicitar pagamento." });
-    }
-};
+    socket.on('process_payment', (data) => _routeToController('completeRide', {
+        ...data,
+        payment_method: 'wallet'
+    }, socket, 'payment_processed_ack'));
 
-// =================================================================================================
-// 12. PROCESSAR PAGAMENTO WALLET (MÉTODO AUXILIAR)
-// =================================================================================================
-exports.processWalletPayment = async (req, res) => {
-    req.body.payment_method = 'wallet';
-    return exports.completeRide(req, res);
-};
+    // --- COMUNICAÇÃO E CHAT ---
+    socket.on('join_ride', (rideId) => {
+        if (!rideId) return;
 
-// =================================================================================================
-// 13. CONFIRMAR PAGAMENTO EM DINHEIRO
-// =================================================================================================
-exports.confirmCashPayment = async (req, res) => {
-    req.body.payment_method = 'cash';
-    return exports.completeRide(req, res);
-};
+        socket.join(`ride_${rideId}`);
 
-// =================================================================================================
-// 14. AVALIAR CORRIDA
-// =================================================================================================
-exports.rateRide = async (req, res) => {
-    const { ride_id, rating, feedback } = req.body;
-    const userId = req.user.id;
-
-    try {
-        const rideCheck = await pool.query(
-            "SELECT * FROM rides WHERE id = $1 AND (passenger_id = $2 OR driver_id = $2)",
-            [ride_id, userId]
-        );
-
-        if (rideCheck.rows.length === 0) {
-            return res.status(404).json({
-                success: false,
-                error: "Corrida não encontrada."
-            });
+        if (query && query.role === 'passenger') {
+            socket.join(`passenger_ride_${rideId}`);
         }
 
-        const role = rideCheck.rows[0].passenger_id === userId ? 'passenger' : 'driver';
+        console.log(`${colors.cyan}🚪 Socket ${socket.id} ingressou na sala ride_${rideId}${colors.reset}`);
+        socket.emit('ride_joined', { success: true, ride_id: rideId });
+    });
 
-        if (role === 'passenger') {
-            await pool.query(
-                "UPDATE rides SET passenger_rating = $1, passenger_feedback = $2, rated_at = NOW() WHERE id = $3",
-                [rating, feedback, ride_id]
-            );
-        } else {
-            await pool.query(
-                "UPDATE rides SET driver_rating = $1, driver_feedback = $2, rated_at = NOW() WHERE id = $3",
-                [rating, feedback, ride_id]
-            );
-        }
+    socket.on('leave_ride', (rideId) => {
+        if (!rideId) return;
 
-        res.json({
-            success: true,
-            message: "Avaliação registrada com sucesso."
+        socket.leave(`ride_${rideId}`);
+        socket.leave(`passenger_ride_${rideId}`);
+
+        console.log(`${colors.yellow}🚪 Socket ${socket.id} deixou a sala ride_${rideId}${colors.reset}`);
+        socket.emit('ride_left', { success: true, ride_id: rideId });
+    });
+
+    socket.on('send_message', (data) => _handleSendMessage(socket, data));
+
+    socket.on('typing_indicator', (data) => {
+        if (!data.ride_id || !data.user_id) return;
+
+        socket.to(`ride_${data.ride_id}`).emit('user_typing', {
+            user_id: data.user_id,
+            is_typing: data.is_typing,
+            ride_id: data.ride_id
         });
+    });
 
-    } catch (e) {
-        console.error('❌ ERRO AO AVALIAR CORRIDA:', e);
-        res.status(500).json({ error: "Erro ao registrar avaliação." });
-    }
-};
+    socket.on('mark_messages_read', async (data) => {
+        const { ride_id, user_id } = data;
+        if (!ride_id || !user_id) return;
 
-// =================================================================================================
-// 15. OBTER CORRIDA ATIVA DO USUÁRIO (BLINDADO CONTRA CORRIDAS FANTASMAS)
-// =================================================================================================
-exports.getActiveRide = async (req, res) => {
-    const userId = req.user.id;
+        try {
+            const result = await pool.query(`
+                UPDATE chat_messages
+                SET is_read = true, read_at = NOW()
+                WHERE ride_id = $1 AND sender_id != $2 AND is_read = false
+                RETURNING id
+            `, [ride_id, user_id]);
 
-    try {
-        const result = await pool.query(`
-            SELECT * FROM rides
-            WHERE (passenger_id = $1 OR driver_id = $1)
-              AND status IN ('accepted', 'arrived', 'ongoing')
-              AND updated_at > NOW() - INTERVAL '12 hours'
-            ORDER BY updated_at DESC
-            LIMIT 1
-        `, [userId]);
-
-        if (result.rows.length === 0) {
-            return res.json({
-                success: true,
-                active: false,
-                ride: null
-            });
-        }
-
-        const fullRide = await getFullRideDetails(result.rows[0].id);
-
-        res.json({
-            success: true,
-            active: true,
-            ride: fullRide
-        });
-
-    } catch (e) {
-        console.error('❌ ERRO AO BUSCAR CORRIDA ATIVA:', e);
-        res.status(500).json({ error: "Erro ao buscar corrida ativa." });
-    }
-};
-
-// =================================================================================================
-// 16. OBTER ESTATÍSTICAS DO USUÁRIO
-// =================================================================================================
-exports.getUserStats = async (req, res) => {
-    const userId = req.user.id;
-
-    try {
-        const passengerStats = await pool.query(`
-            SELECT
-                COUNT(*) as total_rides,
-                COALESCE(AVG(passenger_rating), 0) as avg_rating,
-                SUM(final_price) as total_spent
-            FROM rides
-            WHERE passenger_id = $1 AND status = 'completed'
-        `, [userId]);
-
-        const driverStats = await pool.query(`
-            SELECT
-                COUNT(*) as total_rides,
-                COALESCE(AVG(driver_rating), 0) as avg_rating,
-                SUM(final_price) as total_earned
-            FROM rides
-            WHERE driver_id = $1 AND status = 'completed'
-        `, [userId]);
-
-        res.json({
-            success: true,
-            stats: {
-                asPassenger: {
-                    totalRides: parseInt(passengerStats.rows[0].total_rides),
-                    averageRating: parseFloat(passengerStats.rows[0].avg_rating),
-                    totalSpent: parseFloat(passengerStats.rows[0].total_spent || 0)
-                },
-                asDriver: {
-                    totalRides: parseInt(driverStats.rows[0].total_rides),
-                    averageRating: parseFloat(driverStats.rows[0].avg_rating),
-                    totalEarned: parseFloat(driverStats.rows[0].total_earned || 0)
-                }
+            if (result.rows.length > 0) {
+                io.to(`ride_${ride_id}`).emit('messages_read', {
+                    ride_id: ride_id,
+                    reader_id: user_id,
+                    message_ids: result.rows.map(r => r.id),
+                    read_at: new Date().toISOString()
+                });
             }
-        });
+        } catch (e) {
+            logError('MARK_MESSAGES_READ', e);
+        }
+    });
 
-    } catch (e) {
-        console.error('❌ ERRO AO BUSCAR ESTATÍSTICAS:', e);
-        res.status(500).json({ error: "Erro ao buscar estatísticas." });
-    }
-};
+    // --- DESCONEXÃO ---
+    socket.on('disconnect', () => _handleDisconnect(socket));
+}
 
-// =================================================================================================
-// 17. OBTER CORRIDAS PRÓXIMAS (PARA MOTORISTAS)
-// =================================================================================================
-exports.getNearbyRides = async (req, res) => {
-    const driverId = req.user.id;
-    const { lat, lng, radius = 10 } = req.query;
+/**
+ * =================================================================================================
+ * 4. PONTES DE LIGAÇÃO (CONTROLLER BRIDGE)
+ * =================================================================================================
+ */
+async function _routeToController(methodName, data, socket, responseEvent) {
+    const rideController = require('../controllers/rideController');
+
+    const userId = data.driver_id || data.passenger_id || data.user_id;
+    const role = data.role || (data.driver_id ? 'driver' : 'passenger');
+    const requestId = generateRef('SOCK');
+
+    console.log(`${colors.blue}🔄 [${requestId}] Roteando ${methodName} para o controller...${colors.reset}`);
+
+    const req = {
+        body: data,
+        user: { id: userId, role: role },
+        io: io,
+        ip: socket.handshake.address,
+        headers: socket.handshake.headers
+    };
+
+    const res = {
+        statusCode: 200,
+        status: function(code) {
+            this.statusCode = code;
+            return this;
+        },
+        json: function(payload) {
+            console.log(`${colors.green}✅ [${requestId}] Resposta de ${methodName} enviada com status ${this.statusCode}${colors.reset}`);
+            socket.emit(responseEvent, {
+                ...payload,
+                request_id: requestId,
+                timestamp: new Date().toISOString()
+            });
+            return this;
+        }
+    };
 
     try {
-        const driverInfo = await pool.query(
-            "SELECT vehicle_category, vehicle_details->>'type' as vehicle_type FROM users WHERE id = $1",
-            [driverId]
+        if (typeof rideController[methodName] !== 'function') {
+            throw new Error(`Método ${methodName} não encontrado no Controller.`);
+        }
+        await rideController[methodName](req, res);
+    } catch (e) {
+        logError('BRIDGE_ERROR', e);
+        socket.emit(responseEvent, {
+            success: false,
+            error: "Erro interno na operação do servidor.",
+            code: "INTERNAL_ERROR",
+            request_id: requestId,
+            details: process.env.NODE_ENV === 'development' ? e.message : undefined
+        });
+    }
+}
+
+/**
+ * =================================================================================================
+ * 5. HANDLERS ESPECÍFICOS DE PRESENÇA E CHAT
+ * =================================================================================================
+ */
+
+async function _handleJoinUser(socket, userId) {
+    if (!userId) return;
+
+    const userIdStr = userId.toString();
+
+    socket.join(`user_${userIdStr}`);
+
+    console.log(`${colors.green}👤 Usuário ${userIdStr} ingressou na sala user_${userIdStr}${colors.reset}`);
+
+    try {
+        await pool.query(
+            "UPDATE users SET is_online = true, last_seen = NOW() WHERE id = $1",
+            [userIdStr]
         );
 
-        const vehicleCategory = driverInfo.rows[0]?.vehicle_category || 'car';
-        const vehicleType = driverInfo.rows[0]?.vehicle_type || 'car';
+        socket.emit('joined_ack', {
+            success: true,
+            user_id: userIdStr,
+            socket_id: socket.id,
+            timestamp: new Date().toISOString()
+        });
+    } catch (e) {
+        logError('JOIN_USER', e);
+        socket.emit('joined_ack', {
+            success: false,
+            error: "Erro ao atualizar status de online."
+        });
+    }
+}
 
-        let rideTypes = [];
-        if (vehicleCategory === 'moto' || vehicleType === 'moto') {
-            rideTypes = ['moto', 'delivery_moto'];
-        } else {
-            rideTypes = ['car', 'premium', 'delivery_car'];
-        }
+async function _handleJoinDriver(socket, data) {
+    const driverId = data.driver_id || data.user_id;
+    if (!driverId) return;
 
-        const query = `
-            SELECT
-                id, passenger_id, origin_lat, origin_lng, origin_name,
-                dest_name, initial_price, ride_type, distance_km, created_at
+    socket.join('drivers');
+    socket.join(`driver_${driverId}`);
+    socket.join(`user_${driverId}`);
+
+    const lat = parseFloat(data.lat) || -8.8399;
+    const lng = parseFloat(data.lng) || 13.2894;
+
+    await _registerDriverOnline(driverId, socket.id, lat, lng, socket);
+
+    socket.emit('joined_ack', {
+        success: true,
+        driver_id: driverId,
+        status: 'online',
+        timestamp: new Date().toISOString()
+    });
+
+    // Enviar corridas pendentes quando o motorista fica online
+    try {
+        console.log(`${colors.cyan}🔍 Buscando corridas pendentes para motorista ${driverId}...${colors.reset}`);
+
+        const pendingRides = await pool.query(`
+            SELECT id, origin_lat, origin_lng, passenger_id, initial_price,
+                   ride_type, distance_km, origin_name, dest_name
             FROM rides
             WHERE status = 'searching'
-              AND ride_type = ANY($1::text[])
               AND created_at > NOW() - INTERVAL '30 minutes'
-              AND (6371 * acos(cos(radians($2)) * cos(radians(origin_lat)) *
-                   cos(radians(origin_lng) - radians($3)) + sin(radians($2)) * sin(radians(origin_lat)))) <= $4
             ORDER BY created_at DESC
-        `;
+        `);
 
-        const result = await pool.query(query, [rideTypes, lat, lng, radius]);
+        if (pendingRides.rows.length > 0) {
+            console.log(`${colors.green}🔄 Encontradas ${pendingRides.rows.length} corridas pendentes para sincronização.${colors.reset}`);
 
-        const rides = await Promise.all(
-            result.rows.map(async (row) => {
-                const distance = getDistance(
-                    parseFloat(lat), parseFloat(lng),
+            let sentCount = 0;
+
+            for (const row of pendingRides.rows) {
+                let distanceToPickup = getDistance(
+                    lat, lng,
                     parseFloat(row.origin_lat), parseFloat(row.origin_lng)
                 );
-                return {
-                    ...row,
-                    distance_to_pickup: parseFloat(distance.toFixed(1))
-                };
-            })
-        );
 
-        res.json({
-            success: true,
-            rides: rides
-        });
+                if (distanceToPickup <= 20) {
+                    const fullRide = await getFullRideDetails(row.id);
+                    if (fullRide) {
+                        const payload = {
+                            ...fullRide,
+                            distance_to_pickup: parseFloat(distanceToPickup.toFixed(1)),
+                            resync: true,
+                            timestamp: new Date().toISOString()
+                        };
 
-    } catch (e) {
-        console.error('❌ ERRO AO BUSCAR CORRIDAS PRÓXIMAS:', e);
-        res.status(500).json({ error: "Erro ao buscar corridas próximas." });
-    }
-};
+                        socket.emit('ride_opportunity', payload);
+                        sentCount++;
+                    }
+                }
+            }
 
-// =================================================================================================
-// 18. REPORTAR PROBLEMA NA CORRIDA
-// =================================================================================================
-exports.reportIssue = async (req, res) => {
-    const { ride_id } = req.params;
-    const { issue_type, description } = req.body;
-    const userId = req.user.id;
-
-    try {
-        await pool.query(`
-            INSERT INTO ride_issues (ride_id, user_id, issue_type, description, created_at)
-            VALUES ($1, $2, $3, $4, NOW())
-        `, [ride_id, userId, issue_type, description]);
-
-        res.json({
-            success: true,
-            message: "Problema reportado com sucesso. Nossa equipe irá analisar."
-        });
-
-    } catch (e) {
-        console.error('❌ ERRO AO REPORTAR PROBLEMA:', e);
-        res.status(500).json({ error: "Erro ao reportar problema." });
-    }
-};
-
-// =================================================================================================
-// 19. OBTER RECIBO DA CORRIDA
-// =================================================================================================
-exports.getRideReceipt = async (req, res) => {
-    const { ride_id } = req.params;
-    const userId = req.user.id;
-
-    try {
-        const rideCheck = await pool.query(
-            "SELECT * FROM rides WHERE id = $1 AND (passenger_id = $2 OR driver_id = $3)",
-            [ride_id, userId, userId]
-        );
-
-        if (rideCheck.rows.length === 0) {
-            return res.status(404).json({
-                success: false,
-                error: "Recibo não encontrado."
-            });
+            console.log(`${colors.green}✅ ${sentCount} corridas reenviadas para motorista ${driverId}${colors.reset}`);
+        } else {
+            console.log(`${colors.yellow}ℹ️ Nenhuma corrida pendente encontrada.${colors.reset}`);
         }
-
-        const fullRide = await getFullRideDetails(ride_id);
-
-        const receipt = {
-            ride_id: fullRide.id,
-            date: fullRide.completed_at || fullRide.created_at,
-            passenger: fullRide.passenger_data?.name,
-            driver: fullRide.driver_data?.name,
-            origin: fullRide.origin_name,
-            destination: fullRide.dest_name,
-            distance: fullRide.distance_km,
-            price: fullRide.final_price || fullRide.initial_price,
-            payment_method: fullRide.payment_method || 'cash',
-            ride_type: fullRide.ride_type
-        };
-
-        res.json({
-            success: true,
-            receipt: receipt
-        });
-
     } catch (e) {
-        console.error('❌ ERRO AO BUSCAR RECIBO:', e);
-        res.status(500).json({ error: "Erro ao buscar recibo." });
+        logError('FETCH_PENDING_RIDES', e);
     }
-};
+}
 
-// =================================================================================================
-// 20. ATUALIZAR CORRIDA (ADMIN)
-// =================================================================================================
-exports.updateRide = async (req, res) => {
-    const { id } = req.params;
-    const updates = req.body;
-
-    if (req.user.role !== 'admin') {
-        return res.status(403).json({ error: "Acesso negado." });
-    }
-
+async function _registerDriverOnline(driverId, socketId, lat, lng, socket) {
     const client = await pool.connect();
-
     try {
         await client.query('BEGIN');
 
-        const fields = [];
-        const values = [];
-        let paramCounter = 1;
+        const existing = await client.query(
+            "SELECT * FROM driver_positions WHERE driver_id = $1",
+            [driverId]
+        );
 
-        Object.entries(updates).forEach(([key, value]) => {
-            if (value !== undefined) {
-                fields.push(`${key} = $${paramCounter}`);
-                values.push(value);
-                paramCounter++;
-            }
-        });
+        if (existing.rows.length > 0) {
+            await client.query(`
+                UPDATE driver_positions
+                SET lat = $2, lng = $3, socket_id = $4, status = 'online', last_update = NOW()
+                WHERE driver_id = $1
+            `, [driverId, lat, lng, socketId]);
+        } else {
+            await client.query(`
+                INSERT INTO driver_positions (driver_id, lat, lng, socket_id, status, last_update)
+                VALUES ($1, $2, $3, $4, 'online', NOW())
+            `, [driverId, lat, lng, socketId]);
+        }
 
-        fields.push(`updated_at = NOW()`);
-        values.push(id);
-
-        const query = `UPDATE rides SET ${fields.join(', ')} WHERE id = $${paramCounter} RETURNING *`;
-        const result = await client.query(query, values);
+        await client.query(
+            "UPDATE users SET is_online = true, last_seen = NOW() WHERE id = $1",
+            [driverId]
+        );
 
         await client.query('COMMIT');
 
-        res.json({
-            success: true,
-            ride: result.rows[0]
+        console.log(`${colors.green}✅ Motorista ${driverId} registrado como ONLINE (Pos: ${lat}, ${lng})${colors.reset}`);
+
+        socket.to('drivers').emit('driver_online', {
+            driver_id: driverId,
+            lat: lat,
+            lng: lng,
+            timestamp: new Date().toISOString()
         });
 
     } catch (e) {
         await client.query('ROLLBACK');
-        console.error('❌ ERRO AO ATUALIZAR CORRIDA:', e);
-        res.status(500).json({ error: "Erro ao atualizar corrida." });
+        logError('REG_DRIVER_ONLINE', e);
     } finally {
         client.release();
     }
-};
+}
 
-// =================================================================================================
-// 21. DELETAR CORRIDA (ADMIN)
-// =================================================================================================
-exports.deleteRide = async (req, res) => {
-    const { id } = req.params;
+async function _handleUpdateLocation(socket, data) {
+    const driverId = data.driver_id || data.user_id;
+    const lat = parseFloat(data.lat);
+    const lng = parseFloat(data.lng);
+    const heading = parseFloat(data.heading) || 0;
+    const speed = parseFloat(data.speed) || 0;
 
-    if (req.user.role !== 'admin') {
-        return res.status(403).json({ error: "Acesso negado." });
-    }
+    if (!driverId || isNaN(lat) || isNaN(lng)) return;
 
     try {
-        await pool.query("DELETE FROM rides WHERE id = $1", [id]);
+        await pool.query(`
+            UPDATE driver_positions
+            SET lat = $2, lng = $3, heading = $4, speed = $5, last_update = NOW()
+            WHERE driver_id = $1
+        `, [driverId, lat, lng, heading, speed]);
 
-        res.json({
-            success: true,
-            message: "Corrida deletada com sucesso."
+        const activeRides = await pool.query(`
+            SELECT id, passenger_id FROM rides
+            WHERE driver_id = $1 AND status IN ('accepted', 'ongoing', 'arrived')
+        `, [driverId]);
+
+        activeRides.rows.forEach(ride => {
+            const locationPayload = {
+                ride_id: ride.id,
+                driver_id: driverId,
+                lat: lat,
+                lng: lng,
+                heading: heading,
+                speed: speed,
+                timestamp: new Date().toISOString()
+            };
+
+            io.to(`ride_${ride.id}`).emit('driver_location_update', locationPayload);
+            io.to(`passenger_ride_${ride.id}`).emit('driver_location', locationPayload);
         });
 
     } catch (e) {
-        console.error('❌ ERRO AO DELETAR CORRIDA:', e);
-        res.status(500).json({ error: "Erro ao deletar corrida." });
+        logError('UPDATE_LOCATION', e);
     }
-};
+}
+
+async function _handleHeartbeat(socket, data) {
+    const driverId = data.driver_id || data.user_id;
+    if (!driverId) return;
+
+    try {
+        await pool.query(
+            "UPDATE driver_positions SET last_update = NOW() WHERE driver_id = $1",
+            [driverId]
+        );
+        await pool.query(
+            "UPDATE users SET last_seen = NOW(), is_online = true WHERE id = $1",
+            [driverId]
+        );
+
+        socket.emit('heartbeat_ack', {
+            success: true,
+            timestamp: new Date().toISOString()
+        });
+    } catch (e) {
+        logError('HEARTBEAT', e);
+    }
+}
+
+async function _handleSendMessage(socket, data) {
+    const { ride_id, sender_id, text, image_data, message_type = 'text' } = data;
+
+    if (!ride_id || !sender_id) return;
+
+    try {
+        let imageUrl = null;
+        if (image_data && image_data.length > 100) {
+            imageUrl = 'data:image/jpeg;base64,' + image_data;
+        }
+
+        const result = await pool.query(`
+            INSERT INTO chat_messages (ride_id, sender_id, text, image_url, message_type, created_at)
+            VALUES ($1, $2, $3, $4, $5, NOW())
+            RETURNING id, created_at
+        `, [ride_id, sender_id, text || '', imageUrl, message_type]);
+
+        const senderInfo = await pool.query(
+            'SELECT name, photo FROM users WHERE id = $1',
+            [sender_id]
+        );
+
+        const payload = {
+            id: result.rows[0].id,
+            ride_id: ride_id,
+            sender_id: sender_id,
+            text: text || '',
+            image_url: imageUrl,
+            message_type: message_type,
+            created_at: result.rows[0].created_at,
+            sender_name: senderInfo.rows[0]?.name || 'Usuário',
+            sender_photo: senderInfo.rows[0]?.photo || null,
+            timestamp: new Date().toISOString()
+        };
+
+        io.to(`ride_${ride_id}`).emit('receive_message', payload);
+        socket.emit('message_sent', {
+            ...payload,
+            delivered: true
+        });
+
+    } catch (e) {
+        logError('SEND_MESSAGE', e);
+        socket.emit('message_error', {
+            error: "Erro ao enviar mensagem",
+            details: e.message
+        });
+    }
+}
+
+async function _handleDisconnect(socket) {
+    console.log(`${colors.yellow}🔌 Terminal desconectado: ${socket.id}${colors.reset}`);
+
+    try {
+        const result = await pool.query(
+            'SELECT driver_id FROM driver_positions WHERE socket_id = $1',
+            [socket.id]
+        );
+
+        if (result.rows.length > 0) {
+            const driverId = result.rows[0].driver_id;
+
+            setTimeout(async () => {
+                try {
+                    const check = await pool.query(
+                        'SELECT socket_id, status FROM driver_positions WHERE driver_id = $1',
+                        [driverId]
+                    );
+
+                    if (check.rows[0]?.socket_id === socket.id || !check.rows[0]?.socket_id) {
+                        await pool.query(
+                            "UPDATE driver_positions SET status = 'offline', socket_id = NULL WHERE driver_id = $1",
+                            [driverId]
+                        );
+                        await pool.query(
+                            "UPDATE users SET is_online = false WHERE id = $1",
+                            [driverId]
+                        );
+
+                        io.to('drivers').emit('driver_offline', {
+                            driver_id: driverId,
+                            timestamp: new Date().toISOString()
+                        });
+
+                        console.log(`${colors.yellow}🚫 Motorista ${driverId} marcado como offline após timeout.${colors.reset}`);
+                    }
+                } catch (innerError) {
+                    logError('DISCONNECT_TIMEOUT', innerError);
+                }
+            }, 10000);
+        }
+    } catch (e) {
+        logError('DISCONNECT_HANDLER', e);
+    }
+}
+
+async function _cleanInactiveDrivers() {
+    try {
+        const result = await pool.query(`
+            UPDATE driver_positions
+            SET status = 'offline', socket_id = NULL
+            WHERE last_update < NOW() - INTERVAL '3 minutes' AND status = 'online'
+            RETURNING driver_id
+        `);
+
+        if (result.rows.length > 0) {
+            for (const row of result.rows) {
+                await pool.query(
+                    "UPDATE users SET is_online = false WHERE id = $1",
+                    [row.driver_id]
+                );
+
+                io.to('drivers').emit('driver_offline', {
+                    driver_id: row.driver_id,
+                    reason: 'inactivity',
+                    timestamp: new Date().toISOString()
+                });
+
+                console.log(`${colors.yellow}🧹 Motorista ${row.driver_id} varrido por inatividade (3min sem heartbeat).${colors.reset}`);
+            }
+        }
+    } catch (e) {
+        logError('CLEAN_INACTIVE_DRIVERS', e);
+    }
+}
+
+async function _updateDriversHeartbeat() {
+    try {
+        await pool.query(`
+            UPDATE driver_positions
+            SET last_update = NOW()
+            WHERE status = 'online'
+              AND last_update > NOW() - INTERVAL '2 minutes'
+        `);
+    } catch (e) {
+        logError('HEARTBEAT_UPDATE', e);
+    }
+}
+
+/**
+ * =================================================================================================
+ * 6. FUNÇÕES DE UTILIDADE PÚBLICA
+ * =================================================================================================
+ */
+
+function getIO() {
+    if (!io) throw new Error("Socket.IO não inicializado!");
+    return io;
+}
+
+function emitToUser(userId, event, data) {
+    if (!userId || !io) return false;
+
+    try {
+        io.to(`user_${userId}`).emit(event, {
+            ...data,
+            timestamp: new Date().toISOString()
+        });
+        return true;
+    } catch (e) {
+        logError('EMIT_TO_USER', e);
+        return false;
+    }
+}
+
+function emitToRide(rideId, event, data) {
+    if (!rideId || !io) return false;
+
+    try {
+        io.to(`ride_${rideId}`).emit(event, {
+            ...data,
+            timestamp: new Date().toISOString()
+        });
+        return true;
+    } catch (e) {
+        logError('EMIT_TO_RIDE', e);
+        return false;
+    }
+}
+
+function emitToDrivers(event, data) {
+    if (!io) return false;
+
+    try {
+        io.to('drivers').emit(event, {
+            ...data,
+            timestamp: new Date().toISOString()
+        });
+        return true;
+    } catch (e) {
+        logError('EMIT_TO_DRIVERS', e);
+        return false;
+    }
+}
+
+function emitToDriver(driverId, event, data) {
+    if (!driverId || !io) return false;
+
+    try {
+        io.to(`driver_${driverId}`).emit(event, {
+            ...data,
+            timestamp: new Date().toISOString()
+        });
+        return true;
+    } catch (e) {
+        logError('EMIT_TO_DRIVER', e);
+        return false;
+    }
+}
 
 // =================================================================================================
-// EXPORTAR TODOS OS MÉTODOS
+// EXPORTAÇÃO DO MÓDULO
 // =================================================================================================
-module.exports = exports;
+module.exports = {
+    setupSocketIO,
+    getIO,
+    emitToUser,
+    emitToRide,
+    emitToDrivers,
+    emitToDriver
+};
