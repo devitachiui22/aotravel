@@ -4,21 +4,15 @@
  * =================================================================================================
  *
  * ARQUIVO: src/utils/dbBootstrap.js
- * VERSÃO DO SCHEMA: 2026.03.23.HUB.COMPLETE.FINAL.FIXED
+ * VERSÃO DO SCHEMA: 2026.03.07.HUB.COMPLETE.FINAL.FIXED
  * DESCRIÇÃO: Script de inicialização com módulos Core + Hub Inteligente
  *
- * ✅ CORREÇÕES APLICADAS (v6.0 FINAL):
+ * ✅ CORREÇÕES APLICADAS:
  * 1. CORREÇÃO CRÍTICA: Adicionado DROP TABLE IF EXISTS para vehicle_details antes de recriar
  * 2. CONSTRAINT CHECK corrigida para incluir 'premium'
  * 3. TRATAMENTO DE ERRO aprimorado com ROLLBACK em caso de falha
  * 4. TRANSAÇÕES isoladas para cada etapa crítica
- * 5. CORREÇÃO DA TABELA DE USUÁRIOS (PIN e Documentos)
- * 6. GARANTIA que os caminhos dos documentos sejam TEXT para suportar URLs longas
- * 7. TRIGGER para Geração Automática de Número de Conta (Correção do "Gerando...")
- * 8. ÍNDICES de Segurança para Privacidade (Filtros por JWT)
- * 9. 🔥 NOVA TRIGGER: Geração com ANO + SEQUENCIAL (AOT2025000001)
- * 10. 🔥 NOVA CORREÇÃO: user_id NOT NULL em wallet_transactions (Privacidade)
- * 11. 🔥 NOVO ÍNDICE: idx_driver_status_online para busca rápida de motoristas
+ * 5. NOVAS TABELAS INTEGRADAS: itens cmapos completamente incorporadas
  *
  * STATUS: 🔥 PRODUCTION READY - ZERO ERROS DE TRANSAÇÃO
  * =================================================================================================
@@ -75,9 +69,13 @@ async function bootstrapDatabase() {
         await client.query('BEGIN');
 
         // =========================================================================================
-        // ETAPA 1: CRIAÇÃO DE TODAS AS TABELAS (CORE + HUB)
+        // ETAPA 1: CRIAÇÃO DE TODAS AS TABELAS (CORE + HUB + NOVAS TABELAS CMAPOS)
         // =========================================================================================
         log.info('Criando/Verificando tabelas base...');
+
+        // Extensões para cálculos geográficos
+        await safeQuery(client, `CREATE EXTENSION IF NOT EXISTS cube;`, [], 'CREATE EXTENSION cube');
+        await safeQuery(client, `CREATE EXTENSION IF NOT EXISTS earthdistance;`, [], 'CREATE EXTENSION earthdistance');
 
         // 1. TABELA USERS - COM TODAS AS COLUNAS KYC E VEHICLE_CATEGORY
         await safeQuery(client, `
@@ -104,7 +102,7 @@ async function bootstrapDatabase() {
 
                 -- Detalhes Motorista
                 vehicle_details JSONB,
-                vehicle_category VARCHAR(20) DEFAULT 'car',
+                vehicle_category VARCHAR(20) DEFAULT 'car' CHECK (vehicle_category IN ('car', 'premium', 'moto')),
                 rating NUMERIC(3,2) DEFAULT 5.00,
 
                 -- Status
@@ -112,7 +110,7 @@ async function bootstrapDatabase() {
                 is_blocked BOOLEAN DEFAULT false,
                 is_verified BOOLEAN DEFAULT false,
 
-                -- Documentação KYC Avançada (TEXT para URLs longas)
+                -- Documentação KYC Avançada
                 bi_front TEXT,
                 bi_back TEXT,
                 driving_license_front TEXT,
@@ -189,7 +187,7 @@ async function bootstrapDatabase() {
             );
         `, [], 'CREATE TABLE rides');
 
-        // 4. TABELA WALLET_TRANSACTIONS - COM user_id NOT NULL (Privacidade)
+        // 4. TABELA WALLET_TRANSACTIONS
         await safeQuery(client, `
             CREATE TABLE IF NOT EXISTS wallet_transactions (
                 id SERIAL PRIMARY KEY,
@@ -437,7 +435,193 @@ async function bootstrapDatabase() {
             );
         `, [], 'CREATE TABLE hub_delivery_tracking');
 
-        log.success('✅ Todas as tabelas (Core + Hub) criadas/verificadas com sucesso');
+        // =====================================================================
+        // 🆕 NOVAS TABELAS CMAPOS - ITENS E MAPAS INTEGRADOS
+        // =====================================================================
+
+        // 17. TABELA DE LOCAIS FAVORITOS
+        await safeQuery(client, `
+            CREATE TABLE IF NOT EXISTS favorite_places (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                name VARCHAR(100) NOT NULL,
+                address TEXT NOT NULL,
+                lat DOUBLE PRECISION NOT NULL,
+                lng DOUBLE PRECISION NOT NULL,
+                place_type VARCHAR(50) CHECK (place_type IN ('home', 'work', 'other')),
+                icon VARCHAR(50),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `, [], 'CREATE TABLE favorite_places');
+
+        // 18. TABELA DE HISTÓRICO DE PESQUISA DE LOCAIS
+        await safeQuery(client, `
+            CREATE TABLE IF NOT EXISTS search_history (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                query TEXT NOT NULL,
+                lat DOUBLE PRECISION,
+                lng DOUBLE PRECISION,
+                address TEXT,
+                search_count INTEGER DEFAULT 1,
+                last_searched TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `, [], 'CREATE TABLE search_history');
+
+        // 19. TABELA DE GEOCÓDIGOS EM CACHE
+        await safeQuery(client, `
+            CREATE TABLE IF NOT EXISTS geocode_cache (
+                id SERIAL PRIMARY KEY,
+                address_hash VARCHAR(64) UNIQUE NOT NULL,
+                address TEXT NOT NULL,
+                lat DOUBLE PRECISION NOT NULL,
+                lng DOUBLE PRECISION NOT NULL,
+                formatted_address TEXT,
+                place_id VARCHAR(255),
+                confidence_score FLOAT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                use_count INTEGER DEFAULT 1
+            );
+        `, [], 'CREATE TABLE geocode_cache');
+
+        // 20. TABELA DE ROTAS OTIMIZADAS
+        await safeQuery(client, `
+            CREATE TABLE IF NOT EXISTS optimized_routes (
+                id SERIAL PRIMARY KEY,
+                origin_lat DOUBLE PRECISION NOT NULL,
+                origin_lng DOUBLE PRECISION NOT NULL,
+                dest_lat DOUBLE PRECISION NOT NULL,
+                dest_lng DOUBLE PRECISION NOT NULL,
+                route_geometry TEXT,
+                distance_meters INTEGER,
+                duration_seconds INTEGER,
+                polyline TEXT,
+                waypoints JSONB DEFAULT '[]',
+                traffic_data JSONB DEFAULT '{}',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP DEFAULT (NOW() + INTERVAL '7 days'),
+                UNIQUE(origin_lat, origin_lng, dest_lat, dest_lng)
+            );
+        `, [], 'CREATE TABLE optimized_routes');
+
+        // 21. TABELA DE AVALIAÇÕES DE VIAGEM
+        await safeQuery(client, `
+            CREATE TABLE IF NOT EXISTS ride_ratings (
+                id SERIAL PRIMARY KEY,
+                ride_id INTEGER NOT NULL REFERENCES rides(id) ON DELETE CASCADE,
+                rated_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                rated_user INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                rating INTEGER NOT NULL CHECK (rating >= 1 AND rating <= 5),
+                comment TEXT,
+                categories JSONB DEFAULT '{}',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(ride_id, rated_by)
+            );
+        `, [], 'CREATE TABLE ride_ratings');
+
+        // 22. TABELA DE PROMOÇÕES E CUPONS
+        await safeQuery(client, `
+            CREATE TABLE IF NOT EXISTS promotions (
+                id SERIAL PRIMARY KEY,
+                code VARCHAR(50) UNIQUE NOT NULL,
+                description TEXT,
+                discount_type VARCHAR(20) CHECK (discount_type IN ('percentage', 'fixed')),
+                discount_value NUMERIC(10,2) NOT NULL,
+                min_purchase NUMERIC(10,2) DEFAULT 0,
+                max_discount NUMERIC(10,2),
+                valid_from TIMESTAMP NOT NULL,
+                valid_until TIMESTAMP NOT NULL,
+                usage_limit INTEGER,
+                used_count INTEGER DEFAULT 0,
+                is_active BOOLEAN DEFAULT true,
+                applicable_ride_types JSONB DEFAULT '["ride", "moto", "delivery"]',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `, [], 'CREATE TABLE promotions');
+
+        // 23. TABELA DE CUPONS UTILIZADOS
+        await safeQuery(client, `
+            CREATE TABLE IF NOT EXISTS user_promotions (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                promotion_id INTEGER NOT NULL REFERENCES promotions(id) ON DELETE CASCADE,
+                ride_id INTEGER REFERENCES rides(id) ON DELETE SET NULL,
+                discount_amount NUMERIC(10,2),
+                used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, promotion_id, ride_id)
+            );
+        `, [], 'CREATE TABLE user_promotions');
+
+        // 24. TABELA DE VIAGENS COMPARTILHADAS
+        await safeQuery(client, `
+            CREATE TABLE IF NOT EXISTS shared_rides (
+                id SERIAL PRIMARY KEY,
+                creator_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                origin_name TEXT NOT NULL,
+                origin_lat DOUBLE PRECISION NOT NULL,
+                origin_lng DOUBLE PRECISION NOT NULL,
+                dest_name TEXT NOT NULL,
+                dest_lat DOUBLE PRECISION NOT NULL,
+                dest_lng DOUBLE PRECISION NOT NULL,
+                departure_time TIMESTAMP NOT NULL,
+                max_participants INTEGER NOT NULL,
+                current_participants INTEGER DEFAULT 1,
+                price_per_person NUMERIC(10,2) NOT NULL,
+                status VARCHAR(20) DEFAULT 'open' CHECK (status IN ('open', 'full', 'in_progress', 'completed', 'cancelled')),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `, [], 'CREATE TABLE shared_rides');
+
+        // 25. TABELA DE PARTICIPANTES DE VIAGENS COMPARTILHADAS
+        await safeQuery(client, `
+            CREATE TABLE IF NOT EXISTS shared_ride_participants (
+                shared_ride_id INTEGER NOT NULL REFERENCES shared_rides(id) ON DELETE CASCADE,
+                user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                payment_status VARCHAR(20) DEFAULT 'pending' CHECK (payment_status IN ('pending', 'paid', 'failed')),
+                joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (shared_ride_id, user_id)
+            );
+        `, [], 'CREATE TABLE shared_ride_participants');
+
+        // 26. TABELA DE ÁREAS DE INTERESSE
+        await safeQuery(client, `
+            CREATE TABLE IF NOT EXISTS poi_areas (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(100) NOT NULL,
+                category VARCHAR(50),
+                lat DOUBLE PRECISION NOT NULL,
+                lng DOUBLE PRECISION NOT NULL,
+                radius_meters INTEGER,
+                boundary_polygon TEXT,
+                description TEXT,
+                is_active BOOLEAN DEFAULT true,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `, [], 'CREATE TABLE poi_areas');
+
+        // 27. TABELA DE EVENTOS DE MAPA
+        await safeQuery(client, `
+            CREATE TABLE IF NOT EXISTS map_events (
+                id SERIAL PRIMARY KEY,
+                event_type VARCHAR(50) NOT NULL,
+                user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                lat DOUBLE PRECISION,
+                lng DOUBLE PRECISION,
+                ride_id INTEGER REFERENCES rides(id) ON DELETE SET NULL,
+                metadata JSONB DEFAULT '{}',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `, [], 'CREATE TABLE map_events');
+
+        log.success('✅ Todas as tabelas (Core + Hub + Cmapos) criadas/verificadas com sucesso');
 
         // =========================================================================================
         // ETAPA 2: AUTO-HEALING - ADICIONAR COLUNAS FALTANTES
@@ -520,7 +704,18 @@ async function bootstrapDatabase() {
             { table: 'hub_deliveries', col: 'stops', type: "JSONB DEFAULT '[]'" },
             { table: 'hub_deliveries', col: 'driver_id', type: 'INTEGER REFERENCES users(id) ON DELETE SET NULL' },
             { table: 'hub_deliveries', col: 'proof_image_url', type: 'TEXT' },
-            { table: 'hub_delivery_tracking', col: 'status_at_time', type: 'VARCHAR(20)' }
+            { table: 'hub_delivery_tracking', col: 'status_at_time', type: 'VARCHAR(20)' },
+            { table: 'favorite_places', col: 'icon', type: 'VARCHAR(50)' },
+            { table: 'search_history', col: 'address', type: 'TEXT' },
+            { table: 'geocode_cache', col: 'place_id', type: 'VARCHAR(255)' },
+            { table: 'geocode_cache', col: 'confidence_score', type: 'FLOAT' },
+            { table: 'optimized_routes', col: 'waypoints', type: "JSONB DEFAULT '[]'" },
+            { table: 'optimized_routes', col: 'traffic_data', type: "JSONB DEFAULT '{}'" },
+            { table: 'ride_ratings', col: 'categories', type: "JSONB DEFAULT '{}'" },
+            { table: 'promotions', col: 'applicable_ride_types', type: "JSONB DEFAULT '[\"ride\", \"moto\", \"delivery\"]'" },
+            { table: 'shared_rides', col: 'current_participants', type: 'INTEGER DEFAULT 1' },
+            { table: 'poi_areas', col: 'boundary_polygon', type: 'TEXT' },
+            { table: 'map_events', col: 'metadata', type: "JSONB DEFAULT '{}'" }
         ];
 
         let repairedCount = 0;
@@ -537,7 +732,7 @@ async function bootstrapDatabase() {
         log.success(`✅ Auto-healing concluído: ${repairedCount} colunas verificadas`);
 
         // =========================================================================================
-        // ETAPA 3: CRIAÇÃO DE ÍNDICES (INCLUINDO ÍNDICES DE SEGURANÇA E VELOCIDADE)
+        // ETAPA 3: CRIAÇÃO DE ÍNDICES
         // =========================================================================================
         log.section('⚡ OTIMIZANDO COM ÍNDICES DE PERFORMANCE');
 
@@ -553,8 +748,6 @@ async function bootstrapDatabase() {
             "CREATE INDEX IF NOT EXISTS idx_driver_positions_update ON driver_positions(last_update)",
             "CREATE INDEX IF NOT EXISTS idx_driver_positions_geo ON driver_positions(lat, lng)",
             "CREATE INDEX IF NOT EXISTS idx_driver_positions_socket ON driver_positions(socket_id)",
-            // 🔥 NOVO ÍNDICE PARA BUSCA RÁPIDA DE MOTORISTAS ONLINE
-            "CREATE INDEX IF NOT EXISTS idx_driver_status_online ON driver_positions(status) WHERE status = 'online'",
             "CREATE INDEX IF NOT EXISTS idx_rides_passenger ON rides(passenger_id)",
             "CREATE INDEX IF NOT EXISTS idx_rides_driver ON rides(driver_id)",
             "CREATE INDEX IF NOT EXISTS idx_rides_status ON rides(status)",
@@ -566,9 +759,6 @@ async function bootstrapDatabase() {
             "CREATE INDEX IF NOT EXISTS idx_wallet_ref ON wallet_transactions(reference_id)",
             "CREATE INDEX IF NOT EXISTS idx_wallet_date ON wallet_transactions(created_at DESC)",
             "CREATE INDEX IF NOT EXISTS idx_wallet_status ON wallet_transactions(status)",
-            "CREATE INDEX IF NOT EXISTS idx_wallet_transactions_user_id ON wallet_transactions(user_id)",
-            "CREATE INDEX IF NOT EXISTS idx_rides_passenger_id ON rides(passenger_id)",
-            "CREATE INDEX IF NOT EXISTS idx_rides_driver_id ON rides(driver_id)",
             "CREATE INDEX IF NOT EXISTS idx_chat_ride ON chat_messages(ride_id)",
             "CREATE INDEX IF NOT EXISTS idx_chat_module ON chat_messages(module_type, module_id)",
             "CREATE INDEX IF NOT EXISTS idx_chat_created ON chat_messages(created_at)",
@@ -598,7 +788,28 @@ async function bootstrapDatabase() {
             "CREATE INDEX IF NOT EXISTS idx_hub_deliveries_status ON hub_deliveries(status)",
             "CREATE INDEX IF NOT EXISTS idx_hub_deliveries_created ON hub_deliveries(created_at DESC)",
             "CREATE INDEX IF NOT EXISTS idx_hub_tracking_delivery ON hub_delivery_tracking(delivery_id)",
-            "CREATE INDEX IF NOT EXISTS idx_hub_tracking_recorded ON hub_delivery_tracking(recorded_at DESC)"
+            "CREATE INDEX IF NOT EXISTS idx_hub_tracking_recorded ON hub_delivery_tracking(recorded_at DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_favorite_places_user ON favorite_places(user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_favorite_places_type ON favorite_places(place_type)",
+            "CREATE INDEX IF NOT EXISTS idx_search_history_user ON search_history(user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_search_history_last ON search_history(last_searched DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_geocode_cache_hash ON geocode_cache(address_hash)",
+            "CREATE INDEX IF NOT EXISTS idx_geocode_cache_last_used ON geocode_cache(last_used DESC)",
+            "CREATE INDEX IF NOT EXISTS idx_optimized_routes_origin_dest ON optimized_routes(origin_lat, origin_lng, dest_lat, dest_lng)",
+            "CREATE INDEX IF NOT EXISTS idx_optimized_routes_expires ON optimized_routes(expires_at)",
+            "CREATE INDEX IF NOT EXISTS idx_ride_ratings_ride ON ride_ratings(ride_id)",
+            "CREATE INDEX IF NOT EXISTS idx_ride_ratings_user ON ride_ratings(rated_user)",
+            "CREATE INDEX IF NOT EXISTS idx_promotions_code ON promotions(code)",
+            "CREATE INDEX IF NOT EXISTS idx_promotions_active ON promotions(is_active, valid_from, valid_until)",
+            "CREATE INDEX IF NOT EXISTS idx_user_promotions_user ON user_promotions(user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_shared_rides_creator ON shared_rides(creator_id)",
+            "CREATE INDEX IF NOT EXISTS idx_shared_rides_departure ON shared_rides(departure_time)",
+            "CREATE INDEX IF NOT EXISTS idx_shared_rides_status ON shared_rides(status)",
+            "CREATE INDEX IF NOT EXISTS idx_shared_participants_ride ON shared_ride_participants(shared_ride_id)",
+            "CREATE INDEX IF NOT EXISTS idx_poi_areas_location ON poi_areas(lat, lng)",
+            "CREATE INDEX IF NOT EXISTS idx_map_events_user ON map_events(user_id)",
+            "CREATE INDEX IF NOT EXISTS idx_map_events_ride ON map_events(ride_id)",
+            "CREATE INDEX IF NOT EXISTS idx_map_events_type ON map_events(event_type)"
         ];
 
         for (const idx of indexes) {
@@ -607,7 +818,7 @@ async function bootstrapDatabase() {
         log.success('✅ Índices de performance criados/verificados');
 
         // =========================================================================================
-        // ETAPA 4: CRIAÇÃO DE TRIGGERS (COM CORREÇÃO DO "GERANDO...")
+        // ETAPA 4: CRIAÇÃO DE TRIGGERS
         // =========================================================================================
         log.section('🔄 CONFIGURANDO TRIGGERS AUTOMÁTICOS');
 
@@ -624,7 +835,10 @@ async function bootstrapDatabase() {
         const tablesWithTimestamp = [
             'users', 'rides', 'wallet_transactions', 'vehicle_details',
             'user_documents', 'external_bank_accounts', 'app_settings',
-            'hub_schedules', 'hub_groups', 'hub_deliveries'
+            'hub_schedules', 'hub_groups', 'hub_deliveries',
+            'favorite_places', 'search_history', 'geocode_cache',
+            'optimized_routes', 'ride_ratings', 'promotions',
+            'shared_rides', 'poi_areas'
         ];
 
         for (const table of tablesWithTimestamp) {
@@ -637,37 +851,70 @@ async function bootstrapDatabase() {
             `, [], `CREATE TRIGGER ${table}`);
         }
 
-        // 🔥 TRIGGER CORRIGIDA para geração automática de número de conta (com ANO + SEQUENCIAL)
-        // Formato: AOT2025000001 (AOT + Ano + 6 dígitos sequenciais)
         await safeQuery(client, `
-            CREATE OR REPLACE FUNCTION fn_generate_wallet_number()
+            CREATE OR REPLACE FUNCTION generate_wallet_number()
             RETURNS TRIGGER AS $$
             BEGIN
                 IF NEW.wallet_account_number IS NULL THEN
-                    NEW.wallet_account_number := 'AOT' || TO_CHAR(CURRENT_DATE, 'YYYY') || LPAD(NEW.id::TEXT, 6, '0');
+                    NEW.wallet_account_number := 'AOT' || LPAD(NEW.id::TEXT, 8, '0');
                 END IF;
                 RETURN NEW;
             END;
-            $$ LANGUAGE plpgsql;
-        `, [], 'CREATE FUNCTION fn_generate_wallet_number');
-
-        // Verificar se a sequence existe antes de usar
-        await safeQuery(client, `
-            DO $$
-            BEGIN
-                IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'users_id_seq') THEN
-                    CREATE SEQUENCE users_id_seq OWNED BY users.id;
-                END IF;
-            END $$;
-        `, [], 'CREATE SEQUENCE IF NOT EXISTS');
+            $$ language 'plpgsql';
+        `, [], 'CREATE FUNCTION generate_wallet_number');
 
         await safeQuery(client, `
-            DROP TRIGGER IF EXISTS trg_wallet_number ON users;
-            CREATE TRIGGER trg_wallet_number
-            BEFORE INSERT OR UPDATE ON users
+            DROP TRIGGER IF EXISTS set_wallet_number ON users;
+            CREATE TRIGGER set_wallet_number
+            BEFORE INSERT ON users
             FOR EACH ROW
-            EXECUTE FUNCTION fn_generate_wallet_number();
-        `, [], 'CREATE TRIGGER trg_wallet_number');
+            EXECUTE PROCEDURE generate_wallet_number();
+        `, [], 'CREATE TRIGGER set_wallet_number');
+
+        await safeQuery(client, `
+            CREATE OR REPLACE FUNCTION update_search_count()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                IF EXISTS (SELECT 1 FROM search_history WHERE user_id = NEW.user_id AND query = NEW.query) THEN
+                    UPDATE search_history
+                    SET search_count = search_count + 1,
+                        last_searched = NOW(),
+                        updated_at = NOW()
+                    WHERE user_id = NEW.user_id AND query = NEW.query;
+                    RETURN NULL;
+                END IF;
+                RETURN NEW;
+            END;
+            $$ language 'plpgsql';
+        `, [], 'CREATE FUNCTION update_search_count');
+
+        await safeQuery(client, `
+            DROP TRIGGER IF EXISTS update_search_count_trigger ON search_history;
+            CREATE TRIGGER update_search_count_trigger
+            BEFORE INSERT ON search_history
+            FOR EACH ROW
+            EXECUTE PROCEDURE update_search_count();
+        `, [], 'CREATE TRIGGER update_search_count');
+
+        await safeQuery(client, `
+            CREATE OR REPLACE FUNCTION update_promotion_usage()
+            RETURNS TRIGGER AS $$
+            BEGIN
+                UPDATE promotions
+                SET used_count = used_count + 1
+                WHERE id = NEW.promotion_id;
+                RETURN NEW;
+            END;
+            $$ language 'plpgsql';
+        `, [], 'CREATE FUNCTION update_promotion_usage');
+
+        await safeQuery(client, `
+            DROP TRIGGER IF EXISTS update_promotion_usage_trigger ON user_promotions;
+            CREATE TRIGGER update_promotion_usage_trigger
+            AFTER INSERT ON user_promotions
+            FOR EACH ROW
+            EXECUTE PROCEDURE update_promotion_usage();
+        `, [], 'CREATE TRIGGER update_promotion_usage');
 
         log.success('✅ Triggers configurados com sucesso');
 
@@ -697,7 +944,9 @@ async function bootstrapDatabase() {
                     ride_search_timeout: 60,
                     version: '11.5.0',
                     kyc_required: true,
-                    hub_enabled: true
+                    hub_enabled: true,
+                    maps_enabled: true,
+                    geocoding_enabled: true
                 }),
                 description: 'Configurações globais do app'
             },
@@ -735,6 +984,29 @@ async function bootstrapDatabase() {
                     fare_splitting_enabled: true
                 }),
                 description: 'Configurações do Hub Inteligente'
+            },
+            {
+                key: 'maps_config',
+                value: JSON.stringify({
+                    geocoding_cache_ttl_days: 30,
+                    route_cache_ttl_days: 7,
+                    max_favorite_places: 20,
+                    search_history_limit: 50,
+                    default_zoom: 13,
+                    min_confidence_score: 0.7
+                }),
+                description: 'Configurações de mapas e geocodificação'
+            },
+            {
+                key: 'promotions_config',
+                value: JSON.stringify({
+                    max_discount_percentage: 50,
+                    max_discount_amount: 5000,
+                    min_ride_amount_for_promo: 500,
+                    promo_code_length: 8,
+                    max_promotions_per_user: 5
+                }),
+                description: 'Configurações de promoções e cupons'
             }
         ];
 
@@ -751,36 +1023,22 @@ async function bootstrapDatabase() {
         log.success('✅ Configurações iniciais aplicadas');
 
         // =========================================================================================
-        // ETAPA 6: POPULAR COM USUÁRIOS DE TESTE (INCLUINDO ADMIN)
+        // ETAPA 6: POPULAR COM USUÁRIOS DE TESTE
         // =========================================================================================
         log.section('👤 CRIANDO USUÁRIOS DE TESTE');
 
         const saltRounds = 10;
         const testPassword = '123456';
-        const adminPassword = 'admin123';
-        const hashedTestPassword = await bcrypt.hash(testPassword, saltRounds);
-        const hashedAdminPassword = await bcrypt.hash(adminPassword, saltRounds);
+        const hashedPassword = await bcrypt.hash(testPassword, saltRounds);
 
         log.info('Senha de teste: 123456 (hash gerado automaticamente)');
-        log.info('Admin: admin@gmail.com | Senha: admin123');
 
         const testUsers = [
-            {
-                name: 'Administrador',
-                email: 'admin@gmail.com',
-                phone: '900000001',
-                password: hashedAdminPassword,
-                role: 'admin',
-                rating: 5.0,
-                is_verified: true,
-                kyc_level: 3,
-                vehicle_category: null
-            },
             {
                 name: 'Motorista Premium',
                 email: 'premium@aotravel.com',
                 phone: '923456789',
-                password: hashedTestPassword,
+                password: hashedPassword,
                 role: 'driver',
                 rating: 5.0,
                 is_verified: true,
@@ -798,7 +1056,7 @@ async function bootstrapDatabase() {
                 name: 'Motorista Standard',
                 email: 'driver@aotravel.com',
                 phone: '923456780',
-                password: hashedTestPassword,
+                password: hashedPassword,
                 role: 'driver',
                 rating: 4.8,
                 is_verified: true,
@@ -816,7 +1074,7 @@ async function bootstrapDatabase() {
                 name: 'Moto Táxi VIP',
                 email: 'moto@gmail.com',
                 phone: '987654321',
-                password: hashedTestPassword,
+                password: hashedPassword,
                 role: 'driver',
                 rating: 4.9,
                 is_verified: true,
@@ -834,7 +1092,7 @@ async function bootstrapDatabase() {
                 name: 'Passageiro VIP',
                 email: 'passageiro@gmail.com',
                 phone: '912345678',
-                password: hashedTestPassword,
+                password: hashedPassword,
                 role: 'passenger',
                 rating: 5.0,
                 is_verified: true,
@@ -855,8 +1113,7 @@ async function bootstrapDatabase() {
                 const result = await client.query(
                     `UPDATE users SET
                         name = $1, password = $2, role = $3, rating = $4,
-                        is_verified = $5, kyc_level = $6, vehicle_details = $7,
-                        vehicle_category = $8, updated_at = NOW()
+                        is_verified = $5, kyc_level = $6, vehicle_details = $7, vehicle_category = $8, updated_at = NOW()
                      WHERE id = $9 RETURNING id`,
                     [
                         user.name,
@@ -871,7 +1128,7 @@ async function bootstrapDatabase() {
                     ]
                 );
                 userId = result.rows[0].id;
-                log.info(`👤 Usuário atualizado: ${user.name} (${user.role})`);
+                log.info(`👤 Usuário atualizado: ${user.name} (categoria: ${user.vehicle_category})`);
             } else {
                 const result = await client.query(
                     `INSERT INTO users
@@ -892,7 +1149,7 @@ async function bootstrapDatabase() {
                     ]
                 );
                 userId = result.rows[0].id;
-                log.success(`✅ Novo usuário criado: ${user.name} (${user.role})`);
+                log.success(`✅ Novo usuário criado: ${user.name} (categoria: ${user.vehicle_category})`);
             }
 
             if (!userId) {
@@ -900,9 +1157,11 @@ async function bootstrapDatabase() {
                 continue;
             }
 
-            // O trigger agora gera o número da conta automaticamente com formato AOT2025xxxxxx
-            // Não precisamos mais definir manualmente
-            log.info(`📱 Usuário ${user.name} (ID: ${userId}) - Número de conta será gerado pelo trigger`);
+            const accountNumber = `AOT${userId.toString().padStart(8, '0')}`;
+            await client.query(
+                'UPDATE users SET wallet_account_number = $1 WHERE id = $2',
+                [accountNumber, userId]
+            );
 
             if (user.role === 'driver') {
                 await client.query(`
@@ -919,7 +1178,6 @@ async function bootstrapDatabase() {
                         const vd = JSON.parse(user.vehicle_details);
                         let vehicleType = vd.type;
 
-                        // Garantir que o tipo é válido
                         if (!['car', 'moto', 'delivery', 'truck', 'premium'].includes(vehicleType)) {
                             vehicleType = 'car';
                         }
@@ -944,16 +1202,15 @@ async function bootstrapDatabase() {
         }
 
         // =========================================================================================
-        // ETAPA 7: CRIAR DADOS DE EXEMPLO PARA O HUB
+        // ETAPA 7: CRIAR DADOS DE EXEMPLO PARA O HUB E MAPAS
         // =========================================================================================
-        log.section('📦 CRIANDO DADOS DE EXEMPLO PARA O HUB');
+        log.section('📦 CRIANDO DADOS DE EXEMPLO PARA O HUB E MAPAS');
 
         const users = await client.query(`
             SELECT id, name, email, role, vehicle_category FROM users
-            WHERE email IN ('admin@gmail.com', 'premium@aotravel.com', 'driver@aotravel.com', 'moto@gmail.com', 'passageiro@gmail.com')
+            WHERE email IN ('premium@aotravel.com', 'driver@aotravel.com', 'moto@gmail.com', 'passageiro@gmail.com')
         `);
 
-        const adminUser = users.rows.find(u => u.email === 'admin@gmail.com');
         const premiumDriver = users.rows.find(u => u.email === 'premium@aotravel.com');
         const driverAo = users.rows.find(u => u.email === 'driver@aotravel.com');
         const moto = users.rows.find(u => u.email === 'moto@gmail.com');
@@ -1053,39 +1310,56 @@ async function bootstrapDatabase() {
             log.success('✅ Entrega de exemplo criada com suporte a paragens');
         }
 
-        // Dar saldo inicial para o admin (para testes)
-        if (adminUser) {
-            await client.query(`
-                UPDATE users SET balance = 100000.00 WHERE id = $1
-            `, [adminUser.id]);
-            log.success('✅ Saldo inicial de 100,000 AOA atribuído ao administrador');
-        }
+        // Criar locais favoritos de exemplo
+        if (passageiro) {
+            const favoritePlaces = [
+                { name: 'Casa', address: 'Talatona, Luanda', lat: -8.9167, lng: 13.2667, place_type: 'home', icon: 'home' },
+                { name: 'Trabalho', address: 'Mutamba, Luanda', lat: -8.8383, lng: 13.2344, place_type: 'work', icon: 'work' },
+                { name: 'Shopping', address: 'Shopping Kilamba', lat: -8.9167, lng: 13.2667, place_type: 'other', icon: 'shopping' }
+            ];
 
-        // =========================================================================================
-        // ETAPA 8: CORREÇÃO DE PRIVACIDADE - GARANTIR user_id NOT NULL
-        // =========================================================================================
-        log.section('🔒 APLICANDO CORREÇÕES DE PRIVACIDADE');
-
-        try {
-            // Garantir que não existem registros com user_id NULL antes de alterar a constraint
-            await client.query(`
-                UPDATE wallet_transactions
-                SET user_id = COALESCE(sender_id, receiver_id)
-                WHERE user_id IS NULL AND (sender_id IS NOT NULL OR receiver_id IS NOT NULL)
-            `);
-
-            // Alterar coluna para NOT NULL (se já não for)
-            await client.query(`
-                ALTER TABLE wallet_transactions ALTER COLUMN user_id SET NOT NULL
-            `);
-            log.success('✅ wallet_transactions.user_id agora é NOT NULL (Privacidade garantida)');
-        } catch (err) {
-            if (err.code !== '42701' && !err.message.includes('already NOT NULL')) {
-                log.warn(`⚠️ Não foi possível alterar user_id para NOT NULL: ${err.message}`);
-            } else {
-                log.info('✅ wallet_transactions.user_id já é NOT NULL');
+            for (const place of favoritePlaces) {
+                await client.query(`
+                    INSERT INTO favorite_places (user_id, name, address, lat, lng, place_type, icon)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    ON CONFLICT DO NOTHING
+                `, [passageiro.id, place.name, place.address, place.lat, place.lng, place.place_type, place.icon]);
             }
+            log.success('✅ Locais favoritos de exemplo criados');
         }
+
+        // Criar pontos de interesse de exemplo
+        const poiAreas = [
+            { name: 'Talatona', category: 'district', lat: -8.9167, lng: 13.2667, radius_meters: 3000, description: 'Bairro nobre de Luanda' },
+            { name: 'Mutamba', category: 'district', lat: -8.8383, lng: 13.2344, radius_meters: 2000, description: 'Centro financeiro' },
+            { name: 'Kilamba', category: 'district', lat: -9.0167, lng: 13.2667, radius_meters: 4000, description: 'Zona residencial' }
+        ];
+
+        for (const poi of poiAreas) {
+            await client.query(`
+                INSERT INTO poi_areas (name, category, lat, lng, radius_meters, description)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                ON CONFLICT DO NOTHING
+            `, [poi.name, poi.category, poi.lat, poi.lng, poi.radius_meters, poi.description]);
+        }
+        log.success('✅ Pontos de interesse de exemplo criados');
+
+        // Criar uma promoção de exemplo
+        const promoCode = 'BEMVINDO50';
+        await client.query(`
+            INSERT INTO promotions (code, description, discount_type, discount_value, min_purchase, valid_from, valid_until, usage_limit, is_active)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ON CONFLICT (code) DO UPDATE SET
+                description = EXCLUDED.description,
+                discount_type = EXCLUDED.discount_type,
+                discount_value = EXCLUDED.discount_value,
+                min_purchase = EXCLUDED.min_purchase,
+                valid_from = EXCLUDED.valid_from,
+                valid_until = EXCLUDED.valid_until,
+                usage_limit = EXCLUDED.usage_limit,
+                is_active = EXCLUDED.is_active
+        `, [promoCode, '50% de desconto na primeira viagem!', 'percentage', 50, 1000, new Date(), new Date(Date.now() + 365 * 24 * 60 * 60 * 1000), 100, true]);
+        log.success('✅ Promoção de exemplo criada');
 
         await client.query('COMMIT');
 
@@ -1094,7 +1368,6 @@ async function bootstrapDatabase() {
                 (SELECT COUNT(*) FROM users) as total_users,
                 (SELECT COUNT(*) FROM users WHERE role = 'driver') as total_drivers,
                 (SELECT COUNT(*) FROM users WHERE role = 'passenger') as total_passengers,
-                (SELECT COUNT(*) FROM users WHERE role = 'admin') as total_admins,
                 (SELECT COUNT(*) FROM users WHERE is_verified = false) as pending_kyc,
                 (SELECT COUNT(*) FROM users WHERE vehicle_category = 'premium') as premium_drivers,
                 (SELECT COUNT(*) FROM users WHERE vehicle_category = 'car') as car_drivers,
@@ -1103,15 +1376,17 @@ async function bootstrapDatabase() {
                 (SELECT COUNT(*) FROM hub_groups) as total_groups,
                 (SELECT COUNT(*) FROM hub_deliveries) as total_deliveries,
                 (SELECT COUNT(*) FROM hub_group_participants WHERE status = 'pending') as pending_participants,
-                (SELECT COUNT(*) FROM hub_deliveries WHERE stops != '[]') as deliveries_with_stops
+                (SELECT COUNT(*) FROM hub_deliveries WHERE stops != '[]') as deliveries_with_stops,
+                (SELECT COUNT(*) FROM favorite_places) as total_favorite_places,
+                (SELECT COUNT(*) FROM promotions) as total_promotions,
+                (SELECT COUNT(*) FROM poi_areas) as total_poi_areas
         `);
 
-        log.section('🎉 BANCO DE DADOS INICIALIZADO COM SUCESSO - HUB INTELIGENTE ATIVO');
+        log.section('🎉 BANCO DE DADOS INICIALIZADO COM SUCESSO - HUB INTELIGENTE E MAPAS ATIVOS');
         log.info(`📊 Estatísticas:`);
         log.info(`   - Usuários: ${stats.rows[0].total_users}`);
         log.info(`   - Motoristas: ${stats.rows[0].total_drivers}`);
         log.info(`   - Passageiros: ${stats.rows[0].total_passengers}`);
-        log.info(`   - Administradores: ${stats.rows[0].total_admins}`);
         log.info(`   - Pendentes KYC: ${stats.rows[0].pending_kyc}`);
         log.info(`   - Motoristas Premium: ${stats.rows[0].premium_drivers}`);
         log.info(`   - Motoristas Standard: ${stats.rows[0].car_drivers}`);
@@ -1121,17 +1396,9 @@ async function bootstrapDatabase() {
         log.info(`   - Entregas: ${stats.rows[0].total_deliveries}`);
         log.info(`   - Participantes Pendentes: ${stats.rows[0].pending_participants}`);
         log.info(`   - Entregas com Paragens: ${stats.rows[0].deliveries_with_stops}`);
-
-        log.info(`\n${colors.green}🔐 CREDENCIAIS DE ACESSO:${colors.reset}`);
-        log.info(`   ${colors.yellow}Admin:${colors.reset} admin@gmail.com / admin123`);
-        log.info(`   ${colors.yellow}Motorista Premium:${colors.reset} premium@aotravel.com / 123456`);
-        log.info(`   ${colors.yellow}Motorista Standard:${colors.reset} driver@aotravel.com / 123456`);
-        log.info(`   ${colors.yellow}Moto Táxi:${colors.reset} moto@gmail.com / 123456`);
-        log.info(`   ${colors.yellow}Passageiro:${colors.reset} passageiro@gmail.com / 123456`);
-
-        log.info(`\n${colors.cyan}📝 FORMATO DO NÚMERO DA CONTA:${colors.reset}`);
-        log.info(`   ${colors.cyan}AOT2025000001${colors.reset} (AOT + Ano + 6 dígitos sequenciais)`);
-        log.info(`   A geração é automática pelo trigger do banco de dados!`);
+        log.info(`   - Locais Favoritos: ${stats.rows[0].total_favorite_places}`);
+        log.info(`   - Promoções Ativas: ${stats.rows[0].total_promotions}`);
+        log.info(`   - Pontos de Interesse: ${stats.rows[0].total_poi_areas}`);
 
         return true;
 
