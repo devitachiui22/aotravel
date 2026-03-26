@@ -13,10 +13,7 @@
  * - Segurança: POST /change-password
  * - Mídia: POST /photo
  * - Compliance: POST /documents (KYC)
- * - Upload Multipart: POST /documents/upload (NOVO - CORREÇÃO CRÍTICA)
- *
- * VERSÃO: 11.0.0-GOLD-ARMORED
- * DATA: 2026.02.11
+ * - Upload Multipart: POST /documents/upload (CORREÇÃO CRÍTICA)
  *
  * STATUS: PRODUCTION READY - FULL VERSION
  * =================================================================================================
@@ -26,6 +23,8 @@ const express = require('express');
 const router = express.Router();
 const profileController = require('../controllers/profileController');
 const { authenticateToken } = require('../middleware/authMiddleware');
+
+// ✅ CORREÇÃO: Importação direta do multer (agora exporta a instância)
 const upload = require('../middleware/uploadMiddleware');
 
 // =================================================================================================
@@ -82,6 +81,13 @@ router.post('/change-password', profileController.changePassword);
 router.post('/photo', profileController.uploadPhoto);
 
 /**
+ * @route   POST /api/profile/photo/upload
+ * @desc    Upload de foto de perfil via Multipart (form-data)
+ * @access  Private
+ */
+router.post('/photo/upload', upload.single('photo'), profileController.uploadPhotoMultipart);
+
+/**
  * @route   POST /api/profile/documents
  * @desc    Upload de documentos para Verificação (KYC) via Base64
  * @access  Private
@@ -89,7 +95,7 @@ router.post('/photo', profileController.uploadPhoto);
 router.post('/documents', profileController.uploadDocuments);
 
 // =================================================================================================
-// 🚀 NOVA ROTA CRÍTICA: UPLOAD DE DOCUMENTOS VIA MULTIPART/FORM-DATA
+// 🚀 ROTA CRÍTICA: UPLOAD DE DOCUMENTOS VIA MULTIPART/FORM-DATA
 // =================================================================================================
 /**
  * @route   POST /api/profile/documents/upload
@@ -98,18 +104,18 @@ router.post('/documents', profileController.uploadDocuments);
  * @access  Private
  */
 router.post(
-  '/documents/upload',
-  upload.fields([
-    { name: 'profile_photo', maxCount: 1 },
-    { name: 'bi_front', maxCount: 1 },
-    { name: 'bi_back', maxCount: 1 },
-    { name: 'driving_license_front', maxCount: 1 },
-    { name: 'driving_license_back', maxCount: 1 },
-    { name: 'vehicle_title', maxCount: 1 },
-    { name: 'vehicle_insurance', maxCount: 1 },
-    { name: 'tax_document', maxCount: 1 }
-  ]),
-  profileController.uploadDocumentsMultipart
+    '/documents/upload',
+    upload.fields([
+        { name: 'profile_photo', maxCount: 1 },
+        { name: 'bi_front', maxCount: 1 },
+        { name: 'bi_back', maxCount: 1 },
+        { name: 'driving_license_front', maxCount: 1 },
+        { name: 'driving_license_back', maxCount: 1 },
+        { name: 'vehicle_title', maxCount: 1 },
+        { name: 'vehicle_insurance', maxCount: 1 },
+        { name: 'tax_document', maxCount: 1 }
+    ]),
+    profileController.uploadDocumentsMultipart
 );
 
 module.exports = router;
