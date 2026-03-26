@@ -1,22 +1,19 @@
 /**
  * =================================================================================================
- * 🏦 AOTRAVEL SERVER PRO - WALLET API CONTROLLER (TITANIUM ACID EDITION v8.1)
+ * 🏦 AOTRAVEL SERVER PRO - WALLET API CONTROLLER (TITANIUM ACID EDITION v8.0)
  * =================================================================================================
  *
  * ARQUIVO: src/controllers/walletController.js
  * DESCRIÇÃO: Controlador REST para operações financeiras com garantias ACID completas.
  *
- * ✅ CORREÇÕES APLICADAS (OMNI-IDENTIFIER v8.1):
+ * ✅ CORREÇÕES APLICADAS (OMNI-IDENTIFIER v8.0):
  * 1. O `internalTransfer` agora resolve: Conta AOT (com/sem espaço), IDs puros (QR Code), Emails e Telefones.
  * 2. Sanidade de Strings: `.replace(/\s/g, '').toUpperCase()` garante que 'AOT 000 001' seja lido corretamente.
  * 3. Detecção inteligente de ID numérico para QR Codes (ex: "7" vindo de escaneamento).
  * 4. Auto-detecção de self-transfer com dados sujos (evita transferência para si mesmo).
  * 5. Validação de status da carteira e bloqueio do destinatário.
  * 6. Mensagens de erro mais descritivas com o identificador usado.
- * 7. FIX GERANDO...: Fallback runtime para número de conta se o trigger falhar.
- * 8. FIX PIN: Suporte a old_pin para alteração de PIN existente.
- * 9. FIX TRANSACTIONS: Correção na query de transações para mostrar todas as transações do usuário.
- * 10. FIX PIN COMPARE: Garantia que PIN é tratado como string no bcrypt.compare.
+ * 7. PIN validation with proper 4-digit checking.
  *
  * STATUS: PRODUCTION READY - FULL VERSION - OMNI-IDENTIFIER ENABLED
  * =================================================================================================
@@ -43,33 +40,10 @@ async function verifyPinInternal(userId, pinInput, client) {
 
     if (!storedHash) throw new Error("PIN de transação não configurado. Defina um PIN em Configurações.");
 
-    const match = await bcrypt.compare(pinInput.toString(), storedHash);
+    const match = await bcrypt.compare(pinInput, storedHash);
     if (!match) throw new Error("PIN incorreto.");
 
     return true;
-}
-
-// =================================================================================================
-// 🔧 HELPER: GARANTIR NÚMERO DE CONTA (FIX GERANDO...)
-// =================================================================================================
-async function ensureWalletAccountNumber(userId, client = null) {
-    const dbClient = client || pool;
-
-    const result = await dbClient.query(
-        "SELECT wallet_account_number FROM users WHERE id = $1",
-        [userId]
-    );
-
-    if (!result.rows[0]?.wallet_account_number) {
-        const fallbackAcc = 'AOT' + userId.toString().padStart(8, '0');
-        await dbClient.query(
-            "UPDATE users SET wallet_account_number = $1 WHERE id = $2",
-            [fallbackAcc, userId]
-        );
-        return fallbackAcc;
-    }
-
-    return result.rows[0].wallet_account_number;
 }
 
 // =================================================================================================
@@ -80,11 +54,8 @@ exports.getWalletData = async (req, res) => {
     try {
         const userId = req.user.id;
 
-        // 🔥 FIX: Garantir que o número de conta existe antes de retornar
-        const accountNumber = await ensureWalletAccountNumber(userId);
-
         const userRes = await pool.query(
-            `SELECT balance, bonus_points, wallet_status,
+            `SELECT balance, bonus_points, wallet_account_number, wallet_status,
                     daily_limit, daily_limit_used, account_tier, phone,
                     (wallet_pin_hash IS NOT NULL) as has_pin
              FROM users WHERE id = $1`,
@@ -94,13 +65,12 @@ exports.getWalletData = async (req, res) => {
         if (userRes.rows.length === 0) return res.status(404).json({ error: "Carteira não encontrada." });
         const userData = userRes.rows[0];
 
-        // 🔥 CORREÇÃO: Mostrar todas as transações do usuário
         const txRes = await pool.query(
             `SELECT t.*, s.name as sender_name, r.name as receiver_name
              FROM wallet_transactions t
              LEFT JOIN users s ON t.sender_id = s.id
              LEFT JOIN users r ON t.receiver_id = r.id
-             WHERE t.user_id = $1
+             WHERE t.user_id = $1 OR t.sender_id = $1 OR t.receiver_id = $1
              ORDER BY t.created_at DESC LIMIT 20`,
             [userId]
         );
@@ -122,7 +92,7 @@ exports.getWalletData = async (req, res) => {
         res.json({
             balance: parseFloat(userData.balance) || 0,
             bonus_points: userData.bonus_points || 0,
-            account_number: accountNumber,
+            account_number: userData.wallet_account_number || 'AOT' + userId.toString().padStart(8, '0'),
             status: userData.wallet_status || 'active',
             has_pin: userData.has_pin || false,
             limits: {
@@ -143,18 +113,30 @@ exports.getWalletData = async (req, res) => {
 
 exports.getBalance = async (req, res) => {
     try {
-        const result = await pool.query('SELECT balance FROM users WHERE id = $1', [req.user.id]);
+        const result = await pool.query('SELECT balance, wallet_account_number FROM users WHERE id = $1', [req.user.id]);
         if (result.rows.length === 0) return res.status(404).json({ error: 'Usuário não encontrado' });
-
-        const accountNumber = await ensureWalletAccountNumber(req.user.id);
 
         res.json({
             balance: parseFloat(result.rows[0].balance) || 0,
-            accountNumber: accountNumber
+            accountNumber: result.rows[0].wallet_account_number || 'AOT' + req.user.id.toString().padStart(8, '0')
         });
     } catch (error) {
-        logError('GET_BALANCE', error);
         res.status(500).json({ error: 'Erro interno' });
+    }
+};
+
+exports.getWalletBalance = async (req, res) => {
+    try {
+        const result = await pool.query(
+            "SELECT balance, wallet_account_number, wallet_status FROM users WHERE id = $1",
+            [req.user.id]
+        );
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: "Usuário não encontrado." });
+        }
+        res.json(result.rows[0]);
+    } catch (e) {
+        res.status(500).json({ error: "Erro ao consultar saldo." });
     }
 };
 
@@ -208,25 +190,32 @@ exports.internalTransfer = async (req, res) => {
         }
 
         // 2. Busca Omni-Identifier e Bloqueia Destinatário
+        // Remove espaços e deixa tudo maiúsculo para matching perfeito ('aot 001' -> 'AOT001')
         const cleanIdentifier = receiver_identifier.toString().replace(/\s/g, '').toUpperCase();
 
         let receiverQuery = '';
         let receiverParams = [];
 
+        // DETECÇÃO INTELIGENTE DO TIPO DE IDENTIFICADOR
         if (cleanIdentifier.includes('@')) {
+            // É um email
             receiverQuery = 'SELECT id, name, balance, wallet_status, is_blocked FROM users WHERE UPPER(email) = $1 FOR UPDATE';
             receiverParams = [cleanIdentifier];
         }
         else if (cleanIdentifier.startsWith('AOT')) {
+            // É uma conta AOT (com ou sem formatação)
             receiverQuery = 'SELECT id, name, balance, wallet_status, is_blocked FROM users WHERE UPPER(wallet_account_number) = $1 FOR UPDATE';
             receiverParams = [cleanIdentifier];
         }
         else {
+            // Pode ser telefone OU um ID puro vindo do QR Code
             const numericId = parseInt(cleanIdentifier, 10);
             if (!isNaN(numericId) && cleanIdentifier.length < 9) {
+                // É provável que seja um ID de banco de dados (ex: "7") vindo do QR Code
                 receiverQuery = 'SELECT id, name, balance, wallet_status, is_blocked FROM users WHERE id = $1 FOR UPDATE';
                 receiverParams = [numericId];
             } else {
+                // Assume que é um telefone
                 receiverQuery = 'SELECT id, name, balance, wallet_status, is_blocked FROM users WHERE phone = $1 FOR UPDATE';
                 receiverParams = [cleanIdentifier];
             }
@@ -235,11 +224,13 @@ exports.internalTransfer = async (req, res) => {
         const receiverRes = await client.query(receiverQuery, receiverParams);
 
         if (receiverRes.rows.length === 0) {
+            // Verifica se o sender tentou mandar pra ele mesmo com dados sujos
             const selfCheck = await client.query(
                 "SELECT id FROM users WHERE (UPPER(email)=$1 OR phone=$1 OR UPPER(wallet_account_number)=$1 OR id::TEXT=$1) AND id=$2",
                 [cleanIdentifier, senderId]
             );
             if (selfCheck.rows.length > 0) throw new Error("Você não pode transferir para si mesmo.");
+
             throw new Error(`Destinatário não encontrado na rede Titanium. (${cleanIdentifier})`);
         }
 
@@ -258,12 +249,14 @@ exports.internalTransfer = async (req, res) => {
         // 4. Ledger: Grava Débito e Crédito Separados
         const txRef = generateRef('TRF');
 
+        // Débito Remetente
         await client.query(
             `INSERT INTO wallet_transactions (reference_id, user_id, sender_id, receiver_id, amount, type, method, status, description, balance_after, category, created_at)
              VALUES ($1, $2, $3, $4, $5, 'transfer', 'internal', 'completed', $6, $7, 'p2p', NOW())`,
             [txRef, senderId, senderId, receiver.id, -val, description || `Envio para ${receiver.name}`, newSenderBalance]
         );
 
+        // Crédito Destinatário
         const receiverRef = `${txRef}-REC`;
         await client.query(
             `INSERT INTO wallet_transactions (reference_id, user_id, sender_id, receiver_id, amount, type, method, status, description, balance_after, category, created_at)
@@ -463,14 +456,14 @@ exports.payService = async (req, res) => {
 };
 
 // =================================================================================================
-// 4. GESTÃO DE PIN E SEGURANÇA (FIX: SUPORTE A OLD_PIN)
+// 4. GESTÃO DE PIN E SEGURANÇA
 // =================================================================================================
 
 exports.setPin = async (req, res) => {
     const { pin, old_pin } = req.body;
     const userId = req.user.id;
 
-    if (!pin || pin.toString().length !== 4 || isNaN(pin)) {
+    if (!pin || pin.length !== 4 || isNaN(pin)) {
         return res.status(400).json({ error: "PIN deve conter 4 dígitos numéricos." });
     }
 
@@ -485,11 +478,11 @@ exports.setPin = async (req, res) => {
 
         if (currentHash) {
             if (!old_pin) throw new Error("Informe o PIN atual para alterá-lo.");
-            const match = await bcrypt.compare(old_pin.toString(), currentHash);
+            const match = await bcrypt.compare(old_pin, currentHash);
             if (!match) throw new Error("O PIN atual está incorreto.");
         }
 
-        const newHash = await bcrypt.hash(pin.toString(), 10);
+        const newHash = await bcrypt.hash(pin, 10);
         await client.query(
             "UPDATE users SET wallet_pin_hash = $1, updated_at = NOW() WHERE id = $2",
             [newHash, userId]
@@ -503,6 +496,26 @@ exports.setPin = async (req, res) => {
         res.status(400).json({ error: error.message });
     } finally {
         client.release();
+    }
+};
+
+exports.setWalletPin = async (req, res) => {
+    const { pin } = req.body;
+    const userId = req.user.id;
+
+    if (!/^\d{4}$/.test(pin)) {
+        return res.status(400).json({ error: "O PIN deve conter exatamente 4 dígitos." });
+    }
+
+    try {
+        const hash = await bcrypt.hash(pin, 12);
+        await pool.query(
+            "UPDATE users SET wallet_pin_hash = $1 WHERE id = $2",
+            [hash, userId]
+        );
+        res.json({ success: true, message: "PIN de segurança configurado." });
+    } catch (e) {
+        res.status(500).json({ error: "Erro ao salvar PIN." });
     }
 };
 
@@ -532,7 +545,7 @@ exports.addAccount = async (req, res) => {
     const holderName = req.body.holder_name || req.body.holderName;
 
     if (!provider || !accountNumber || !holderName) {
-        return res.status(400).json({ error: "Dados incompletos. Forneça: bank_name, iban, holder_name." });
+        return res.status(400).json({ error: "Dados incompletos." });
     }
 
     const client = await pool.connect();
@@ -580,8 +593,8 @@ exports.deleteAccount = async (req, res) => {
 
 exports.addCard = async (req, res) => {
     const { number, expiry, type, alias } = req.body;
-    if (!number || number.toString().length < 13) {
-        return res.status(400).json({ error: "Cartão inválido. Número deve ter pelo menos 13 dígitos." });
+    if (!number || number.length < 13) {
+        return res.status(400).json({ error: "Cartão inválido." });
     }
 
     const client = await pool.connect();
@@ -595,9 +608,9 @@ exports.addCard = async (req, res) => {
             throw new Error("Limite de cartões atingido (10).");
         }
 
-        const lastFour = number.toString().slice(-4);
+        const lastFour = number.slice(-4);
         const token = crypto.createHash('sha256')
-            .update(number.toString() + req.user.id + Date.now())
+            .update(number + req.user.id + Date.now())
             .digest('hex');
 
         await client.query(
@@ -632,13 +645,6 @@ exports.deleteCard = async (req, res) => {
         res.status(500).json({ error: "Erro ao remover cartão." });
     }
 };
-
-// =================================================================================================
-// 6. MÉTODOS ADICIONAIS PARA COMPATIBILIDADE
-// =================================================================================================
-
-exports.getWalletInfo = exports.getWalletData;
-exports.getWalletBalance = exports.getBalance;
 
 // =================================================================================================
 // EXPORTA TODOS OS MÉTODOS
