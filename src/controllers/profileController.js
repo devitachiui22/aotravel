@@ -1,12 +1,12 @@
 /**
  * =================================================================================================
- * 👤 AOTRAVEL SERVER PRO - PROFILE MANAGEMENT CONTROLLER (TITANIUM KYC EDITION v46.0)
+ * 👤 AOTRAVEL SERVER PRO - PROFILE MANAGEMENT CONTROLLER (TITANIUM KYC EDITION)
  * =================================================================================================
  *
  * ARQUIVO: src/controllers/profileController.js
  * DESCRIÇÃO: Controlador Mestre de Perfil de Usuário com suporte KYC completo.
  *
- * ✅ CORREÇÕES APLICADAS (v46.0):
+ * ✅ CORREÇÕES APLICADAS (v45.0):
  * 1. SUPORTE A PDF: Os documentos agora suportam `application/pdf` via upload Multipart.
  * 2. AUTODETECÇÃO DE CATEGORIA: Quando atualiza `vehicle_details`, o sistema extrai e grava
  *    `vehicle_category` nativamente no DB ('car', 'premium', 'moto').
@@ -14,12 +14,6 @@
  *    `is_verified` a false, requerendo validação do Administrador.
  * 4. CLEAN ARCHITECTURE: Tratamento de erros e transações garantidas.
  * 5. 🚀 MÉTODO MULTIPART OTIMIZADO: uploadDocumentsMultipart - CORREÇÃO DEFINITIVA DO UPLOAD
- *    - Adiciona prefixo MIME type (data:image/jpeg;base64, ou data:application/pdf;base64,)
- *    - Limpeza automática de arquivos temporários com fs.unlinkSync
- *    - Reset de verificação KYC garantido
- * 6. FIX COMPATIBILIDADE: Ambos os endpoints de upload funcionam perfeitamente
- * 7. FIX VALIDAÇÃO: Melhor tratamento de erros e validações de entrada
- * 8. FIX DOCS: Correção na inserção de documentos com side correto
  *
  * STATUS: 🔥 PRODUCTION READY - KYC COMPLETO - ZERO ERROS
  * =================================================================================================
@@ -44,13 +38,11 @@ const SYSTEM_CONFIG = require('../config/appConfig');
 const deleteOldFile = (relativePath) => {
     if (!relativePath) return;
 
-    // Remove a barra inicial se existir para resolver o caminho corretamente
     const cleanPath = relativePath.startsWith('/') ? relativePath.substring(1) : relativePath;
     const fullPath = path.resolve(cleanPath);
 
     fs.unlink(fullPath, (err) => {
         if (err && err.code !== 'ENOENT') {
-            // Loga erro apenas se não for "Arquivo não encontrado"
             console.error(`[FILESYSTEM] Erro ao deletar arquivo antigo: ${fullPath}`, err.message);
         }
     });
@@ -73,14 +65,12 @@ const isValidPhone = (phone) => {
 /**
  * GET PROFILE
  * Rota: GET /api/profile
- * Descrição: Retorna o perfil completo do usuário autenticado, enriquecido com
- *            estatísticas operacionais (Corridas, Avaliações) e status financeiro.
+ * Descrição: Retorna o perfil completo do usuário autenticado.
  */
 exports.getProfile = async (req, res) => {
     const userId = req.user.id;
 
     try {
-        // 1. Busca Dados Base (Helper Otimizado)
         const user = await getUserFullDetails(userId);
 
         if (!user) {
@@ -90,20 +80,13 @@ exports.getProfile = async (req, res) => {
             });
         }
 
-        // 2. Cálculo de Estatísticas (Aggregation)
-        // Executa queries paralelas para performance
         const statsQuery = `
             SELECT
-                -- Estatísticas como Passageiro
                 COUNT(CASE WHEN passenger_id = $1 AND status = 'completed' THEN 1 END) as rides_taken,
                 COUNT(CASE WHEN passenger_id = $1 AND status = 'cancelled' THEN 1 END) as rides_cancelled_by_me,
                 COALESCE(AVG(CASE WHEN passenger_id = $1 THEN rating END), 5.0) as rating_as_passenger,
-
-                -- Estatísticas como Motorista (Se aplicável)
                 COUNT(CASE WHEN driver_id = $1 AND status = 'completed' THEN 1 END) as rides_given,
                 COALESCE(AVG(CASE WHEN driver_id = $1 THEN rating END), 5.0) as rating_as_driver,
-
-                -- Totais Gerais
                 SUM(CASE WHEN (passenger_id = $1 OR driver_id = $1) AND status = 'completed' THEN distance_km ELSE 0 END) as total_km_traveled
             FROM rides
             WHERE passenger_id = $1 OR driver_id = $1
@@ -127,11 +110,9 @@ exports.getProfile = async (req, res) => {
         const stats = statsResult.rows[0];
         const docStats = docResult.rows[0] || { total_docs: 0, approved_docs: 0, rejected_docs: 0, pending_docs: 0 };
 
-        // 3. Sanitização de Segurança
         delete user.password;
-        delete user.wallet_pin_hash; // Nunca expor hash de PIN
+        delete user.wallet_pin_hash;
 
-        // 4. Montagem do Payload Rico
         user.stats = {
             rides: {
                 taken: parseInt(stats.rides_taken) || 0,
@@ -153,7 +134,6 @@ exports.getProfile = async (req, res) => {
             }
         };
 
-        // Retorna configurações parseadas (caso o driver PG retorne string)
         if (typeof user.settings === 'string') user.settings = JSON.parse(user.settings);
         if (typeof user.privacy_settings === 'string') user.privacy_settings = JSON.parse(user.privacy_settings);
         if (typeof user.notification_preferences === 'string') user.notification_preferences = JSON.parse(user.notification_preferences);
@@ -167,60 +147,45 @@ exports.getProfile = async (req, res) => {
 };
 
 // =================================================================================================
-// 2. ATUALIZAÇÃO DE DADOS & KYC UPLOAD VIA JSON (BASE64) - VERSÃO COMPLETA
+// 2. ATUALIZAÇÃO DE DADOS BÁSICOS (NOME, TELEFONE)
 // =================================================================================================
 
 /**
- * UPDATE PROFILE (KYC COMPLETE)
+ * UPDATE PROFILE (BÁSICO)
  * Rota: PUT /api/profile
- * Descrição: Atualiza dados cadastrais e documentos KYC via Base64.
- *            Qualquer novo documento invalida a verificação atual.
+ * Descrição: Atualiza nome e telefone do usuário.
  */
 exports.updateProfile = async (req, res) => {
-    const {
-        name, phone, vehicle_details,
-        bi_front, bi_back,
-        driving_license_front, driving_license_back,
-        vehicle_title, vehicle_insurance, tax_document
-    } = req.body;
-
+    const { name, phone } = req.body;
     const userId = req.user.id;
-    const userRole = req.user.role;
 
-    const client = await pool.connect();
+    if (!name && !phone) {
+        return res.status(400).json({ error: "Nenhum dado para atualizar." });
+    }
 
     try {
-        await client.query('BEGIN');
-
         const updates = [];
         const values = [];
         let paramCount = 1;
-        let requiresReverification = false;
 
-        // Atualização de Nome
         if (name && name.trim().length > 2) {
             updates.push(`name = $${paramCount}`);
             values.push(name.trim());
             paramCount++;
         }
 
-        // Atualização de Telefone (Requer verificação de unicidade)
         if (phone) {
-            if (!isValidPhone(phone)) {
-                await client.query('ROLLBACK');
+            const cleanPhone = phone.replace(/\D/g, '');
+            if (!isValidPhone(cleanPhone)) {
                 return res.status(400).json({ error: "Número de telefone inválido." });
             }
 
-            const cleanPhone = phone.replace(/\D/g, '');
-
-            // Verifica se o telefone já está em uso por OUTRO usuário
-            const checkPhone = await client.query(
+            const checkPhone = await pool.query(
                 "SELECT id FROM users WHERE phone = $1 AND id != $2",
                 [cleanPhone, userId]
             );
 
             if (checkPhone.rows.length > 0) {
-                await client.query('ROLLBACK');
                 return res.status(409).json({ error: "Este número de telefone já está em uso." });
             }
 
@@ -229,151 +194,41 @@ exports.updateProfile = async (req, res) => {
             paramCount++;
         }
 
-        // Atualização de Veículo (Apenas Motoristas)
-        if (vehicle_details && userRole === 'driver') {
-            // Validação mínima do objeto JSON
-            if (!vehicle_details.model || !vehicle_details.plate) {
-                await client.query('ROLLBACK');
-                return res.status(400).json({ error: "Modelo e Matrícula são obrigatórios para o veículo." });
-            }
-
-            // Merge com dados existentes para não perder info (ex: cor, ano)
-            const currentRes = await client.query("SELECT vehicle_details FROM users WHERE id = $1", [userId]);
-            const currentDetails = currentRes.rows[0].vehicle_details || {};
-
-            // Sobrescreve com novos dados
-            const newDetails = { ...currentDetails, ...vehicle_details, updated_at: new Date().toISOString() };
-
-            updates.push(`vehicle_details = $${paramCount}`);
-            values.push(JSON.stringify(newDetails));
-            paramCount++;
-            requiresReverification = true; // Mudou de carro, precisa reverificar
-
-            // ✅ LÓGICA VIP E CLASSIFICAÇÃO AUTOMÁTICA DE CATEGORIA (MOTORISTAS)
-            // Extrai a Categoria do Json para a Coluna Indexada do Banco
-            let vCat = 'car';
-            const rawType = (vehicle_details.type || '').toLowerCase();
-
-            if (rawType.includes('moto') || rawType.includes('motorcycle')) {
-                vCat = 'moto';
-            } else if (rawType.includes('premium') || rawType.includes('comfort') || rawType.includes('lux')) {
-                vCat = 'premium';
-            }
-
-            updates.push(`vehicle_category = $${paramCount}`);
-            values.push(vCat);
-            paramCount++;
-        }
-
-        // ==========================================
-        // PROCESSAMENTO DOS DOCUMENTOS KYC (BASE64)
-        // ==========================================
-        const docs = {
-            bi_front, bi_back,
-            driving_license_front, driving_license_back,
-            vehicle_title, vehicle_insurance, tax_document
-        };
-
-        for (const [key, base64String] of Object.entries(docs)) {
-            if (base64String && base64String.length > 100) {
-                updates.push(`${key} = $${paramCount}`);
-                values.push(base64String); // Salva o Base64 direto
-                paramCount++;
-                requiresReverification = true;
-
-                // Também registra na tabela user_documents para auditoria
-                let docType = key;
-                if (key.startsWith('bi_')) docType = 'bi';
-                else if (key.startsWith('driving_license_')) docType = 'driving_license';
-                else if (key === 'vehicle_title') docType = 'vehicle_title';
-                else if (key === 'vehicle_insurance') docType = 'vehicle_insurance';
-                else if (key === 'tax_document') docType = 'tax_document';
-
-                const side = key.endsWith('_back') ? 'back_image' : 'front_image';
-
-                await client.query(`
-                    INSERT INTO user_documents (user_id, document_type, ${side}, status, created_at, updated_at)
-                    VALUES ($1, $2, $3, 'pending', NOW(), NOW())
-                    ON CONFLICT (user_id, document_type)
-                    DO UPDATE SET
-                        ${side} = $3,
-                        status = 'pending',
-                        rejection_reason = NULL,
-                        updated_at = NOW()
-                `, [userId, docType, base64String]);
-            }
-        }
-
         if (updates.length === 0) {
-            await client.query('ROLLBACK');
-            return res.status(400).json({ error: "Nenhum dado válido fornecido para atualização." });
+            return res.status(400).json({ error: "Nenhum dado válido fornecido." });
         }
 
-        // Se enviou documentos ou alterou o carro, volta para "Em Análise"
-        if (requiresReverification) {
-            updates.push(`is_verified = $${paramCount}`);
-            values.push(false);
-            paramCount++;
-
-            updates.push(`kyc_level = $${paramCount}`);
-            values.push(1);
-            paramCount++;
-        }
-
-        // Adiciona Timestamp
         updates.push(`updated_at = NOW()`);
-
-        // Finaliza Query de Atualização
         values.push(userId);
-        const query = `
-            UPDATE users
-            SET ${updates.join(', ')}
-            WHERE id = $${paramCount}
-        `;
 
-        await client.query(query, values);
-        await client.query('COMMIT');
+        await pool.query(`UPDATE users SET ${updates.join(', ')} WHERE id = $${paramCount}`, values);
 
-        // Busca os dados completos e atualizados do usuário
         const updatedUser = await getUserFullDetails(userId);
-
-        // 🛡️ SEGURANÇA: Remove dados sensíveis antes de enviar ao cliente
         delete updatedUser.password;
         delete updatedUser.wallet_pin_hash;
 
-        logSystem('PROFILE_UPDATE', `Usuário ${userId} atualizou perfil. Reverificação: ${requiresReverification}`);
-
-        // Retorna o objeto completo para o Provider do Flutter atualizar o estado global
         res.json(updatedUser);
 
     } catch (e) {
-        if (client) await client.query('ROLLBACK');
-        logError('PROFILE_UPDATE_ERROR', e);
+        logError('PROFILE_UPDATE', e);
         res.status(500).json({ error: "Erro ao atualizar perfil." });
-    } finally {
-        client.release();
     }
 };
 
+// =================================================================================================
+// 3. UPLOAD DE FOTO VIA BASE64
+// =================================================================================================
+
 /**
- * 📸 PROTOCOLO: ATUALIZAÇÃO DE FOTO VIA BASE64
+ * UPLOAD PHOTO (BASE64)
  * Rota: POST /api/profile/photo
- * Descrição: Processa imagem Base64, salva no DB e retorna o perfil atualizado.
+ * Descrição: Processa imagem Base64 e salva no banco.
  */
 exports.uploadPhoto = async (req, res) => {
     const userId = req.user.id;
     const { photo } = req.body;
 
-    // Validação de presença de dados
-    if (!photo) {
-        return res.status(400).json({
-            success: false,
-            error: "Nenhuma string de imagem detectada no corpo da requisição."
-        });
-    }
-
-    // Validação básica de formato Base64
-    if (typeof photo !== 'string' || photo.length < 50) {
+    if (!photo || typeof photo !== 'string' || photo.length < 50) {
         return res.status(400).json({
             success: false,
             error: "Formato de imagem inválido."
@@ -381,73 +236,216 @@ exports.uploadPhoto = async (req, res) => {
     }
 
     try {
-        // Execução da Atualização no Banco de Dados
-        const updateQuery = `
-            UPDATE users
-            SET photo = $1,
-                updated_at = NOW()
-            WHERE id = $2
-            RETURNING id
-        `;
+        const updateResult = await pool.query(
+            "UPDATE users SET photo = $1, updated_at = NOW() WHERE id = $2 RETURNING id",
+            [photo, userId]
+        );
 
-        const updateResult = await pool.query(updateQuery, [photo, userId]);
-
-        // Verificação de existência do registro
         if (updateResult.rowCount === 0) {
             return res.status(404).json({
                 success: false,
-                error: "Usuário não encontrado para atualização."
+                error: "Usuário não encontrado."
             });
         }
 
-        // Recuperação dos dados atualizados
         const fullUser = await getUserFullDetails(userId);
-
-        if (!fullUser) {
-            return res.status(404).json({
-                success: false,
-                error: "Usuário não encontrado após atualização."
-            });
-        }
-
-        // Remover dados sensíveis
         delete fullUser.password;
         delete fullUser.wallet_pin_hash;
 
-        // Log de Auditoria do Sistema
-        logSystem('PHOTO_SYNC', `Sucesso: Usuário ${userId} atualizou foto de perfil.`);
+        logSystem('PHOTO_SYNC', `Usuário ${userId} atualizou foto de perfil.`);
 
-        // Resposta Estruturada para o Flutter AuthProvider
         res.status(200).json({
             success: true,
             message: "Foto atualizada com sucesso",
-            ...fullUser,
-            photo_url: photo
+            ...fullUser
         });
 
     } catch (e) {
-        logError('PHOTO_UPLOAD_FATAL', e);
-
+        logError('PHOTO_UPLOAD', e);
         res.status(500).json({
             success: false,
-            error: "Falha interna ao processar ou salvar a imagem no servidor."
+            error: "Erro ao salvar foto."
         });
     }
 };
 
 /**
- * UPLOAD DOCUMENTS (KYC ENGINE) - VERSÃO MULTIPART (SUPORTA PDFs)
+ * UPLOAD PHOTO VIA MULTIPART
+ * Rota: POST /api/profile/photo/upload
+ * Descrição: Processa upload de foto via form-data.
+ */
+exports.uploadPhotoMultipart = async (req, res) => {
+    const userId = req.user.id;
+
+    if (!req.file) {
+        return res.status(400).json({
+            success: false,
+            error: "Nenhuma foto enviada."
+        });
+    }
+
+    try {
+        const file = req.file;
+        const fileBuffer = fs.readFileSync(file.path);
+        const base64Data = fileBuffer.toString('base64');
+        const finalBase64 = `data:${file.mimetype};base64,${base64Data}`;
+
+        await pool.query(
+            "UPDATE users SET photo = $1, updated_at = NOW() WHERE id = $2",
+            [finalBase64, userId]
+        );
+
+        try {
+            fs.unlinkSync(file.path);
+        } catch (unlinkErr) {
+            console.error(`Erro ao remover arquivo temporário: ${unlinkErr.message}`);
+        }
+
+        const fullUser = await getUserFullDetails(userId);
+        delete fullUser.password;
+        delete fullUser.wallet_pin_hash;
+
+        res.json({
+            success: true,
+            message: "Foto atualizada com sucesso",
+            user: fullUser
+        });
+
+    } catch (e) {
+        logError('PHOTO_UPLOAD_MULTIPART', e);
+        res.status(500).json({
+            success: false,
+            error: "Erro ao processar foto."
+        });
+    }
+};
+
+// =================================================================================================
+// 4. UPLOAD DE DOCUMENTOS VIA MULTIPART (CORREÇÃO DEFINITIVA)
+// =================================================================================================
+
+/**
+ * UPLOAD DOCUMENTS VIA MULTIPART
+ * Rota: POST /api/profile/documents/upload
+ * Descrição: Processa upload de múltiplos documentos via Multipart.
+ */
+exports.uploadDocumentsMultipart = async (req, res) => {
+    const userId = req.user.id;
+    const files = req.files;
+
+    console.log(`\n📸 [UPLOAD_MULTIPART] Recebendo upload para usuário ${userId}`);
+    console.log(`📦 Arquivos recebidos: ${Object.keys(files || {}).length}`);
+
+    if (!files || Object.keys(files).length === 0) {
+        return res.status(400).json({
+            success: false,
+            error: "Nenhum arquivo enviado."
+        });
+    }
+
+    const client = await pool.connect();
+
+    try {
+        await client.query('BEGIN');
+
+        const fieldToDbColumn = {
+            'profile_photo': 'photo',
+            'bi_front': 'bi_front',
+            'bi_back': 'bi_back',
+            'driving_license_front': 'driving_license_front',
+            'driving_license_back': 'driving_license_back',
+            'vehicle_title': 'vehicle_title',
+            'vehicle_insurance': 'vehicle_insurance',
+            'tax_document': 'tax_document'
+        };
+
+        for (const [fieldName, fileArray] of Object.entries(files)) {
+            const dbColumn = fieldToDbColumn[fieldName];
+            if (!dbColumn) {
+                console.log(`⚠️ Campo ignorado: ${fieldName}`);
+                continue;
+            }
+
+            const file = fileArray[0];
+            console.log(`📄 Processando ${fieldName}: ${file.filename} (${file.mimetype})`);
+
+            const fileBuffer = fs.readFileSync(file.path);
+            const base64Data = fileBuffer.toString('base64');
+            const finalBase64 = `data:${file.mimetype};base64,${base64Data}`;
+
+            await client.query(
+                `UPDATE users SET ${dbColumn} = $1, updated_at = NOW() WHERE id = $2`,
+                [finalBase64, userId]
+            );
+
+            if (fieldName !== 'profile_photo') {
+                let docType = fieldName;
+                if (fieldName.startsWith('bi_')) docType = 'bi';
+                else if (fieldName.startsWith('driving_license_')) docType = 'driving_license';
+                else if (fieldName === 'vehicle_title') docType = 'vehicle_title';
+                else if (fieldName === 'vehicle_insurance') docType = 'vehicle_insurance';
+                else if (fieldName === 'tax_document') docType = 'tax_document';
+
+                const side = fieldName.endsWith('_back') ? 'back_image' : 'front_image';
+
+                await client.query(`
+                    INSERT INTO user_documents (user_id, document_type, ${side}, status, updated_at)
+                    VALUES ($1, $2, $3, 'pending', NOW())
+                    ON CONFLICT (user_id, document_type)
+                    DO UPDATE SET
+                        ${side} = $3,
+                        status = 'pending',
+                        updated_at = NOW()
+                `, [userId, docType, finalBase64]);
+            }
+
+            try {
+                fs.unlinkSync(file.path);
+                console.log(`   ✅ Arquivo temporário removido: ${file.path}`);
+            } catch (unlinkErr) {
+                console.error(`   ⚠️ Erro ao remover arquivo temporário: ${unlinkErr.message}`);
+            }
+        }
+
+        await client.query(
+            "UPDATE users SET is_verified = false, kyc_level = 1 WHERE id = $1",
+            [userId]
+        );
+
+        await client.query('COMMIT');
+        console.log(`✅ Transação COMMIT realizada para usuário ${userId}`);
+
+        const updatedUser = await getUserFullDetails(userId);
+        delete updatedUser.password;
+        delete updatedUser.wallet_pin_hash;
+
+        res.json({
+            success: true,
+            message: "Documentos enviados com sucesso!",
+            user: updatedUser
+        });
+
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('❌ ERRO NO UPLOAD MULTIPART:', error);
+        logError('UPLOAD_DOCUMENTS_MULTIPART', error);
+
+        res.status(500).json({
+            success: false,
+            error: "Erro interno ao salvar documentos.",
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    } finally {
+        client.release();
+    }
+};
+
+/**
+ * UPLOAD DOCUMENTS (VIA JSON - LEGACY)
  * Rota: POST /api/profile/documents
- * Descrição: Endpoint complexo para upload de documentos via Multipart.
- *            - Atualiza tabela `users` (colunas de atalho).
- *            - Insere na tabela `user_documents` (Auditoria e Histórico).
- *            - Reseta status de verificação para 'false' para forçar nova análise Admin.
+ * Descrição: Endpoint legacy para upload de documentos via JSON.
  */
 exports.uploadDocuments = async (req, res) => {
-    // req.files contém os arrays de arquivos processados pelo Multer
-    // Campos esperados: bi_front, bi_back, driving_license_front, driving_license_back,
-    // vehicle_title, vehicle_insurance, tax_document
-
     if (!req.files || Object.keys(req.files).length === 0) {
         return res.status(400).json({ error: "Nenhum documento enviado." });
     }
@@ -463,19 +461,16 @@ exports.uploadDocuments = async (req, res) => {
         let paramCount = 1;
         let requiresReverification = false;
 
-        // Helper para processar cada tipo de documento
         const processDoc = async (fieldName, dbColumn, docType, side) => {
             if (req.files[fieldName] && req.files[fieldName][0]) {
                 const file = req.files[fieldName][0];
-                const fileUrl = `/uploads/${file.filename}`; // Este caminho pode apontar para um .PDF agora!
+                const fileUrl = `/uploads/${file.filename}`;
 
-                // A. Adiciona à lista de updates da tabela Users
                 updates.push(`${dbColumn} = $${paramCount}`);
                 values.push(fileUrl);
                 paramCount++;
                 requiresReverification = true;
 
-                // B. Insere/Atualiza na tabela de Auditoria (user_documents)
                 if (side === 'front') {
                     await client.query(`
                         INSERT INTO user_documents (user_id, document_type, front_image, status, created_at, updated_at)
@@ -499,7 +494,6 @@ exports.uploadDocuments = async (req, res) => {
                             updated_at = NOW()
                     `, [userId, docType, fileUrl]);
                 } else {
-                    // Documentos sem frente/verso (vehicle_title, vehicle_insurance, tax_document)
                     await client.query(`
                         INSERT INTO user_documents (user_id, document_type, front_image, status, created_at, updated_at)
                         VALUES ($1, $2, $3, 'pending', NOW(), NOW())
@@ -514,24 +508,18 @@ exports.uploadDocuments = async (req, res) => {
             }
         };
 
-        // Processa BI (Bilhete de Identidade)
         await processDoc('bi_front', 'bi_front', 'bi', 'front');
         await processDoc('bi_back', 'bi_back', 'bi', 'back');
 
-        // Processa Carta de Condução (Apenas se for motorista)
         if (req.user.role === 'driver') {
             await processDoc('driving_license_front', 'driving_license_front', 'driving_license', 'front');
             await processDoc('driving_license_back', 'driving_license_back', 'driving_license', 'back');
-
-            // Processa documentos do veículo
             await processDoc('vehicle_title', 'vehicle_title', 'vehicle_title', 'single');
             await processDoc('vehicle_insurance', 'vehicle_insurance', 'vehicle_insurance', 'single');
             await processDoc('tax_document', 'tax_document', 'tax_document', 'single');
         }
 
-        // Se houver atualizações na tabela users
         if (updates.length > 0) {
-            // Reseta status de verificação (KYC Reset)
             updates.push(`is_verified = $${paramCount}`);
             values.push(false);
             paramCount++;
@@ -541,16 +529,12 @@ exports.uploadDocuments = async (req, res) => {
             paramCount++;
 
             updates.push(`updated_at = NOW()`);
-
             values.push(userId);
-            const userUpdateQuery = `UPDATE users SET ${updates.join(', ')} WHERE id = $${paramCount}`;
 
-            await client.query(userUpdateQuery, values);
+            await client.query(`UPDATE users SET ${updates.join(', ')} WHERE id = $${paramCount}`, values);
         }
 
         await client.query('COMMIT');
-
-        logSystem('DOC_UPLOAD', `Usuário ${userId} enviou novos documentos (Multipart/PDF) para análise.`);
 
         res.json({
             success: true,
@@ -567,160 +551,13 @@ exports.uploadDocuments = async (req, res) => {
 };
 
 // =================================================================================================
-// 🚀 MÉTODO OTIMIZADO: UPLOAD DE DOCUMENTOS VIA MULTIPART (CORREÇÃO DEFINITIVA)
-// =================================================================================================
-/**
- * UPLOAD DOCUMENTS VIA MULTIPART (VERSÃO OTIMIZADA)
- * Rota: POST /api/profile/documents/upload
- * Descrição: Processa upload de múltiplos documentos via Multipart, convertendo para Base64
- *            com prefixo MIME type e salvando diretamente no banco de dados.
- *
- * ✅ MELHORIAS:
- * 1. Adiciona prefixo MIME type (data:image/jpeg;base64,) para compatibilidade
- * 2. Limpeza síncrona de arquivos temporários com fs.unlinkSync
- * 3. Reset garantido de verificação KYC
- * 4. Logs detalhados para debugging
- */
-exports.uploadDocumentsMultipart = async (req, res) => {
-    const userId = req.user.id;
-    const files = req.files;
-
-    console.log(`\n📸 [UPLOAD_MULTIPART] Recebendo upload para usuário ${userId}`);
-    console.log(`📦 Arquivos recebidos: ${Object.keys(files || {}).length}`);
-
-    if (!files || Object.keys(files).length === 0) {
-        console.log("❌ Nenhum arquivo recebido!");
-        return res.status(400).json({
-            success: false,
-            error: "Nenhum arquivo enviado."
-        });
-    }
-
-    const client = await pool.connect();
-
-    try {
-        await client.query('BEGIN');
-
-        // Mapeamento dos campos do formulário para as colunas do banco de dados
-        const fieldToDbColumn = {
-            'profile_photo': 'photo',
-            'bi_front': 'bi_front',
-            'bi_back': 'bi_back',
-            'driving_license_front': 'driving_license_front',
-            'driving_license_back': 'driving_license_back',
-            'vehicle_title': 'vehicle_title',
-            'vehicle_insurance': 'vehicle_insurance',
-            'tax_document': 'tax_document'
-        };
-
-        // Processa cada arquivo enviado
-        for (const [fieldName, fileArray] of Object.entries(files)) {
-            const dbColumn = fieldToDbColumn[fieldName];
-            if (!dbColumn) {
-                console.log(`⚠️ Campo ignorado: ${fieldName}`);
-                continue;
-            }
-
-            const file = fileArray[0];
-            console.log(`📄 Processando ${fieldName}: ${file.filename} (${file.mimetype})`);
-
-            // Lê o arquivo e converte para Base64
-            const fileBuffer = fs.readFileSync(file.path);
-            const base64Data = fileBuffer.toString('base64');
-
-            // Adiciona prefixo com MIME type para compatibilidade
-            const mimeType = file.mimetype;
-            const finalBase64 = `data:${mimeType};base64,${base64Data}`;
-
-            console.log(`   ✅ Tamanho: ${fileBuffer.length} bytes | MIME: ${mimeType}`);
-
-            // 1. Atualiza a coluna direta na tabela USERS
-            await client.query(
-                `UPDATE users SET ${dbColumn} = $1, updated_at = NOW() WHERE id = $2`,
-                [finalBase64, userId]
-            );
-
-            // 2. Registra na tabela USER_DOCUMENTS (Fila do Admin)
-            if (fieldName !== 'profile_photo') {
-                let docType = fieldName;
-                if (fieldName.startsWith('bi_')) docType = 'bi';
-                else if (fieldName.startsWith('driving_license_')) docType = 'driving_license';
-                else if (fieldName === 'vehicle_title') docType = 'vehicle_title';
-                else if (fieldName === 'vehicle_insurance') docType = 'vehicle_insurance';
-                else if (fieldName === 'tax_document') docType = 'tax_document';
-
-                const side = fieldName.endsWith('_back') ? 'back_image' : 'front_image';
-
-                await client.query(`
-                    INSERT INTO user_documents (user_id, document_type, ${side}, status, created_at, updated_at)
-                    VALUES ($1, $2, $3, 'pending', NOW(), NOW())
-                    ON CONFLICT (user_id, document_type)
-                    DO UPDATE SET
-                        ${side} = $3,
-                        status = 'pending',
-                        rejection_reason = NULL,
-                        updated_at = NOW()
-                `, [userId, docType, finalBase64]);
-            }
-
-            // Limpa o arquivo temporário do disco (síncrono para garantir)
-            try {
-                fs.unlinkSync(file.path);
-                console.log(`   ✅ Arquivo temporário removido: ${file.path}`);
-            } catch (unlinkErr) {
-                console.error(`   ⚠️ Erro ao remover arquivo temporário: ${unlinkErr.message}`);
-            }
-        }
-
-        // Reseta verificação para re-análise (independente de quais documentos foram enviados)
-        await client.query(
-            "UPDATE users SET is_verified = false, kyc_level = 1 WHERE id = $1",
-            [userId]
-        );
-
-        await client.query('COMMIT');
-        console.log(`✅ Transação COMMIT realizada para usuário ${userId}`);
-
-        // Busca os dados atualizados do usuário
-        const updatedUser = await getUserFullDetails(userId);
-
-        // Remove dados sensíveis
-        delete updatedUser.password;
-        delete updatedUser.wallet_pin_hash;
-
-        console.log(`✅ Upload concluído com sucesso para usuário ${userId}`);
-
-        res.json({
-            success: true,
-            message: "Documentos enviados com sucesso!",
-            user: updatedUser
-        });
-
-    } catch (error) {
-        await client.query('ROLLBACK');
-        console.error('❌ ERRO NO UPLOAD MULTIPART:', error);
-        logError('UPLOAD_DOCUMENTS_MULTIPART', error);
-
-        res.status(500).json({
-            success: false,
-            error: "Erro interno ao salvar documentos.",
-            details: process.env.NODE_ENV === 'development' ? error.message : undefined
-        });
-    } finally {
-        client.release();
-    }
-};
-
-// =================================================================================================
-// 3. SEGURANÇA E CREDENCIAIS
+// 5. SEGURANÇA E CREDENCIAIS
 // =================================================================================================
 
 /**
  * CHANGE PASSWORD
  * Rota: POST /api/profile/change-password
  * Descrição: Altera a senha do usuário.
- *            Requer senha atual para validação.
- *            Encerra todas as sessões ativas (exceto a atual) por segurança.
  */
 exports.changePassword = async (req, res) => {
     const { current_password, new_password } = req.body;
@@ -743,7 +580,6 @@ exports.changePassword = async (req, res) => {
     try {
         await client.query('BEGIN');
 
-        // 1. Busca senha atual (hash)
         const userQuery = await client.query('SELECT password FROM users WHERE id = $1 FOR UPDATE', [userId]);
 
         if (userQuery.rows.length === 0) {
@@ -752,30 +588,21 @@ exports.changePassword = async (req, res) => {
         }
 
         const currentHash = userQuery.rows[0].password;
-
-        // 2. Valida senha atual
         const isValid = await bcrypt.compare(current_password, currentHash);
-        const isPlainValid = current_password === currentHash; // Fallback migração
 
-        if (!isValid && !isPlainValid) {
-            // Delay anti-bruteforce
+        if (!isValid) {
             await new Promise(resolve => setTimeout(resolve, 1000));
             await client.query('ROLLBACK');
             return res.status(401).json({ error: "A senha atual está incorreta." });
         }
 
-        // 3. Hash da nova senha
-        const rounds = SYSTEM_CONFIG.SECURITY?.BCRYPT_ROUNDS || 10;
-        const newHash = await bcrypt.hash(new_password, rounds);
+        const newHash = await bcrypt.hash(new_password, SYSTEM_CONFIG.SECURITY?.BCRYPT_ROUNDS || 10);
 
-        // 4. Atualiza senha
         await client.query(
             'UPDATE users SET password = $1, updated_at = NOW() WHERE id = $2',
             [newHash, userId]
         );
 
-        // 5. Revoga outras sessões (Security Best Practice)
-        // Mantém apenas a sessão atual se o token estiver disponível no request
         const currentSessionToken = req.headers['x-session-token'];
         if (currentSessionToken) {
             await client.query(
@@ -783,7 +610,6 @@ exports.changePassword = async (req, res) => {
                 [userId, currentSessionToken]
             );
         } else {
-            // Se não conseguirmos identificar a sessão atual, derruba todas por segurança
             await client.query(
                 'UPDATE user_sessions SET is_active = false WHERE user_id = $1',
                 [userId]
@@ -801,7 +627,7 @@ exports.changePassword = async (req, res) => {
 
     } catch (e) {
         await client.query('ROLLBACK');
-        logError('PASSWORD_CHANGE_FATAL', e);
+        logError('PASSWORD_CHANGE', e);
         res.status(500).json({ error: "Erro interno ao alterar senha." });
     } finally {
         client.release();
@@ -812,7 +638,6 @@ exports.changePassword = async (req, res) => {
  * UPDATE SETTINGS
  * Rota: PUT /api/profile/settings
  * Descrição: Atualiza configurações do App (JSONB).
- *            Suporta atualização parcial (Merge) para não sobrescrever chaves existentes.
  */
 exports.updateSettings = async (req, res) => {
     const { settings, privacy_settings, notification_preferences } = req.body;
@@ -827,7 +652,6 @@ exports.updateSettings = async (req, res) => {
     try {
         await client.query('BEGIN');
 
-        // Busca configurações atuais para fazer Merge
         const currentRes = await client.query(
             "SELECT settings, privacy_settings, notification_preferences FROM users WHERE id = $1 FOR UPDATE",
             [userId]
@@ -838,7 +662,6 @@ exports.updateSettings = async (req, res) => {
         const values = [];
         let paramCount = 1;
 
-        // Helper de Merge JSON
         const mergeJson = (oldJson, newJson) => {
             const parsedOld = typeof oldJson === 'string' ? JSON.parse(oldJson || '{}') : (oldJson || {});
             const parsedNew = typeof newJson === 'string' ? JSON.parse(newJson || '{}') : (newJson || {});
@@ -887,10 +710,5 @@ exports.updateSettings = async (req, res) => {
 };
 
 // =================================================================================================
-// EXPORTA TODOS OS MÉTODOS
-// =================================================================================================
-module.exports = exports;
-
-// =================================================================================================
-// FIM DO ARQUIVO - PROFILE CONTROLLER (KYC COMPLETO + MULTIPART OTIMIZADO)
+// FIM DO ARQUIVO - PROFILE CONTROLLER
 // =================================================================================================
