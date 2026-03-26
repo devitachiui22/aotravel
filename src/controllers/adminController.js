@@ -1,6 +1,6 @@
 /**
  * =================================================================================================
- * 👑 AOTRAVEL SERVER PRO - ADMIN CONTROLLER (TITANIUM EDITION v12.0)
+ * 👑 AOTRAVEL SERVER PRO - ADMIN CONTROLLER (TITANIUM EDITION)
  * =================================================================================================
  *
  * ARQUIVO: src/controllers/adminController.js
@@ -13,15 +13,18 @@
  *            - Configurações Dinâmicas do Sistema (Hot-Reload).
  *            - Geração de Relatórios Complexos.
  *
- * VERSÃO: 12.0.0-GOLD-ARMORED
- * DATA: 2026.03.24
+ * VERSÃO: 11.0.0-GOLD-ARMORED
+ * DATA: 2026.03.07
  *
- * ✅ CORREÇÕES APLICADAS:
- * - formatFileUrl importado e injetado nos mapeamentos de arrays.
- * - getUserFullDetails agora recebe o objeto `req` para montar a URL absoluta das imagens.
- * - getPendingDocuments agora processa e formata as URLs de frente e verso.
- * - getUsers agora formata as URLs das fotos dos usuários.
- * - getUserDetails agora formata URLs dos documentos.
+ * ✅ CORREÇÃO AUTO-VERIFICATION:
+ * - verifyDocument agora verifica automaticamente se o motorista tem TODOS os docs necessários
+ * - Requisitos: BI, Carta de Condução, Documentos do Veículo
+ * - Atualiza is_verified e kyc_level automaticamente
+ *
+ * INTEGRAÇÃO:
+ * - Database: PostgreSQL (Neon) via pool (src/config/db.js).
+ * - Helpers: Utils globais para logs e formatação.
+ * - Security: Bcrypt para redefinição de senhas administrativas.
  *
  * STATUS: PRODUCTION READY - FULL VERSION
  * =================================================================================================
@@ -29,7 +32,7 @@
 
 const pool = require('../config/db');
 const bcrypt = require('bcrypt');
-const { logSystem, logError, getUserFullDetails, generateRef, formatFileUrl } = require('../utils/helpers');
+const { logSystem, logError, getUserFullDetails, generateRef } = require('../utils/helpers');
 const SYSTEM_CONFIG = require('../config/appConfig');
 
 // =================================================================================================
@@ -148,24 +151,19 @@ exports.getStats = async (req, res) => {
             ORDER BY r.created_at DESC LIMIT 8
         `);
 
-        // Novos Usuários com formatação de foto
-        const recentUsersResult = await client.query(`
+        // Novos Usuários
+        const recentUsers = await client.query(`
             SELECT id, name, email, role, created_at, photo
             FROM users
             ORDER BY created_at DESC LIMIT 8
         `);
-
-        const recentUsers = recentUsersResult.rows.map(u => {
-            if (u.photo) u.photo = formatFileUrl(u.photo, req);
-            return u;
-        });
 
         // Transações de Carteira Recentes (Acima de 5000 Kz)
         const recentTrans = await client.query(`
             SELECT t.id, t.amount, t.type, t.created_at, u.name as user_name
             FROM wallet_transactions t
             JOIN users u ON t.user_id = u.id
-            WHERE ABS(t.amount) > 5000
+            WHERE t.amount > 5000
             ORDER BY t.created_at DESC LIMIT 5
         `);
 
@@ -215,7 +213,7 @@ exports.getStats = async (req, res) => {
             },
             live_feed: {
                 rides: recentRides.rows,
-                users: recentUsers,
+                users: recentUsers.rows,
                 high_value_transactions: recentTrans.rows
             }
         });
@@ -321,19 +319,13 @@ exports.getUsers = async (req, res) => {
         // Execução
         const result = await pool.query(query, params);
 
-        // ✅ Formatação das Imagens dos Usuários na Listagem
-        const formattedData = result.rows.map(row => {
-            if (row.photo) row.photo = formatFileUrl(row.photo, req);
-            return row;
-        });
-
         // Contagem Total (para Frontend Pagination)
         const countQueryBase = query.split('ORDER BY')[0];
         const countQuery = `SELECT COUNT(*) FROM (${countQueryBase}) as total`;
         const countResult = await pool.query(countQuery, params.slice(0, -2));
 
         res.json({
-            data: formattedData,
+            data: result.rows,
             pagination: {
                 total: parseInt(countResult.rows[0].count),
                 limit: parseInt(limit),
@@ -357,8 +349,8 @@ exports.getUserDetails = async (req, res) => {
     const { id } = req.params;
 
     try {
-        // 1. Perfil Base (Helper Padronizado com formatação de URLs)
-        const user = await getUserFullDetails(id, req);
+        // 1. Perfil Base (Helper Padronizado)
+        const user = await getUserFullDetails(id);
         if (!user) {
             return res.status(404).json({ error: "Usuário não encontrado." });
         }
@@ -389,19 +381,13 @@ exports.getUserDetails = async (req, res) => {
         `;
         const transactions = await pool.query(transQuery, [id]);
 
-        // 4. Documentos KYC com formatação de URLs
+        // 4. Documentos KYC
         const docsQuery = `
             SELECT * FROM user_documents
             WHERE user_id = $1
             ORDER BY created_at DESC
         `;
-        const documentsResult = await pool.query(docsQuery, [id]);
-
-        const formattedDocuments = documentsResult.rows.map(doc => {
-            if (doc.front_image) doc.front_image = formatFileUrl(doc.front_image, req);
-            if (doc.back_image) doc.back_image = formatFileUrl(doc.back_image, req);
-            return doc;
-        });
+        const documents = await pool.query(docsQuery, [id]);
 
         // 5. Sessões Ativas (Segurança)
         const sessionsQuery = `
@@ -423,7 +409,7 @@ exports.getUserDetails = async (req, res) => {
                 total_rides: rides.rows.length
             },
             compliance: {
-                documents: formattedDocuments,
+                documents: documents.rows,
                 kyc_level: user.kyc_level
             },
             security: {
@@ -533,16 +519,19 @@ exports.updateUser = async (req, res) => {
         const result = await client.query(query, values);
 
         // Auditoria da Ação
-        await client.query(
-            "INSERT INTO wallet_security_logs (user_id, event_type, ip_address, device_info, details) VALUES ($1, 'ADMIN_UPDATE', $2, $3, $4)",
-            [id, req.ip, `Admin ID: ${req.user.id}`, JSON.stringify(req.body)]
-        );
+        try {
+            await client.query(
+                "INSERT INTO admin_audit_logs (admin_id, action, target_user, details, ip_address) VALUES ($1, 'ADMIN_UPDATE', $2, $3, $4)",
+                [req.user.id, id, JSON.stringify(req.body), req.ip]
+            );
+        } catch (auditErr) {
+            // Tabela pode não existir, ignorar erro de auditoria
+        }
 
         await client.query('COMMIT');
 
         const updatedUser = result.rows[0];
         delete updatedUser.password;
-        if (updatedUser.photo) updatedUser.photo = formatFileUrl(updatedUser.photo, req);
 
         logSystem('ADMIN_ACTION', `Admin ${req.user.id} atualizou perfil do usuário ${id}.`);
         res.json({ success: true, user: updatedUser });
@@ -570,8 +559,7 @@ exports.resetUserPassword = async (req, res) => {
     }
 
     try {
-        const rounds = SYSTEM_CONFIG.SECURITY?.BCRYPT_ROUNDS || 10;
-        const hash = await bcrypt.hash(new_password, rounds);
+        const hash = await bcrypt.hash(new_password, SYSTEM_CONFIG.SECURITY?.BCRYPT_ROUNDS || 10);
 
         await pool.query(
             "UPDATE users SET password = $1, session_token = NULL, is_online = false, updated_at = NOW() WHERE id = $2",
@@ -597,28 +585,19 @@ exports.resetUserPassword = async (req, res) => {
 /**
  * GET PENDING DOCUMENTS
  * Rota: GET /api/admin/documents/pending
- * Descrição: Lista todos os documentos aguardando aprovação com URLs formatadas.
+ * Descrição: Lista todos os documentos aguardando aprovação.
  */
 exports.getPendingDocuments = async (req, res) => {
     try {
         const query = `
-            SELECT d.*, u.name as user_name, u.email as user_email, u.role as user_role, u.photo as user_photo
+            SELECT d.*, u.name as user_name, u.email as user_email, u.role as user_role
             FROM user_documents d
             JOIN users u ON d.user_id = u.id
             WHERE d.status = 'pending'
             ORDER BY d.created_at ASC
         `;
         const result = await pool.query(query);
-
-        // ✅ Formatação Global das URLs dos Documentos
-        const formattedDocs = result.rows.map(doc => {
-            if (doc.front_image) doc.front_image = formatFileUrl(doc.front_image, req);
-            if (doc.back_image) doc.back_image = formatFileUrl(doc.back_image, req);
-            if (doc.user_photo) doc.user_photo = formatFileUrl(doc.user_photo, req);
-            return doc;
-        });
-
-        res.json(formattedDocs);
+        res.json(result.rows);
     } catch (e) {
         logError('PENDING_DOCS', e);
         res.status(500).json({ error: "Erro ao buscar documentos pendentes." });
@@ -739,6 +718,114 @@ exports.verifyDocument = async (req, res) => {
     }
 };
 
+/**
+ * APPROVE DOCUMENT (MÉTODO LEGACY PARA COMPATIBILIDADE)
+ * Rota: POST /api/admin/documents/approve
+ * Descrição: Método legacy para aprovar/rejeitar documentos (mantido para compatibilidade)
+ */
+exports.approveDocument = async (req, res) => {
+    const { doc_id, status, reason } = req.body; // status: 'approved' ou 'rejected'
+
+    if (!doc_id || !status) {
+        return res.status(400).json({ error: "ID do documento e status são obrigatórios." });
+    }
+
+    if (!['approved', 'rejected'].includes(status)) {
+        return res.status(400).json({ error: "Status inválido. Use 'approved' ou 'rejected'." });
+    }
+
+    try {
+        const result = await pool.query(
+            "UPDATE user_documents SET status = $1, rejection_reason = $2, verified_at = NOW() WHERE id = $3 RETURNING user_id",
+            [status, reason || null, doc_id]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: "Documento não encontrado." });
+        }
+
+        const { user_id } = result.rows[0];
+
+        // Verificar se o usuário tem todos os documentos necessários após esta aprovação
+        if (status === 'approved') {
+            // Buscar todos os documentos do usuário
+            const allDocs = await pool.query(
+                `SELECT document_type, status FROM user_documents WHERE user_id = $1`,
+                [user_id]
+            );
+
+            // Buscar o role do usuário
+            const userBasic = await pool.query("SELECT role FROM users WHERE id = $1", [user_id]);
+            const role = userBasic.rows[0]?.role || 'passenger';
+
+            // Definir documentos obrigatórios
+            let required = ['bi'];
+            if (role === 'driver') {
+                required = ['bi', 'driving_license', 'vehicle_title', 'vehicle_insurance', 'tax_document'];
+            }
+
+            // Verificar se todos os obrigatórios estão aprovados
+            const approvedTypes = allDocs.rows
+                .filter(d => d.status === 'approved')
+                .map(d => d.document_type);
+
+            const isFullyApproved = required.every(type => approvedTypes.includes(type));
+
+            if (isFullyApproved) {
+                await pool.query(
+                    "UPDATE users SET is_verified = true, kyc_level = 2 WHERE id = $1",
+                    [user_id]
+                );
+                logSystem('KYC_AUTO', `Usuário ${user_id} automaticamente verificado (todos os documentos aprovados).`);
+            }
+        } else if (status === 'rejected') {
+            // Se algum documento foi rejeitado, garante que o usuário não está verificado
+            await pool.query(
+                "UPDATE users SET is_verified = false, kyc_level = 1 WHERE id = $1",
+                [user_id]
+            );
+        }
+
+        res.json({
+            success: true,
+            message: `Documento ${status} com sucesso.`,
+            fully_verified: status === 'approved' ? await checkIfFullyVerified(user_id) : false
+        });
+
+    } catch (e) {
+        logError('APPROVE_DOCUMENT', e);
+        res.status(500).json({ error: "Erro ao processar documento." });
+    }
+};
+
+/**
+ * Função auxiliar para verificar se usuário está totalmente verificado
+ */
+async function checkIfFullyVerified(userId) {
+    try {
+        const userBasic = await pool.query("SELECT role FROM users WHERE id = $1", [userId]);
+        const role = userBasic.rows[0]?.role || 'passenger';
+
+        const allDocs = await pool.query(
+            `SELECT document_type, status FROM user_documents WHERE user_id = $1`,
+            [userId]
+        );
+
+        let required = ['bi'];
+        if (role === 'driver') {
+            required = ['bi', 'driving_license', 'vehicle_title', 'vehicle_insurance', 'tax_document'];
+        }
+
+        const approvedTypes = allDocs.rows
+            .filter(d => d.status === 'approved')
+            .map(d => d.document_type);
+
+        return required.every(type => approvedTypes.includes(type));
+    } catch (e) {
+        return false;
+    }
+}
+
 // =================================================================================================
 // 4. GESTÃO FINANCEIRA ADMINISTRATIVA (FINANCIAL MODULE)
 // =================================================================================================
@@ -750,7 +837,7 @@ exports.verifyDocument = async (req, res) => {
  *            Gera log de auditoria rigoroso.
  */
 exports.manualWalletAdjustment = async (req, res) => {
-    const { user_id, amount, type, description } = req.body;
+    const { user_id, amount, type, description } = req.body; // type: 'credit' or 'debit'
 
     if (!user_id || !amount || !type || !description) {
         return res.status(400).json({ error: "Todos os campos são obrigatórios: user_id, amount, type, description." });
@@ -779,14 +866,15 @@ exports.manualWalletAdjustment = async (req, res) => {
 
         const currentBalance = parseFloat(userRes.rows[0].balance);
         let newBalance = 0;
-        let dbAmount = 0;
+        let dbAmount = 0; // Valor que vai pro banco (negativo se débito)
 
         if (type === 'credit') {
             newBalance = currentBalance + val;
             dbAmount = val;
         } else {
             newBalance = currentBalance - val;
-            dbAmount = -val;
+            dbAmount = -val; // Negativo para registro
+            // Verifica se o saldo ficaria negativo (permitido em alguns casos, mas bom avisar)
             if (newBalance < 0) {
                 logSystem('ADMIN_WARN', `Admin ${req.user.id} deixou saldo negativo para User ${user_id}: ${newBalance}`);
             }
@@ -817,10 +905,14 @@ exports.manualWalletAdjustment = async (req, res) => {
         );
 
         // Auditoria
-        await client.query(
-            "INSERT INTO wallet_security_logs (user_id, event_type, ip_address, details) VALUES ($1, 'ADMIN_MONEY_ADJUST', $2, $3)",
-            [user_id, req.ip, JSON.stringify({ amount: dbAmount, admin: req.user.id, ref: txRef })]
-        );
+        try {
+            await client.query(
+                "INSERT INTO admin_audit_logs (admin_id, action, target_user, details, ip_address) VALUES ($1, 'WALLET_ADJUST', $2, $3, $4)",
+                [req.user.id, user_id, JSON.stringify({ amount: dbAmount, ref: txRef }), req.ip]
+            );
+        } catch (auditErr) {
+            // Tabela pode não existir, ignorar
+        }
 
         await client.query('COMMIT');
 
@@ -859,10 +951,12 @@ exports.manualWalletAdjustment = async (req, res) => {
 exports.generateReport = async (req, res) => {
     const { report_type, date_from, date_to } = req.body;
 
+    // Validação de Datas
     const dFrom = isValidDate(date_from) ? date_from : '1970-01-01';
     const dTo = isValidDate(date_to) ? date_to : '2100-12-31';
 
     try {
+        let reportData = {};
         let query = '';
 
         switch (report_type) {
@@ -912,16 +1006,25 @@ exports.generateReport = async (req, res) => {
                 return res.status(400).json({ error: "Tipo de relatório inválido. Tipos: financial_daily, rides_performance, user_growth" });
         }
 
+        // Executar Query Selecionada
         const result = await pool.query(query, [`${dFrom} 00:00:00`, `${dTo} 23:59:59`]);
+        reportData = result.rows;
+
+        // Persistir o histórico de que o relatório foi gerado
+        const reportLog = await pool.query(
+            "INSERT INTO admin_reports (report_type, data, generated_by, created_at) VALUES ($1, $2, $3, NOW()) RETURNING id",
+            [report_type, JSON.stringify({ params: req.body, summary_count: reportData.length }), req.user.id]
+        );
 
         res.json({
             success: true,
+            report_id: reportLog.rows[0].id,
             meta: {
                 type: report_type,
                 period: { from: dFrom, to: dTo },
-                rows: result.rows.length
+                rows: reportData.length
             },
-            data: result.rows
+            data: reportData
         });
 
     } catch (e) {
@@ -964,6 +1067,7 @@ exports.updateSetting = async (req, res) => {
     }
 
     try {
+        // Upsert (Insert or Update)
         const result = await pool.query(
             `INSERT INTO app_settings (key, value, description, updated_at)
              VALUES ($1, $2, $3, NOW())
@@ -989,11 +1093,8 @@ exports.updateSetting = async (req, res) => {
     }
 };
 
-// =================================================================================================
-// EXPORTA TODOS OS MÉTODOS
-// =================================================================================================
-module.exports = exports;
-
-// =================================================================================================
-// FIM DO ARQUIVO - ADMIN CONTROLLER (TITANIUM EDITION v12.0)
-// =================================================================================================
+/**
+ * =================================================================================================
+ * FIM DO ARQUIVO - ADMIN CONTROLLER
+ * =================================================================================================
+ */
