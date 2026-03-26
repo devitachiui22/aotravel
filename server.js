@@ -14,6 +14,7 @@
  * 2. Socket.IO integrado e rodando junto com Express
  * 3. Middleware de injeção do Socket.IO nos controllers
  * 4. Rotas centralizadas e organizadas
+ * 5. Rota para listar documentos pendentes com URLs de imagens prontas
  *
  * STATUS: PRODUCTION READY - FULL VERSION
  * =================================================================================================
@@ -154,11 +155,205 @@ app.get('/health', async (req, res) => {
     }
 });
 
-// Injeção do Hub de Rotas Principal (API Gateway)
+// =================================================================================================
+// 8. ROTA ADMIN PARA DOCUMENTOS PENDENTES (COM URL DAS IMAGENS PRONTAS)
+// =================================================================================================
+/**
+ * @route   GET /api/admin/documents/pending
+ * @desc    Lista documentos pendentes com URLs completas das imagens
+ * @access  Admin
+ */
+app.get('/api/admin/documents/pending', async (req, res) => {
+    try {
+        // Verificar se o usuário é admin
+        const sessionToken = req.headers['x-session-token'];
+        if (!sessionToken) {
+            return res.status(401).json({ error: "Não autorizado" });
+        }
+
+        const adminCheck = await db.query(
+            `SELECT u.role FROM users u
+             JOIN user_sessions s ON u.id = s.user_id
+             WHERE s.session_token = $1 AND u.role = 'admin' AND s.is_active = true`,
+            [sessionToken]
+        );
+
+        if (adminCheck.rows.length === 0) {
+            return res.status(403).json({ error: "Acesso negado. Requer privilégios de administrador." });
+        }
+
+        // Buscar documentos pendentes com URL completa
+        const result = await db.query(`
+            SELECT
+                d.id,
+                d.user_id,
+                d.document_type,
+                d.status,
+                d.created_at,
+                u.name as user_name,
+                u.email as user_email,
+                u.role as user_role,
+                CASE
+                    WHEN d.front_image IS NOT NULL AND d.front_image LIKE 'data:image%' THEN d.front_image
+                    WHEN d.front_image IS NOT NULL AND d.front_image LIKE '/uploads/%' THEN CONCAT('http://localhost:', ${process.env.PORT || 3000}, d.front_image)
+                    WHEN d.front_image IS NOT NULL THEN d.front_image
+                    ELSE NULL
+                END as front_image_url,
+                CASE
+                    WHEN d.back_image IS NOT NULL AND d.back_image LIKE 'data:image%' THEN d.back_image
+                    WHEN d.back_image IS NOT NULL AND d.back_image LIKE '/uploads/%' THEN CONCAT('http://localhost:', ${process.env.PORT || 3000}, d.back_image)
+                    WHEN d.back_image IS NOT NULL THEN d.back_image
+                    ELSE NULL
+                END as back_image_url
+            FROM user_documents d
+            JOIN users u ON d.user_id = u.id
+            WHERE d.status = 'pending'
+            ORDER BY d.created_at ASC
+        `);
+
+        // Formatar a resposta com URLs prontas
+        const documents = result.rows.map(doc => ({
+            id: doc.id,
+            user_id: doc.user_id,
+            user_name: doc.user_name,
+            user_email: doc.user_email,
+            user_role: doc.user_role,
+            document_type: doc.document_type,
+            status: doc.status,
+            created_at: doc.created_at,
+            front_image: doc.front_image_url,
+            back_image: doc.back_image_url
+        }));
+
+        log.info(`📄 Listados ${documents.length} documentos pendentes para admin`);
+        res.json(documents);
+
+    } catch (error) {
+        log.error('Erro ao listar documentos pendentes:', error);
+        res.status(500).json({ error: "Erro ao buscar documentos pendentes" });
+    }
+});
+
+// =================================================================================================
+// 9. ROTA PARA APROVAR/REJEITAR DOCUMENTO (ADMIN)
+// =================================================================================================
+/**
+ * @route   POST /api/admin/documents/verify/:id
+ * @desc    Aprovar ou rejeitar um documento específico
+ * @access  Admin
+ */
+app.post('/api/admin/documents/verify/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { status, rejection_reason } = req.body;
+
+        if (!['approved', 'rejected'].includes(status)) {
+            return res.status(400).json({ error: "Status inválido. Use 'approved' ou 'rejected'." });
+        }
+
+        if (status === 'rejected' && !rejection_reason) {
+            return res.status(400).json({ error: "Motivo da rejeição é obrigatório." });
+        }
+
+        // Verificar se o usuário é admin
+        const sessionToken = req.headers['x-session-token'];
+        const adminCheck = await db.query(
+            `SELECT u.id FROM users u
+             JOIN user_sessions s ON u.id = s.user_id
+             WHERE s.session_token = $1 AND u.role = 'admin' AND s.is_active = true`,
+            [sessionToken]
+        );
+
+        if (adminCheck.rows.length === 0) {
+            return res.status(403).json({ error: "Acesso negado. Requer privilégios de administrador." });
+        }
+
+        const adminId = adminCheck.rows[0].id;
+
+        // Atualizar o documento
+        const docResult = await db.query(
+            `UPDATE user_documents SET
+                status = $1,
+                rejection_reason = $2,
+                verified_at = NOW(),
+                verified_by = $3,
+                updated_at = NOW()
+             WHERE id = $4
+             RETURNING user_id, document_type`,
+            [status, rejection_reason || null, adminId, id]
+        );
+
+        if (docResult.rows.length === 0) {
+            return res.status(404).json({ error: "Documento não encontrado." });
+        }
+
+        const { user_id, document_type } = docResult.rows[0];
+
+        // Verificar se o usuário tem todos os documentos necessários após esta aprovação
+        if (status === 'approved') {
+            // Buscar todos os documentos do usuário
+            const allDocs = await db.query(
+                `SELECT document_type, status FROM user_documents WHERE user_id = $1`,
+                [user_id]
+            );
+
+            // Buscar o role do usuário
+            const userBasic = await db.query("SELECT role FROM users WHERE id = $1", [user_id]);
+            const role = userBasic.rows[0]?.role || 'passenger';
+
+            // Definir documentos obrigatórios
+            let required = ['bi'];
+            if (role === 'driver') {
+                required = ['bi', 'driving_license', 'vehicle_title', 'vehicle_insurance', 'tax_document'];
+            }
+
+            // Verificar se todos os obrigatórios estão aprovados
+            const approvedTypes = allDocs.rows
+                .filter(d => d.status === 'approved')
+                .map(d => d.document_type);
+
+            const isFullyApproved = required.every(type => approvedTypes.includes(type));
+
+            if (isFullyApproved) {
+                await db.query(
+                    "UPDATE users SET is_verified = true, kyc_level = 2 WHERE id = $1",
+                    [user_id]
+                );
+                log.success(`✅ Usuário ${user_id} automaticamente verificado (todos os documentos aprovados)`);
+            }
+        } else if (status === 'rejected') {
+            // Se algum documento foi rejeitado, garante que o usuário não está verificado
+            await db.query(
+                "UPDATE users SET is_verified = false, kyc_level = 1 WHERE id = $1",
+                [user_id]
+            );
+        }
+
+        log.success(`📄 Documento ${id} (${document_type}) ${status} por admin ${adminId}`);
+
+        res.json({
+            success: true,
+            message: `Documento ${status} com sucesso.`,
+            document_id: id,
+            user_id: user_id,
+            status: status
+        });
+
+    } catch (error) {
+        log.error('Erro ao verificar documento:', error);
+        res.status(500).json({ error: "Erro ao processar documento" });
+    }
+});
+
+// =================================================================================================
+// 10. INJEÇÃO DO HUB DE ROTAS PRINCIPAL (API GATEWAY)
+// =================================================================================================
 // Todas as rotas são organizadas no arquivo routes/index.js
 app.use('/api', routes);
 
-// Rota de debug para verificar rotas disponíveis (apenas em desenvolvimento)
+// =================================================================================================
+// 11. ROTA DE DEBUG PARA VERIFICAR ROTAS DISPONÍVEIS (APENAS EM DESENVOLVIMENTO)
+// =================================================================================================
 if (process.env.NODE_ENV !== 'production') {
     app.get('/api/routes', (req, res) => {
         const routesList = [];
@@ -177,14 +372,14 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 // =================================================================================================
-// 8. TRATAMENTO DE ERROS GLOBAIS (SAFETY NET)
+// 12. TRATAMENTO DE ERROS GLOBAIS (SAFETY NET)
 // =================================================================================================
 // Nenhuma requisição perdida deve crashar a aplicação
 app.use(notFoundHandler);
 app.use(globalErrorHandler);
 
 // =================================================================================================
-// 9. SEQUÊNCIA DE BOOT E START DO SERVIDOR
+// 13. SEQUÊNCIA DE BOOT E START DO SERVIDOR
 // =================================================================================================
 (async function startServer() {
     try {
@@ -228,18 +423,18 @@ app.use(globalErrorHandler);
             log.info(`🔌 WebSocket: ws://localhost:${PORT}`);
             console.log();
 
-            // Log das rotas disponíveis em desenvolvimento
-            if (process.env.NODE_ENV !== 'production') {
-                log.info('📋 Rotas principais disponíveis:');
-                log.info(`   POST   /api/auth/login`);
-                log.info(`   POST   /api/auth/signup`);
-                log.info(`   GET    /api/wallet/balance`);
-                log.info(`   POST   /api/wallet/transfer`);
-                log.info(`   POST   /api/rides/request`);
-                log.info(`   POST   /api/rides/accept`);
-                log.info(`   GET    /api/admin/stats`);
-                console.log();
-            }
+            // Log das rotas principais disponíveis
+            log.info('📋 Rotas principais disponíveis:');
+            log.info(`   POST   /api/auth/login`);
+            log.info(`   POST   /api/auth/signup`);
+            log.info(`   GET    /api/wallet/balance`);
+            log.info(`   POST   /api/wallet/transfer`);
+            log.info(`   POST   /api/rides/request`);
+            log.info(`   POST   /api/rides/accept`);
+            log.info(`   GET    /api/admin/stats`);
+            log.info(`   GET    /api/admin/documents/pending`);
+            log.info(`   POST   /api/admin/documents/verify/:id`);
+            console.log();
         });
 
     } catch (err) {
@@ -250,7 +445,7 @@ app.use(globalErrorHandler);
 })();
 
 // =================================================================================================
-// 10. ENCERRAMENTO GRACIOSO (GRACEFUL SHUTDOWN)
+// 14. ENCERRAMENTO GRACIOSO (GRACEFUL SHUTDOWN)
 // =================================================================================================
 // Previne corrupção de dados ao reiniciar o servidor ou durante deploys
 let isShuttingDown = false;
@@ -300,7 +495,6 @@ process.on('uncaughtException', (err) => {
     log.error('💥 Exceção Crítica Não Capturada (Uncaught Exception):');
     console.error(err);
     // Não encerra imediatamente para permitir que logs sejam escritos
-    // Em produção, você pode querer encerrar após log
     if (process.env.NODE_ENV === 'production') {
         shutdown('uncaughtException');
     }
@@ -313,6 +507,6 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 // =================================================================================================
-// 11. EXPORTAÇÃO PARA TESTES E INTEGRAÇÃO
+// 15. EXPORTAÇÃO PARA TESTES E INTEGRAÇÃO
 // =================================================================================================
 module.exports = { app, server, io };
