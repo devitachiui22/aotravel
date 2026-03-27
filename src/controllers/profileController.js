@@ -372,7 +372,7 @@ exports.uploadDocumentsMultipart = async (req, res) => {
 
             const filePath = `/uploads/documents/${file.filename}`;
 
-            // 1. Salva na tabela de documentos
+            // 1. Salva na tabela de documentos (user_documents) - Auditoria do Admin
             await client.query(
                 `INSERT INTO user_documents (user_id, document_type, front_image, status, updated_at)
                  VALUES ($1, $2, $3, 'pending', NOW())
@@ -383,7 +383,7 @@ exports.uploadDocumentsMultipart = async (req, res) => {
                 [userId, fieldName, filePath]
             );
 
-            // 2. Atalho na tabela de usuários para acesso rápido
+            // 2. Atalho na tabela de usuários (users) para acesso rápido pelo App
             await client.query(
                 `UPDATE users SET ${dbColumn} = $1, updated_at = NOW() WHERE id = $2`,
                 [filePath, userId]
