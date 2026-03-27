@@ -221,7 +221,7 @@ const upload = multer({
     storage: storage,
     fileFilter: fileFilter,
     limits: {
-        fileSize: parseSizeLimit(SYSTEM_CONFIG.SERVER?.BODY_LIMIT || '100mb'),
+        fileSize: parseSizeLimit(SYSTEM_CONFIG.SERVER?.BODY_LIMIT || '10mb'),
         files: 10 // Máximo de 10 arquivos por request (segurança contra DoS)
     }
 });
