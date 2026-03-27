@@ -348,6 +348,7 @@ exports.uploadDocumentsMultipart = async (req, res) => {
     try {
         await client.query('BEGIN');
 
+        // Mapeamento dos campos do formulário para as colunas do banco de dados
         const fieldToDbColumn = {
             'profile_photo': 'photo',
             'bi_front': 'bi_front',
@@ -369,36 +370,26 @@ exports.uploadDocumentsMultipart = async (req, res) => {
             const file = fileArray[0];
             console.log(`📄 Processando ${fieldName}: ${file.filename} (${file.mimetype})`);
 
-            const fileBuffer = fs.readFileSync(file.path);
-            const base64Data = fileBuffer.toString('base64');
-            const finalBase64 = `data:${file.mimetype};base64,${base64Data}`;
+            const filePath = `/uploads/documents/${file.filename}`;
 
+            // 1. Salva na tabela de documentos
             await client.query(
-                `UPDATE users SET ${dbColumn} = $1, updated_at = NOW() WHERE id = $2`,
-                [finalBase64, userId]
+                `INSERT INTO user_documents (user_id, document_type, front_image, status, updated_at)
+                 VALUES ($1, $2, $3, 'pending', NOW())
+                 ON CONFLICT (user_id, document_type) DO UPDATE SET
+                     front_image = $3,
+                     status = 'pending',
+                     updated_at = NOW()`,
+                [userId, fieldName, filePath]
             );
 
-            if (fieldName !== 'profile_photo') {
-                let docType = fieldName;
-                if (fieldName.startsWith('bi_')) docType = 'bi';
-                else if (fieldName.startsWith('driving_license_')) docType = 'driving_license';
-                else if (fieldName === 'vehicle_title') docType = 'vehicle_title';
-                else if (fieldName === 'vehicle_insurance') docType = 'vehicle_insurance';
-                else if (fieldName === 'tax_document') docType = 'tax_document';
+            // 2. Atalho na tabela de usuários para acesso rápido
+            await client.query(
+                `UPDATE users SET ${dbColumn} = $1, updated_at = NOW() WHERE id = $2`,
+                [filePath, userId]
+            );
 
-                const side = fieldName.endsWith('_back') ? 'back_image' : 'front_image';
-
-                await client.query(`
-                    INSERT INTO user_documents (user_id, document_type, ${side}, status, updated_at)
-                    VALUES ($1, $2, $3, 'pending', NOW())
-                    ON CONFLICT (user_id, document_type)
-                    DO UPDATE SET
-                        ${side} = $3,
-                        status = 'pending',
-                        updated_at = NOW()
-                `, [userId, docType, finalBase64]);
-            }
-
+            // Limpa o arquivo temporário do disco
             try {
                 fs.unlinkSync(file.path);
                 console.log(`   ✅ Arquivo temporário removido: ${file.path}`);
@@ -407,6 +398,7 @@ exports.uploadDocumentsMultipart = async (req, res) => {
             }
         }
 
+        // Reseta verificação para re-análise
         await client.query(
             "UPDATE users SET is_verified = false, kyc_level = 1 WHERE id = $1",
             [userId]
