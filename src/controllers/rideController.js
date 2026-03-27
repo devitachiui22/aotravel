@@ -6,6 +6,7 @@
  * ✅ FIX RACE CONDITION E CATEGORIAS (Premium, Standard, Moto)
  * ✅ CORREÇÃO CRÍTICA: getActiveRide agora filtra apenas status ativos e com limite de 12h
  * ✅ OMNI-MODULE COMPLETE RIDE: Suporte para finalizar corridas, entregas, agendamentos e grupos
+ * ✅ CORREÇÃO CRÍTICA: requestRide agora notifica TODOS os motoristas online, independente do GPS
  * =================================================================================================
  */
 
@@ -109,16 +110,48 @@ exports.requestRide = async (req, res) => {
             console.log(`📡 Notificação enviada ao passageiro ${passengerId}`);
         }
 
-        // Buscar motoristas qualificados
-        let drivers = await exports.findAvailableDrivers(originLat, originLng, 10, { rideType });
-        if (drivers.length === 0) {
-            console.log(`⚠️ Nenhum motorista encontrado no raio de 10km, expandindo para 20km...`);
-            drivers = await exports.findAvailableDrivers(originLat, originLng, 20, { includeGpsZero: true, rideType });
+        // ✅ CORREÇÃO CRÍTICA: Buscar TODOS os motoristas online, independente do GPS
+        // Isso resolve o problema da corrida não aparecer no Chrome/Web
+        const allDrivers = await pool.query(
+            `SELECT dp.driver_id, dp.socket_id, dp.lat, dp.lng, u.name, u.vehicle_category, u.vehicle_details
+             FROM driver_positions dp
+             JOIN users u ON dp.driver_id = u.id
+             WHERE dp.status = 'online'
+               AND u.is_blocked = false
+               AND u.is_verified = true
+               AND u.role = 'driver'
+             ORDER BY dp.last_update DESC`
+        );
+
+        console.log(`📡 [DISPATCH] Total de motoristas online: ${allDrivers.rows.length}`);
+
+        // Filtrar motoristas por categoria compatível
+        let compatibleDrivers = [];
+        for (const driver of allDrivers.rows) {
+            const vCat = driver.vehicle_category || 'car';
+            const vDetails = driver.vehicle_details || {};
+            const vType = vDetails.type || 'car';
+
+            let isCompatible = false;
+
+            if (rideType === 'premium') {
+                isCompatible = vCat === 'premium';
+            } else if (rideType === 'moto' || rideType === 'delivery_moto') {
+                isCompatible = vCat === 'moto' && vType === 'moto';
+            } else if (rideType === 'delivery_car') {
+                isCompatible = vCat === 'car' || vCat === 'premium';
+            } else {
+                // Standard 'car'
+                isCompatible = vCat === 'car' || vCat === 'premium';
+            }
+
+            if (isCompatible) {
+                compatibleDrivers.push(driver);
+            }
         }
 
-        console.log(`👥 Motoristas verificados e encontrados: ${drivers.length}`);
+        console.log(`👥 Motoristas compatíveis com tipo ${rideType}: ${compatibleDrivers.length}`);
 
-        let driversNotified = 0;
         const ridePayload = {
             ride_id: ride.id,
             passenger_id: passengerId,
@@ -132,7 +165,10 @@ exports.requestRide = async (req, res) => {
             status: 'searching', timestamp: new Date().toISOString()
         };
 
-        for (const driver of drivers) {
+        let driversNotified = 0;
+
+        // Notifica todos os motoristas compatíveis
+        for (const driver of compatibleDrivers) {
             let distanceToPickup = 0;
             if (driver.lat && driver.lng && driver.lat !== 0 && driver.lng !== 0) {
                 distanceToPickup = getDistance(originLat, originLng, parseFloat(driver.lat), parseFloat(driver.lng));
@@ -148,14 +184,22 @@ exports.requestRide = async (req, res) => {
                     req.io.to(driver.socket_id).emit('ride_opportunity', driverPayload);
                     driversNotified++;
                     console.log(`   📡 Notificado motorista ${driver.driver_id} via socket_id (distância: ${distanceToPickup.toFixed(1)}km)`);
-                } else if (driver.driver_id && req.io) {
+                }
+                if (driver.driver_id && req.io) {
                     req.io.to(`driver_${driver.driver_id}`).emit('ride_opportunity', driverPayload);
                     driversNotified++;
                     console.log(`   📡 Notificado motorista ${driver.driver_id} via driver_room (distância: ${distanceToPickup.toFixed(1)}km)`);
                 }
+                req.io.to(`user_${driver.driver_id}`).emit('ride_opportunity', driverPayload);
             } catch (e) {
                 logError('DISPATCH_EMIT', e);
             }
+        }
+
+        // Fallback: Notifica todos os motoristas na sala global
+        if (compatibleDrivers.length > 0 && req.io) {
+            req.io.to('drivers').emit('ride_opportunity', ridePayload);
+            console.log(`📡 Notificação enviada para sala global 'drivers'`);
         }
 
         if (driversNotified === 0 && req.io) {
@@ -165,7 +209,7 @@ exports.requestRide = async (req, res) => {
             console.log(`⚠️ Nenhum motorista notificado para a corrida #${ride.id}`);
         }
 
-        console.log(`📡 Dispatch concluído. ${driversNotified} motoristas notificados em ${Date.now() - startTime}ms.`);
+        console.log(`📡 Dispatch concluído. ${driversNotified} notificações enviadas em ${Date.now() - startTime}ms.`);
 
         res.status(201).json({
             success: true,
@@ -179,6 +223,8 @@ exports.requestRide = async (req, res) => {
             },
             dispatch_stats: {
                 drivers_notified: driversNotified,
+                drivers_online: allDrivers.rows.length,
+                drivers_compatible: compatibleDrivers.length,
                 request_id: requestId
             }
         });
