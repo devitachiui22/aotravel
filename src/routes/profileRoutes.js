@@ -106,7 +106,6 @@ router.post('/documents', profileController.uploadDocuments);
 router.post(
     '/documents/upload',
     upload.fields([
-        { name: 'profile_photo', maxCount: 1 },
         { name: 'bi_front', maxCount: 1 },
         { name: 'bi_back', maxCount: 1 },
         { name: 'driving_license_front', maxCount: 1 },
