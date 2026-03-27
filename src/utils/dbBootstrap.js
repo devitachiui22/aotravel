@@ -4,7 +4,7 @@
  * =================================================================================================
  *
  * ARQUIVO: src/utils/dbBootstrap.js
- * VERSÃO DO SCHEMA: 2026.03.07.HUB.COMPLETE.FINAL.FIXED
+ * VERSÃO DO SCHEMA: 2026.03.27.HUB.COMPLETE.FINAL.FIXED
  * DESCRIÇÃO: Script de inicialização com módulos Core + Hub Inteligente
  *
  * ✅ CORREÇÕES APLICADAS:
@@ -19,6 +19,9 @@
  *    - CREATE INDEX idx_driver_status ON driver_positions(status, last_update)
  * 7. ✅ NOVAS TABELAS: wallet_cards e external_bank_accounts (corrigido)
  * 8. ✅ TRIGGER CORRIGIDA: fn_generate_wallet_number para gerar número de conta automaticamente
+ * 9. ✅ GARANTE QUE AS COLUNAS DE DOCUMENTOS EXISTAM: vehicle_category, is_verified
+ * 10. ✅ TABELA user_documents auditável com constraints corretas
+ * 11. ✅ LIMPA POSIÇÕES ANTIGAS: DELETE FROM driver_positions para evitar fantasmas de GPS
  *
  * STATUS: 🔥 PRODUCTION READY - ZERO ERROS DE TRANSAÇÃO
  * =================================================================================================
@@ -144,6 +147,11 @@ async function bootstrapDatabase() {
             );
         `, [], 'CREATE TABLE users');
 
+        // ✅ GARANTE QUE AS COLUNAS DE DOCUMENTOS EXISTAM
+        await safeQuery(client, `ALTER TABLE users ADD COLUMN IF NOT EXISTS vehicle_category VARCHAR(20) DEFAULT 'car';`, [], 'ALTER TABLE users vehicle_category');
+        await safeQuery(client, `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN DEFAULT false;`, [], 'ALTER TABLE users is_verified');
+        log.success('✅ Colunas vehicle_category e is_verified garantidas na tabela users');
+
         // 2. TABELA DRIVER_POSITIONS - COM DEFAULT 0 PARA COORDENADAS
         await safeQuery(client, `
             CREATE TABLE IF NOT EXISTS driver_positions (
@@ -163,6 +171,10 @@ async function bootstrapDatabase() {
         await safeQuery(client, `ALTER TABLE driver_positions ALTER COLUMN lat SET DEFAULT 0;`, [], 'ALTER TABLE lat DEFAULT');
         await safeQuery(client, `ALTER TABLE driver_positions ALTER COLUMN lng SET DEFAULT 0;`, [], 'ALTER TABLE lng DEFAULT');
         log.success('✅ Driver_positions configurado com DEFAULT 0 para coordenadas (suporte a motoristas sem GPS fixo)');
+
+        // ✅ LIMPA POSIÇÕES ANTIGAS PARA EVITAR FANTASMAS DE GPS
+        await safeQuery(client, `DELETE FROM driver_positions;`, [], 'DELETE FROM driver_positions');
+        log.success('✅ Posições antigas de motoristas limpas');
 
         // 3. TABELA RIDES
         await safeQuery(client, `
@@ -305,15 +317,16 @@ async function bootstrapDatabase() {
             );
         `, [], 'CREATE TABLE vehicle_details');
 
-        // 10. TABELA USER_DOCUMENTS
+        // 10. TABELA USER_DOCUMENTS - AUDITÁVEL E CORRIGIDA
         await safeQuery(client, `
             CREATE TABLE IF NOT EXISTS user_documents (
                 id SERIAL PRIMARY KEY,
                 user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-                document_type TEXT NOT NULL CHECK (document_type IN ('bi', 'driving_license', 'passport', 'vehicle_title', 'vehicle_insurance', 'tax_document')),
+                document_type VARCHAR(50) NOT NULL,
                 front_image TEXT,
                 back_image TEXT,
-                status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+                file_path TEXT,
+                status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
                 verified_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
                 verified_at TIMESTAMP,
                 rejection_reason TEXT,
@@ -322,8 +335,9 @@ async function bootstrapDatabase() {
                 UNIQUE(user_id, document_type)
             );
         `, [], 'CREATE TABLE user_documents');
+        log.success('✅ Tabela user_documents auditável criada/verificada');
 
-        // 11. TABELA EXTERNAL_BANK_ACCOUNTS (JÁ EXISTE, MAS VAMOS GARANTIR QUE ESTÁ CORRETA)
+        // 11. TABELA EXTERNAL_BANK_ACCOUNTS
         await safeQuery(client, `
             CREATE TABLE IF NOT EXISTS external_bank_accounts (
                 id SERIAL PRIMARY KEY,
@@ -338,7 +352,7 @@ async function bootstrapDatabase() {
             );
         `, [], 'CREATE TABLE external_bank_accounts');
 
-        // ✅ NOVA TABELA: WALLET_CARDS (CORRIGE O ERRO DO LOG)
+        // ✅ NOVA TABELA: WALLET_CARDS
         await safeQuery(client, `
             CREATE TABLE IF NOT EXISTS wallet_cards (
                 id SERIAL PRIMARY KEY,
@@ -1213,8 +1227,7 @@ async function bootstrapDatabase() {
                 continue;
             }
 
-            // O trigger de wallet já vai gerar o número automaticamente, então não precisa atualizar manualmente
-            // Mas garantimos que o número está presente
+            // O trigger de wallet já vai gerar o número automaticamente
             const accountNumber = `AOT${userId.toString().padStart(8, '0')}`;
             await client.query(
                 'UPDATE users SET wallet_account_number = $1 WHERE id = $2 AND (wallet_account_number IS NULL OR wallet_account_number = \'\')',
@@ -1439,7 +1452,8 @@ async function bootstrapDatabase() {
                 (SELECT COUNT(*) FROM promotions) as total_promotions,
                 (SELECT COUNT(*) FROM poi_areas) as total_poi_areas,
                 (SELECT COUNT(*) FROM wallet_cards) as total_cards,
-                (SELECT COUNT(*) FROM external_bank_accounts) as total_bank_accounts
+                (SELECT COUNT(*) FROM external_bank_accounts) as total_bank_accounts,
+                (SELECT COUNT(*) FROM user_documents WHERE status = 'pending') as pending_documents
         `);
 
         log.section('🎉 BANCO DE DADOS INICIALIZADO COM SUCESSO - HUB INTELIGENTE E MAPAS ATIVOS');
@@ -1461,6 +1475,7 @@ async function bootstrapDatabase() {
         log.info(`   - Pontos de Interesse: ${stats.rows[0].total_poi_areas}`);
         log.info(`   - Cartões Registrados: ${stats.rows[0].total_cards}`);
         log.info(`   - Contas Bancárias: ${stats.rows[0].total_bank_accounts}`);
+        log.info(`   - Documentos Pendentes: ${stats.rows[0].pending_documents}`);
 
         return true;
 
