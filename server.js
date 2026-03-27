@@ -15,6 +15,7 @@
  * 3. Middleware de injeção do Socket.IO nos controllers
  * 4. Rotas centralizadas e organizadas
  * 5. Rota para listar documentos pendentes com URLs de imagens prontas
+ * 6. Rotas de perfil integradas e funcionando
  *
  * STATUS: PRODUCTION READY - FULL VERSION
  * =================================================================================================
@@ -37,7 +38,12 @@ const routes = require('./src/routes');
 const { setupSocketIO } = require('./src/services/socketService');
 
 // =================================================================================================
-// 2. SISTEMA DE LOGS DO TERMINAL
+// 2. IMPORTAÇÕES DE ROTAS ESPECÍFICAS
+// =================================================================================================
+const profileRoutes = require('./src/routes/profileRoutes');
+
+// =================================================================================================
+// 3. SISTEMA DE LOGS DO TERMINAL
 // =================================================================================================
 const colors = {
     reset: '\x1b[0m',
@@ -62,13 +68,13 @@ const log = {
 };
 
 // =================================================================================================
-// 3. INICIALIZAÇÃO DA APLICAÇÃO EXPRESS & HTTP SERVER
+// 4. INICIALIZAÇÃO DA APLICAÇÃO EXPRESS & HTTP SERVER
 // =================================================================================================
 const app = express();
 const server = http.createServer(app);
 
 // =================================================================================================
-// 4. CONFIGURAÇÃO DE MIDDLEWARES GLOBAIS
+// 5. CONFIGURAÇÃO DE MIDDLEWARES GLOBAIS
 // =================================================================================================
 // CORS Configurado para aceitar requisições do App Mobile e Web
 const corsOptions = {
@@ -84,7 +90,7 @@ app.use(express.json({ limit: appConfig.SERVER?.BODY_LIMIT || '100mb' }));
 app.use(express.urlencoded({ limit: appConfig.SERVER?.BODY_LIMIT || '100mb', extended: true }));
 
 // =================================================================================================
-// 5. SERVIDOR DE ARQUIVOS ESTÁTICOS (UPLOADS/FOTOS/DOCUMENTOS)
+// 6. SERVIDOR DE ARQUIVOS ESTÁTICOS (UPLOADS/FOTOS/DOCUMENTOS)
 // =================================================================================================
 // Crucial para visualização de documentos KYC e fotos de perfil no Admin
 const uploadPath = appConfig.SERVER?.UPLOAD_DIR || 'uploads';
@@ -98,7 +104,7 @@ log.info(`📁 Servindo arquivos estáticos de: ${uploadsAbsolutePath}`);
 app.use('/files', express.static(uploadsAbsolutePath));
 
 // =================================================================================================
-// 6. INICIALIZAÇÃO DO MOTOR DE SOCKET.IO (REAL-TIME ENGINE)
+// 7. INICIALIZAÇÃO DO MOTOR DE SOCKET.IO (REAL-TIME ENGINE)
 // =================================================================================================
 // A inicialização do Socket.IO foi totalmente delegada ao Service.
 // Nenhuma lógica de negócios de Sockets ficará no server.js
@@ -118,7 +124,7 @@ app.set('io', io);
 global.io = io;
 
 // =================================================================================================
-// 7. ROTEAMENTO BASE E HEALTH CHECKS
+// 8. ROTEAMENTO BASE E HEALTH CHECKS
 // =================================================================================================
 // Rota de Health Check do Load Balancer (Render / AWS / Railway)
 app.get('/', (req, res) => {
@@ -156,7 +162,14 @@ app.get('/health', async (req, res) => {
 });
 
 // =================================================================================================
-// 8. ROTA ADMIN PARA DOCUMENTOS PENDENTES (COM URL DAS IMAGENS PRONTAS)
+// 9. ROTAS ESPECÍFICAS
+// =================================================================================================
+// Rotas de perfil do usuário (KYC, documentos, etc)
+app.use('/api/profile', profileRoutes);
+log.success('✅ Rotas de perfil ativadas em /api/profile');
+
+// =================================================================================================
+// 10. ROTA ADMIN PARA DOCUMENTOS PENDENTES (COM URL DAS IMAGENS PRONTAS)
 // =================================================================================================
 /**
  * @route   GET /api/admin/documents/pending
@@ -235,7 +248,7 @@ app.get('/api/admin/documents/pending', async (req, res) => {
 });
 
 // =================================================================================================
-// 9. ROTA PARA APROVAR/REJEITAR DOCUMENTO (ADMIN)
+// 11. ROTA PARA APROVAR/REJEITAR DOCUMENTO (ADMIN)
 // =================================================================================================
 /**
  * @route   POST /api/admin/documents/verify/:id
@@ -346,13 +359,14 @@ app.post('/api/admin/documents/verify/:id', async (req, res) => {
 });
 
 // =================================================================================================
-// 10. INJEÇÃO DO HUB DE ROTAS PRINCIPAL (API GATEWAY)
+// 12. INJEÇÃO DO HUB DE ROTAS PRINCIPAL (API GATEWAY)
 // =================================================================================================
 // Todas as rotas são organizadas no arquivo routes/index.js
 app.use('/api', routes);
+log.success('✅ Hub de rotas principal ativado em /api');
 
 // =================================================================================================
-// 11. ROTA DE DEBUG PARA VERIFICAR ROTAS DISPONÍVEIS (APENAS EM DESENVOLVIMENTO)
+// 13. ROTA DE DEBUG PARA VERIFICAR ROTAS DISPONÍVEIS (APENAS EM DESENVOLVIMENTO)
 // =================================================================================================
 if (process.env.NODE_ENV !== 'production') {
     app.get('/api/routes', (req, res) => {
@@ -372,14 +386,14 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 // =================================================================================================
-// 12. TRATAMENTO DE ERROS GLOBAIS (SAFETY NET)
+// 14. TRATAMENTO DE ERROS GLOBAIS (SAFETY NET)
 // =================================================================================================
 // Nenhuma requisição perdida deve crashar a aplicação
 app.use(notFoundHandler);
 app.use(globalErrorHandler);
 
 // =================================================================================================
-// 13. SEQUÊNCIA DE BOOT E START DO SERVIDOR
+// 15. SEQUÊNCIA DE BOOT E START DO SERVIDOR
 // =================================================================================================
 (async function startServer() {
     try {
@@ -420,6 +434,7 @@ app.use(globalErrorHandler);
             log.success(`🚀 Servidor AOTRAVEL operando com força máxima na porta ${PORT}`);
             log.info(`🌐 API Gateway: http://localhost:${PORT}/api`);
             log.info(`📁 Arquivos estáticos: http://localhost:${PORT}/uploads`);
+            log.info(`👤 Rotas de perfil: http://localhost:${PORT}/api/profile`);
             log.info(`🔌 WebSocket: ws://localhost:${PORT}`);
             console.log();
 
@@ -434,6 +449,8 @@ app.use(globalErrorHandler);
             log.info(`   GET    /api/admin/stats`);
             log.info(`   GET    /api/admin/documents/pending`);
             log.info(`   POST   /api/admin/documents/verify/:id`);
+            log.info(`   GET    /api/profile`);
+            log.info(`   POST   /api/profile/documents/upload`);
             console.log();
         });
 
@@ -445,7 +462,7 @@ app.use(globalErrorHandler);
 })();
 
 // =================================================================================================
-// 14. ENCERRAMENTO GRACIOSO (GRACEFUL SHUTDOWN)
+// 16. ENCERRAMENTO GRACIOSO (GRACEFUL SHUTDOWN)
 // =================================================================================================
 // Previne corrupção de dados ao reiniciar o servidor ou durante deploys
 let isShuttingDown = false;
@@ -507,6 +524,6 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 // =================================================================================================
-// 15. EXPORTAÇÃO PARA TESTES E INTEGRAÇÃO
+// 17. EXPORTAÇÃO PARA TESTES E INTEGRAÇÃO
 // =================================================================================================
 module.exports = { app, server, io };
