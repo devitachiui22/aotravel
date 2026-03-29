@@ -22,6 +22,8 @@
  * 9. ✅ GARANTE QUE AS COLUNAS DE DOCUMENTOS EXISTAM: vehicle_category, is_verified
  * 10. ✅ TABELA user_documents auditável com constraints corretas
  * 11. ✅ LIMPA POSIÇÕES ANTIGAS: DELETE FROM driver_positions para evitar fantasmas de GPS
+ * 12. ✅ REMOVE CORRIDAS QUE FICARAM "PRESAS" EM ESTADO DE BUSCA
+ * 13. ✅ ÍNDICE PARA BUSCA RÁPIDA POR CATEGORIA: idx_rides_category
  *
  * STATUS: 🔥 PRODUCTION READY - ZERO ERROS DE TRANSAÇÃO
  * =================================================================================================
@@ -209,6 +211,10 @@ async function bootstrapDatabase() {
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         `, [], 'CREATE TABLE rides');
+
+        // ✅ REMOVE CORRIDAS QUE FICARAM "PRESAS" EM ESTADO DE BUSCA
+        await safeQuery(client, `UPDATE rides SET status = 'cancelled' WHERE status = 'searching' AND created_at < NOW() - INTERVAL '1 hour';`, [], 'UPDATE rides cancelled stuck');
+        log.success('✅ Corridas presas em estado de busca foram canceladas automaticamente');
 
         // 4. TABELA WALLET_TRANSACTIONS
         await safeQuery(client, `
@@ -802,6 +808,8 @@ async function bootstrapDatabase() {
             "CREATE INDEX IF NOT EXISTS idx_rides_passenger_status ON rides(passenger_id, status)",
             "CREATE INDEX IF NOT EXISTS idx_rides_driver_status ON rides(driver_id, status)",
             "CREATE INDEX IF NOT EXISTS idx_rides_type ON rides(ride_type)",
+            // ✅ ÍNDICE PARA BUSCA RÁPIDA POR CATEGORIA (NOVO)
+            "CREATE INDEX IF NOT EXISTS idx_rides_category ON rides(ride_type, status)",
             "CREATE INDEX IF NOT EXISTS idx_wallet_user ON wallet_transactions(user_id)",
             "CREATE INDEX IF NOT EXISTS idx_wallet_ref ON wallet_transactions(reference_id)",
             "CREATE INDEX IF NOT EXISTS idx_wallet_date ON wallet_transactions(created_at DESC)",
@@ -1453,7 +1461,8 @@ async function bootstrapDatabase() {
                 (SELECT COUNT(*) FROM poi_areas) as total_poi_areas,
                 (SELECT COUNT(*) FROM wallet_cards) as total_cards,
                 (SELECT COUNT(*) FROM external_bank_accounts) as total_bank_accounts,
-                (SELECT COUNT(*) FROM user_documents WHERE status = 'pending') as pending_documents
+                (SELECT COUNT(*) FROM user_documents WHERE status = 'pending') as pending_documents,
+                (SELECT COUNT(*) FROM rides WHERE status = 'searching' AND created_at < NOW() - INTERVAL '1 hour') as stuck_rides_cleaned
         `);
 
         log.section('🎉 BANCO DE DADOS INICIALIZADO COM SUCESSO - HUB INTELIGENTE E MAPAS ATIVOS');
@@ -1476,6 +1485,7 @@ async function bootstrapDatabase() {
         log.info(`   - Cartões Registrados: ${stats.rows[0].total_cards}`);
         log.info(`   - Contas Bancárias: ${stats.rows[0].total_bank_accounts}`);
         log.info(`   - Documentos Pendentes: ${stats.rows[0].pending_documents}`);
+        log.info(`   - Corridas Presas Removidas: ${stats.rows[0].stuck_rides_cleaned}`);
 
         return true;
 
