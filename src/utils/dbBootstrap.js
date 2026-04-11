@@ -24,6 +24,8 @@
  * 11. ✅ LIMPA POSIÇÕES ANTIGAS: DELETE FROM driver_positions para evitar fantasmas de GPS
  * 12. ✅ REMOVE CORRIDAS QUE FICARAM "PRESAS" EM ESTADO DE BUSCA
  * 13. ✅ ÍNDICE PARA BUSCA RÁPIDA POR CATEGORIA: idx_rides_category
+ * 14. ✅ PADRONIZAÇÃO DE CATEGORIAS: UPDATE para motoristas com categorias inválidas
+ * 15. ✅ RECRIAÇÃO DA CONSTRAINT DA TABELA driver_positions com valores corretos
  *
  * STATUS: 🔥 PRODUCTION READY - ZERO ERROS DE TRANSAÇÃO
  * =================================================================================================
@@ -158,6 +160,9 @@ async function bootstrapDatabase() {
         await safeQuery(client, `UPDATE users SET vehicle_category = 'car' WHERE vehicle_category IN ('Standard', 'standard', 'uma corrida');`, [], 'UPDATE users padronizar car');
         await safeQuery(client, `UPDATE users SET vehicle_category = 'premium' WHERE vehicle_category IN ('Premium', 'Comfort', 'comfort');`, [], 'UPDATE users padronizar premium');
         await safeQuery(client, `UPDATE users SET vehicle_category = 'moto' WHERE vehicle_category IN ('Moto', 'bike');`, [], 'UPDATE users padronizar moto');
+
+        // ✅ PADRONIZA A CATEGORIA DE TODOS OS MOTORISTAS PARA O PADRÃO DO SISTEMA
+        await safeQuery(client, `UPDATE users SET vehicle_category = 'car' WHERE role = 'driver' AND vehicle_category NOT IN ('premium', 'moto');`, [], 'UPDATE users padronizar motoristas inválidos');
         log.success('✅ Categorias padronizadas e lixo limpo na tabela users');
 
         // 2. TABELA DRIVER_POSITIONS - COM DEFAULT 0 PARA COORDENADAS
@@ -170,7 +175,7 @@ async function bootstrapDatabase() {
                 speed DOUBLE PRECISION DEFAULT 0,
                 accuracy DOUBLE PRECISION DEFAULT 0,
                 socket_id VARCHAR(100),
-                status VARCHAR(20) DEFAULT 'offline' CHECK (status IN ('online', 'offline', 'busy', 'away')),
+                status VARCHAR(20) DEFAULT 'offline',
                 last_update TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         `, [], 'CREATE TABLE driver_positions');
@@ -178,6 +183,11 @@ async function bootstrapDatabase() {
         // ✅ GARANTE QUE MOTORISTAS SEM GPS FIXO AINDA POSSAM SER ENCONTRADOS
         await safeQuery(client, `ALTER TABLE driver_positions ALTER COLUMN lat SET DEFAULT 0;`, [], 'ALTER TABLE lat DEFAULT');
         await safeQuery(client, `ALTER TABLE driver_positions ALTER COLUMN lng SET DEFAULT 0;`, [], 'ALTER TABLE lng DEFAULT');
+
+        // ✅ GARANTE QUE A TABELA DE POSIÇÕES ACEITE AS CATEGORIAS PADRONIZADAS
+        await safeQuery(client, `ALTER TABLE driver_positions DROP CONSTRAINT IF EXISTS driver_positions_status_check;`, [], 'DROP CONSTRAINT');
+        await safeQuery(client, `ALTER TABLE driver_positions ADD CONSTRAINT driver_positions_status_check CHECK (status IN ('online', 'offline', 'busy', 'away'));`, [], 'ADD CONSTRAINT');
+        log.success('✅ Constraint da tabela driver_positions recriada com valores padronizados');
 
         // ✅ GARANTE QUE O ÍNDICE CUBRA O STATUS ONLINE PARA BUSCA RÁPIDA
         await safeQuery(client, `CREATE INDEX IF NOT EXISTS idx_dispatch_active_drivers ON driver_positions(status, driver_id) WHERE status = 'online';`, [], 'CREATE INDEX idx_dispatch_active_drivers');
@@ -817,7 +827,6 @@ async function bootstrapDatabase() {
             "CREATE INDEX IF NOT EXISTS idx_rides_passenger_status ON rides(passenger_id, status)",
             "CREATE INDEX IF NOT EXISTS idx_rides_driver_status ON rides(driver_id, status)",
             "CREATE INDEX IF NOT EXISTS idx_rides_type ON rides(ride_type)",
-            // ✅ ÍNDICE PARA BUSCA RÁPIDA POR CATEGORIA (NOVO)
             "CREATE INDEX IF NOT EXISTS idx_rides_category ON rides(ride_type, status)",
             "CREATE INDEX IF NOT EXISTS idx_wallet_user ON wallet_transactions(user_id)",
             "CREATE INDEX IF NOT EXISTS idx_wallet_ref ON wallet_transactions(reference_id)",
