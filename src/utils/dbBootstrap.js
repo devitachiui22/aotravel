@@ -154,6 +154,12 @@ async function bootstrapDatabase() {
         await safeQuery(client, `ALTER TABLE users ADD COLUMN IF NOT EXISTS is_verified BOOLEAN DEFAULT false;`, [], 'ALTER TABLE users is_verified');
         log.success('✅ Colunas vehicle_category e is_verified garantidas na tabela users');
 
+        // PADRONIZA CATEGORIAS E LIMPA LIXO
+        await safeQuery(client, `UPDATE users SET vehicle_category = 'car' WHERE vehicle_category IN ('Standard', 'standard', 'uma corrida');`, [], 'UPDATE users padronizar car');
+        await safeQuery(client, `UPDATE users SET vehicle_category = 'premium' WHERE vehicle_category IN ('Premium', 'Comfort', 'comfort');`, [], 'UPDATE users padronizar premium');
+        await safeQuery(client, `UPDATE users SET vehicle_category = 'moto' WHERE vehicle_category IN ('Moto', 'bike');`, [], 'UPDATE users padronizar moto');
+        log.success('✅ Categorias padronizadas e lixo limpo na tabela users');
+
         // 2. TABELA DRIVER_POSITIONS - COM DEFAULT 0 PARA COORDENADAS
         await safeQuery(client, `
             CREATE TABLE IF NOT EXISTS driver_positions (
@@ -172,7 +178,10 @@ async function bootstrapDatabase() {
         // ✅ GARANTE QUE MOTORISTAS SEM GPS FIXO AINDA POSSAM SER ENCONTRADOS
         await safeQuery(client, `ALTER TABLE driver_positions ALTER COLUMN lat SET DEFAULT 0;`, [], 'ALTER TABLE lat DEFAULT');
         await safeQuery(client, `ALTER TABLE driver_positions ALTER COLUMN lng SET DEFAULT 0;`, [], 'ALTER TABLE lng DEFAULT');
-        log.success('✅ Driver_positions configurado com DEFAULT 0 para coordenadas (suporte a motoristas sem GPS fixo)');
+
+        // ✅ GARANTE QUE O ÍNDICE CUBRA O STATUS ONLINE PARA BUSCA RÁPIDA
+        await safeQuery(client, `CREATE INDEX IF NOT EXISTS idx_dispatch_active_drivers ON driver_positions(status, driver_id) WHERE status = 'online';`, [], 'CREATE INDEX idx_dispatch_active_drivers');
+        log.success('✅ Driver_positions configurado com DEFAULT 0 para coordenadas e índice de dispatch ativo criado');
 
         // ✅ LIMPA POSIÇÕES ANTIGAS PARA EVITAR FANTASMAS DE GPS
         await safeQuery(client, `DELETE FROM driver_positions;`, [], 'DELETE FROM driver_positions');
