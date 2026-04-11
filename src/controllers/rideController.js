@@ -7,6 +7,7 @@
  * ✅ CORREÇÃO CRÍTICA: getActiveRide agora filtra apenas status ativos e com limite de 12h
  * ✅ OMNI-MODULE COMPLETE RIDE: Suporte para finalizar corridas, entregas, agendamentos e grupos
  * ✅ CORREÇÃO CRÍTICA: requestRide agora notifica TODOS os motoristas online via broadcast global
+ * ✅ CORREÇÃO CRÍTICA: requestRide com tradução de categoria e envio triplo para salas específicas
  * =================================================================================================
  */
 
@@ -28,7 +29,7 @@ const mapCategory = (cat) => {
 };
 
 // =================================================================================================
-// 1. SOLICITAÇÃO DE CORRIDA
+// 1. SOLICITAÇÃO DE CORRIDA (VERSÃO CORRIGIDA COM TRADUÇÃO DE CATEGORIA)
 // =================================================================================================
 exports.requestRide = async (req, res) => {
     const startTime = Date.now();
@@ -42,8 +43,16 @@ exports.requestRide = async (req, res) => {
     const passengerId = req.user.id;
     const distance = parseFloat(body.distance_km) || 0;
 
-    // Normalização estrita do tipo usando o mapper profissional
-    let rideType = mapCategory(body.ride_type);
+    let rideTypeRaw = body.ride_type || body.rideType || 'car';
+
+    // ✅ CORREÇÃO CRÍTICA: TRADUÇÃO DE CATEGORIA
+    let category = 'car'; // Default
+    const typeLower = rideTypeRaw.toLowerCase();
+    if (typeLower.includes('moto')) category = 'moto';
+    if (typeLower.includes('premium') || typeLower.includes('comfort')) category = 'premium';
+    if (typeLower.includes('corrida') || typeLower.includes('standard') || typeLower === 'ride') category = 'car';
+
+    let rideType = category;
 
     console.log('\n🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴');
     console.log('🚕 [REQUEST_RIDE] INICIANDO SOLICITAÇÃO');
@@ -52,7 +61,7 @@ exports.requestRide = async (req, res) => {
     console.log(`   Origem: (${originLat}, ${originLng})`);
     console.log(`   Destino: (${destLat}, ${destLng})`);
     console.log(`   Distância: ${distance}km`);
-    console.log(`   Tipo original: ${body.ride_type} -> Normalizado: ${rideType}`);
+    console.log(`   Tipo original: ${rideTypeRaw} -> Normalizado: ${rideType}`);
     console.log('🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴🔴\n');
 
     if (!originLat || !originLng || !destLat || !destLng) {
@@ -120,7 +129,6 @@ exports.requestRide = async (req, res) => {
         }
 
         // ✅ BROADCAST PROFISSIONAL: Notifica TODOS os motoristas online
-        // Isso resolve o problema da corrida não aparecer no Chrome/Web
         const allDrivers = await pool.query(
             `SELECT dp.driver_id, dp.socket_id, dp.lat, dp.lng, u.name, u.vehicle_category, u.vehicle_details
              FROM driver_positions dp
@@ -134,32 +142,31 @@ exports.requestRide = async (req, res) => {
 
         console.log(`📡 [DISPATCH] Total de motoristas online: ${allDrivers.rows.length}`);
 
-        // Payload rico para o motorista
+        // Payload rico para o motorista (formato simplificado compatível)
         const ridePayload = {
-            id: ride.id,
             ride_id: ride.id,
             passenger_id: passengerId,
             passenger_name: req.user.name || 'Passageiro',
-            passenger_photo: req.user.photo,
             passenger_rating: req.user.rating || 5.0,
+            origin_name: body.origin_name || 'Origem',
+            dest_name: body.dest_name || 'Destino',
+            price: estimatedPrice,
+            ride_type: rideType,
             origin_lat: originLat,
             origin_lng: originLng,
-            origin_name: body.origin_name || 'Origem',
-            dest_lat: destLat,
-            dest_lng: destLng,
-            dest_name: body.dest_name || 'Destino',
-            initial_price: estimatedPrice,
-            final_price: estimatedPrice,
-            distance_km: distance,
-            ride_type: rideType,
             status: 'searching',
             timestamp: new Date().toISOString()
         };
 
         let driversNotified = 0;
 
-        // Notifica todos os motoristas na sala global 'drivers' (RADAR)
+        // 📡 ENVIO TRIPLO (Garante que chegue)
         if (req.io) {
+            // Para a sala específica (drivers_car, drivers_premium, drivers_moto)
+            req.io.to(`drivers_${category}`).emit('ride_opportunity', ridePayload);
+            console.log(`🚀 Corrida #${ride.id} despachada para sala: drivers_${category}`);
+
+            // Para a sala global de motoristas (fallback)
             req.io.to('drivers').emit('ride_opportunity', ridePayload);
             driversNotified = allDrivers.rows.length;
             console.log(`📡 Broadcast enviado para sala global 'drivers' (${driversNotified} motoristas)`);
