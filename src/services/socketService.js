@@ -395,9 +395,19 @@ async function _handleJoinUser(socket, userId) {
 
 async function _handleJoinDriver(socket, data) {
     const driverId = data.driver_id || data.user_id;
+    const category = data.category ? data.category.toLowerCase() : 'car';
+
     if (!driverId) return;
 
+    // 1. Ingressa na sala global de motoristas
     socket.join('drivers');
+
+    // 2. Ingressa na sala específica da categoria
+    const roomName = `drivers_${category}`;
+    socket.join(roomName);
+
+    console.log(`📡 Motorista ${driverId} ingressou na sala: ${roomName}`);
+
     socket.join(`driver_${driverId}`);
     socket.join(`user_${driverId}`);
 
