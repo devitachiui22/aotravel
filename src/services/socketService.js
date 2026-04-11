@@ -395,21 +395,20 @@ async function _handleJoinUser(socket, userId) {
 
 async function _handleJoinDriver(socket, data) {
     const driverId = data.driver_id || data.user_id;
-    const category = data.category ? data.category.toLowerCase() : 'car';
-
     if (!driverId) return;
 
-    // 1. Ingressa na sala global de motoristas
-    socket.join('drivers');
+    // ✅ PADRONIZAÇÃO DA SALA
+    let category = data.category ? data.category.toLowerCase() : 'car';
+    if (category.includes('corrida') || category.includes('standard')) category = 'car';
 
-    // 2. Ingressa na sala específica da categoria
-    const roomName = `drivers_${category}`;
-    socket.join(roomName);
+    const specificRoom = `drivers_${category}`;
 
-    console.log(`📡 Motorista ${driverId} ingressou na sala: ${roomName}`);
-
-    socket.join(`driver_${driverId}`);
+    socket.join('drivers');      // Sala geral
+    socket.join(specificRoom);   // Sala específica (ex: drivers_car)
+    socket.join(`driver_${driverId}`); // Sala individual
     socket.join(`user_${driverId}`);
+
+    console.log(`🚗 Motorista ${driverId} online na sala: ${specificRoom}`);
 
     const lat = parseFloat(data.lat) || -8.8399;
     const lng = parseFloat(data.lng) || 13.2894;
@@ -420,6 +419,7 @@ async function _handleJoinDriver(socket, data) {
         success: true,
         driver_id: driverId,
         status: 'online',
+        room: specificRoom,
         timestamp: new Date().toISOString()
     });
 
